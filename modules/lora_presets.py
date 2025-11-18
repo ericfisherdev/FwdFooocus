@@ -24,7 +24,7 @@ import os
 import json
 import re
 from datetime import datetime
-from typing import List, Tuple, Optional, Dict, Any
+from typing import Optional, Any
 
 
 def get_preset_directory() -> str:
@@ -73,8 +73,8 @@ def sanitize_preset_name(name: str) -> str:
 
 def save_preset(
     preset_name: str,
-    loras: List[Tuple[bool, str, float]]
-) -> Tuple[bool, str]:
+    loras: list[tuple[bool, str, float]]
+) -> tuple[bool, str]:
     """
     Save a LoRA preset to disk.
 
@@ -84,7 +84,7 @@ def save_preset(
                Example: [(True, "lora1.safetensors", 0.8), (True, "None", 1.0), ...]
 
     Returns:
-        Tuple[bool, str]: (success, message)
+        tuple[bool, str]: (success, message)
             success: True if saved successfully, False otherwise
             message: Success message or error description
     """
@@ -119,7 +119,7 @@ def save_preset(
         return False, f"Failed to save preset: {str(e)}"
 
 
-def load_preset(preset_name: str) -> Tuple[bool, Optional[List[Tuple[bool, str, float]]], str]:
+def load_preset(preset_name: str) -> tuple[bool, Optional[list[tuple[bool, str, float]]], str]:
     """
     Load a LoRA preset from disk.
 
@@ -127,7 +127,7 @@ def load_preset(preset_name: str) -> Tuple[bool, Optional[List[Tuple[bool, str, 
         preset_name: Name of the preset to load
 
     Returns:
-        Tuple[bool, Optional[List], str]: (success, loras, message)
+        tuple[bool, Optional[list], str]: (success, loras, message)
             success: True if loaded successfully, False otherwise
             loras: List of LoRA configurations if successful, None otherwise
             message: Success message or error description
@@ -168,12 +168,12 @@ def load_preset(preset_name: str) -> Tuple[bool, Optional[List[Tuple[bool, str, 
         return False, None, f"Failed to load preset: {str(e)}"
 
 
-def list_presets() -> List[str]:
+def list_presets() -> list[str]:
     """
     List all available LoRA presets.
 
     Returns:
-        List[str]: List of preset names (without .json extension), sorted alphabetically
+        list[str]: List of preset names (without .json extension), sorted alphabetically
     """
     try:
         # Get preset directory
@@ -196,7 +196,7 @@ def list_presets() -> List[str]:
         return []
 
 
-def delete_preset(preset_name: str) -> Tuple[bool, str]:
+def delete_preset(preset_name: str) -> tuple[bool, str]:
     """
     Delete a LoRA preset from disk.
 
@@ -204,7 +204,7 @@ def delete_preset(preset_name: str) -> Tuple[bool, str]:
         preset_name: Name of the preset to delete
 
     Returns:
-        Tuple[bool, str]: (success, message)
+        tuple[bool, str]: (success, message)
             success: True if deleted successfully, False otherwise
             message: Success message or error description
     """
@@ -254,7 +254,7 @@ def preset_exists(preset_name: str) -> bool:
         return False
 
 
-def get_preset_info(preset_name: str) -> Optional[Dict[str, Any]]:
+def get_preset_info(preset_name: str) -> Optional[dict[str, Any]]:
     """
     Get metadata about a preset without loading the full LoRA list.
 
@@ -262,7 +262,7 @@ def get_preset_info(preset_name: str) -> Optional[Dict[str, Any]]:
         preset_name: Name of the preset
 
     Returns:
-        Optional[Dict]: Preset metadata (name, created_date) or None if not found
+        Optional[dict]: Preset metadata (name, created_date) or None if not found
     """
     try:
         safe_name = sanitize_preset_name(preset_name)
