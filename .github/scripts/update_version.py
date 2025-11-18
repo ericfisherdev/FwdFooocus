@@ -9,6 +9,7 @@ The MICRO component increments with each PR merge in the same month
 and resets to 0 when the month changes.
 """
 
+import os
 import re
 from datetime import datetime
 from pathlib import Path
@@ -94,8 +95,13 @@ def main() -> None:
 
     # Print version info for GitHub Actions
     print(f"Updated version: {current_version} -> {new_version}")
-    print(f"::set-output name=version::{new_version}")
-    print(f"::set-output name=previous_version::{current_version}")
+
+    # Write outputs to GitHub Actions environment file
+    github_output = os.environ.get("GITHUB_OUTPUT")
+    if github_output:
+        with open(github_output, "a") as f:
+            f.write(f"version={new_version}\n")
+            f.write(f"previous_version={current_version}\n")
 
 
 if __name__ == "__main__":

@@ -37,7 +37,7 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add fooocus_version.py
-          git diff --staged --quiet || git commit -m "chore: bump version to $(grep -oP "version = '\K[^']+" fooocus_version.py) [skip ci]"
+          git diff --staged --quiet || git commit -m "chore: bump version to ${{ steps.update.outputs.version }} [skip ci]"
 
       - name: Push changes
         uses: ad-m/github-push-action@v0.8.0
