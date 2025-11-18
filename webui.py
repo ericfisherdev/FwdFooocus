@@ -13,6 +13,7 @@ import modules.flags as flags
 import modules.gradio_hijack as grh
 import modules.style_sorter as style_sorter
 import modules.meta_parser
+import modules.lora_presets
 import args_manager
 import copy
 import launch
@@ -669,6 +670,32 @@ with shared.gradio_root:
                                          inputs=refiner_model, outputs=refiner_switch, show_progress=False, queue=False)
 
                 with gr.Group():
+                    # LoRA Presets - Load section
+                    # Initialize with preset list
+                    initial_presets = modules.lora_presets.list_presets()
+                    preset_dropdown = gr.Dropdown(label='Load Preset', choices=initial_presets, value=None,
+                                                 allow_custom_value=False,
+                                                 info='Select a saved preset to load LoRA configurations',
+                                                 elem_id='preset_dropdown')
+
+                    # Preset name input dialog (hidden by default)
+                    with gr.Column(visible=False) as preset_name_dialog:
+                        preset_name_input = gr.Textbox(label='Preset Name', placeholder='Enter preset name...',
+                                                       max_lines=1)
+                        with gr.Row():
+                            save_preset_confirm = gr.Button(value='Save', variant='primary', scale=1)
+                            save_preset_cancel = gr.Button(value='Cancel', variant='secondary', scale=1)
+                        preset_save_status = gr.Textbox(label='Status', interactive=False, visible=False)
+
+                    # Hidden state to store LoRA data while waiting for name input
+                    preset_loras_state = gr.State(value=[])
+
+                with gr.Group():
+                    # LoRA Selection header with Save Preset button
+                    with gr.Row():
+                        gr.HTML('<p style="margin-bottom: 0.5em; font-weight: bold; text-align: center; flex-grow: 1;">LoRA Selection</p>')
+                        save_preset_button = gr.Button(value='💾 Save Preset', variant='secondary', size='sm',
+                                                      elem_id='save_preset_button')
                     lora_ctrls = []
 
                     for i, (enabled, filename, weight) in enumerate(modules.config.default_loras):
@@ -875,6 +902,8 @@ with shared.gradio_root:
                     results += [gr.update(choices=[flags.default_vae] + modules.config.vae_filenames)]
                     if not args_manager.args.disable_preset_selection:
                         results += [gr.update(choices=modules.config.available_presets)]
+                    # Refresh LoRA presets dropdown
+                    results += [gr.update(choices=modules.lora_presets.list_presets())]
                     for i in range(modules.config.default_max_lora_number):
                         results += [gr.update(interactive=True),
                                     gr.update(choices=['None'] + modules.config.lora_filenames), gr.update()]
@@ -883,8 +912,150 @@ with shared.gradio_root:
                 refresh_files_output = [base_model, refiner_model, vae_name]
                 if not args_manager.args.disable_preset_selection:
                     refresh_files_output += [preset_selection]
+                refresh_files_output += [preset_dropdown]
                 refresh_files.click(refresh_files_clicked, [], refresh_files_output + lora_ctrls,
                                     queue=False, show_progress=False)
+
+                # LoRA Preset handlers
+                def save_preset_clicked(*lora_values):
+                    """Show dialog to get preset name"""
+                    # Parse lora_values into list of tuples, filtering out "None" entries
+                    loras = []
+                    for i in range(0, len(lora_values), 3):
+                        enabled = lora_values[i]
+                        filename = lora_values[i + 1]
+                        weight = lora_values[i + 2]
+                        # Only save LoRAs that are not "None"
+                        if filename != "None":
+                            loras.append((enabled, filename, weight))
+
+                    # Show dialog and store LoRA data in state
+                    return gr.update(visible=True), loras, "", gr.update(visible=False)
+
+                def save_preset_confirm_clicked(preset_name, loras_data):
+                    """Save preset with user-provided name"""
+                    if not preset_name or preset_name.strip() == "":
+                        return gr.update(visible=True, value="❌ Error: Preset name cannot be empty"), gr.update(), gr.update(visible=True), loras_data
+
+                    # Check if preset already exists
+                    if modules.lora_presets.preset_exists(preset_name):
+                        return (gr.update(visible=True, value=f"⚠️ Preset '{preset_name}' already exists. Choose a different name or delete the existing preset file from the lora_presets folder."),
+                                gr.update(), gr.update(visible=True), loras_data)
+
+                    # Save preset
+                    success, message = modules.lora_presets.save_preset(preset_name, loras_data)
+
+                    if success:
+                        # Refresh dropdown and hide dialog
+                        presets = modules.lora_presets.list_presets()
+                        return (gr.update(visible=False),
+                                gr.update(choices=presets, value=preset_name),
+                                gr.update(visible=False),
+                                [])
+                    else:
+                        return (gr.update(visible=True, value=f"❌ {message}"),
+                                gr.update(),
+                                gr.update(visible=True),
+                                loras_data)
+
+                def save_preset_cancel_clicked():
+                    """Cancel preset save"""
+                    return gr.update(visible=False), gr.update(visible=False), []
+
+                def load_preset_clicked(preset_name):
+                    """Load a preset and update all LoRA slots"""
+                    if not preset_name or preset_name == "":
+                        # No preset selected, return no updates
+                        return [gr.update()] * len(lora_ctrls)
+
+                    # Load preset from disk
+                    success, loras, message = modules.lora_presets.load_preset(preset_name)
+
+                    if not success:
+                        # Show error and don't update LoRA controls
+                        print(f"Failed to load preset: {message}")
+                        return [gr.update()] * len(lora_ctrls)
+
+                    # Track missing files
+                    missing_files = []
+
+                    # Get current number of available LoRA slots
+                    current_slots = len(lora_ctrls) // 3
+
+                    # Check if preset has more LoRAs than available slots and show warning
+                    if len(loras) > current_slots:
+                        raise gr.Error("Preset contains more LoRAs than available.")
+
+                    # Prepare updates for all LoRA controls
+                    updates = []
+
+                    # First, set all existing slots to None
+                    for i in range(current_slots):
+                        updates.extend([
+                            gr.update(value=True),
+                            gr.update(value="None"),
+                            gr.update(value=1.0)
+                        ])
+
+                    # Then, load the preset LoRAs into available slots
+                    for i, (enabled, filename, weight) in enumerate(loras):
+                        if i < current_slots:
+                            # Check if LoRA file exists
+                            if filename not in modules.config.lora_filenames:
+                                missing_files.append(filename)
+                                # File doesn't exist, keep as None but update weight
+                                updates[i * 3] = gr.update(value=enabled)
+                                updates[i * 3 + 1] = gr.update(value="None")
+                                updates[i * 3 + 2] = gr.update(value=weight)
+                            else:
+                                # File exists, update normally
+                                updates[i * 3] = gr.update(value=enabled)
+                                updates[i * 3 + 1] = gr.update(value=filename)
+                                updates[i * 3 + 2] = gr.update(value=weight)
+
+                    # Show warning if any files were missing
+                    if missing_files:
+                        print(f"⚠️ Warning: The following LoRA files from preset '{preset_name}' were not found:")
+                        for filename in missing_files:
+                            print(f"   - {filename}")
+                        print("   These slots have been set to 'None'. The missing files may need to be downloaded.")
+
+                    return updates
+
+                # Wire up preset save button
+                save_preset_button.click(
+                    save_preset_clicked,
+                    inputs=lora_ctrls,
+                    outputs=[preset_name_dialog, preset_loras_state, preset_name_input, preset_save_status],
+                    queue=False,
+                    show_progress=False
+                )
+
+                # Wire up confirm save
+                save_preset_confirm.click(
+                    save_preset_confirm_clicked,
+                    inputs=[preset_name_input, preset_loras_state],
+                    outputs=[preset_save_status, preset_dropdown, preset_name_dialog, preset_loras_state],
+                    queue=False,
+                    show_progress=False
+                )
+
+                # Wire up cancel save
+                save_preset_cancel.click(
+                    save_preset_cancel_clicked,
+                    outputs=[preset_name_dialog, preset_save_status, preset_loras_state],
+                    queue=False,
+                    show_progress=False
+                )
+
+                # Wire up preset dropdown selection to load preset
+                preset_dropdown.change(
+                    load_preset_clicked,
+                    inputs=[preset_dropdown],
+                    outputs=lora_ctrls,
+                    queue=False,
+                    show_progress=False
+                )
 
         state_is_generating = gr.State(False)
 
