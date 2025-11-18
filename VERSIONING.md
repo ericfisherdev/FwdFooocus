@@ -55,7 +55,7 @@ version = '2025.11.0'
 
 The version number is imported and displayed in:
 
-- `webui.py` - UI title: "Fooocus {version}"
+- `webui.py` - UI title: "FwdFooocus {version}"
 - `launch.py` - Application startup
 - `modules/meta_parser.py` - Metadata generation
 - `modules/async_worker.py` - Worker information
