@@ -157,8 +157,51 @@ def load_preset(preset_name: str) -> tuple[bool, Optional[list[tuple[bool, str, 
         if not isinstance(loras, list):
             return False, None, f"Invalid preset format: 'loras' must be a list"
 
-        # Convert to tuples if needed (JSON loads as lists)
-        loras_tuples = [tuple(lora) if isinstance(lora, list) else lora for lora in loras]
+        # Convert to tuples and validate each entry
+        loras_tuples = []
+        for idx, lora in enumerate(loras):
+            # Convert to tuple if it's a list
+            if isinstance(lora, list):
+                lora_tuple = tuple(lora)
+            else:
+                lora_tuple = lora
+
+            # Validate that it's a tuple/sequence with exactly 3 elements
+            if not isinstance(lora_tuple, (tuple, list)) or len(lora_tuple) != 3:
+                raise ValueError(
+                    f"Invalid LoRA entry at index {idx} in preset '{preset_name}': "
+                    f"Expected tuple of 3 elements, got {type(lora_tuple).__name__} with {len(lora_tuple) if hasattr(lora_tuple, '__len__') else 'unknown'} elements. "
+                    f"Entry: {lora_tuple}"
+                )
+
+            # Validate element types: (bool/int/float, str, float)
+            enabled, filename, weight = lora_tuple
+
+            # First element should be numeric (bool, int, or float for enabled state)
+            if not isinstance(enabled, (bool, int, float)):
+                raise ValueError(
+                    f"Invalid LoRA entry at index {idx} in preset '{preset_name}': "
+                    f"First element (enabled) must be bool/int/float, got {type(enabled).__name__}. "
+                    f"Entry: {lora_tuple}"
+                )
+
+            # Second element should be string (filename)
+            if not isinstance(filename, str):
+                raise ValueError(
+                    f"Invalid LoRA entry at index {idx} in preset '{preset_name}': "
+                    f"Second element (filename) must be string, got {type(filename).__name__}. "
+                    f"Entry: {lora_tuple}"
+                )
+
+            # Third element should be numeric (weight)
+            if not isinstance(weight, (int, float)):
+                raise ValueError(
+                    f"Invalid LoRA entry at index {idx} in preset '{preset_name}': "
+                    f"Third element (weight) must be int/float, got {type(weight).__name__}. "
+                    f"Entry: {lora_tuple}"
+                )
+
+            loras_tuples.append(lora_tuple)
 
         return True, loras_tuples, f"Preset '{preset_name}' loaded successfully"
 
@@ -275,10 +318,20 @@ def get_preset_info(preset_name: str) -> Optional[dict[str, Any]]:
         with open(preset_file, 'r', encoding='utf-8') as f:
             preset_data = json.load(f)
 
+        # Count valid LoRA entries (filter out malformed entries and "None" entries)
+        lora_count = 0
+        for lora in preset_data.get('loras', []):
+            # Check if entry is a valid sequence with at least 2 elements
+            if isinstance(lora, (list, tuple)) and len(lora) >= 2:
+                # Check if the second element (filename) is not "None"
+                if lora[1] != 'None':
+                    lora_count += 1
+            # Silently ignore malformed entries (they will be caught by load_preset validation)
+
         return {
             'preset_name': preset_data.get('preset_name', preset_name),
             'created_date': preset_data.get('created_date', 'Unknown'),
-            'lora_count': len([lora for lora in preset_data.get('loras', []) if lora[1] != 'None'])
+            'lora_count': lora_count
         }
 
     except Exception as e:
