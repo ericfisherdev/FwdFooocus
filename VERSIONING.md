@@ -7,11 +7,12 @@ FwdFooocus uses **Calendar Versioning (CalVer)** to automatically manage version
 Versions follow the format: `YYYY.MM.MICRO`
 
 - **YYYY**: 4-digit year (e.g., 2025)
-- **MM**: Month number without leading zero (e.g., 11 for November, 1 for January)
+- **MM**: Zero-padded month number (e.g., 01 for January, 11 for November)
 - **MICRO**: Auto-incrementing number that resets each month (starts at 0)
 
 ### Examples
 
+- `2025.01.0` - First release in January 2025
 - `2025.11.0` - First release in November 2025
 - `2025.11.1` - Second release in November 2025
 - `2025.12.0` - First release in December 2025

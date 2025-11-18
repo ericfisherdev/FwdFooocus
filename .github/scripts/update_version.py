@@ -17,12 +17,16 @@ from pathlib import Path
 
 def read_version_file(file_path: Path) -> str:
     """Read the current version from the version file."""
-    return file_path.read_text()
+    return file_path.read_text(encoding="utf-8")
 
 
 def extract_version(content: str) -> str:
     """Extract version string from file content."""
-    match = re.search(r"version = ['\"]([^'\"]+)['\"]", content)
+    match = re.search(
+        r"^version\s*=\s*['\"]([^'\"]+)['\"]",
+        content,
+        flags=re.MULTILINE,
+    )
     if not match:
         raise ValueError("Could not find version string in file")
     return match.group(1)
@@ -33,7 +37,14 @@ def parse_calver(version: str) -> tuple[int, int, int]:
     parts = version.split('.')
     if len(parts) != 3:
         raise ValueError(f"Invalid CalVer format: {version}")
-    return int(parts[0]), int(parts[1]), int(parts[2])
+
+    year, month, micro = int(parts[0]), int(parts[1]), int(parts[2])
+
+    # Validate month range
+    if not 1 <= month <= 12:
+        raise ValueError(f"Invalid month in CalVer: {month} (must be 1-12)")
+
+    return year, month, micro
 
 
 def calculate_new_version(current_version: str) -> str:
@@ -56,7 +67,7 @@ def calculate_new_version(current_version: str) -> str:
         # New month, reset micro
         new_micro = 0
 
-    return f"{current_year}.{current_month}.{new_micro}"
+    return f"{current_year}.{current_month:02d}.{new_micro}"
 
 
 def update_version_in_content(content: str, new_version: str) -> str:
@@ -64,13 +75,14 @@ def update_version_in_content(content: str, new_version: str) -> str:
     return re.sub(
         r"(version = ['\"])([^'\"]+)(['\"])",
         rf"\g<1>{new_version}\g<3>",
-        content
+        content,
+        count=1,
     )
 
 
 def write_version_file(file_path: Path, content: str) -> None:
     """Write updated content back to version file."""
-    file_path.write_text(content)
+    file_path.write_text(content, encoding="utf-8")
 
 
 def main() -> None:
