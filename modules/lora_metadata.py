@@ -499,6 +499,12 @@ def is_valid_lora_file(file_path: str) -> bool:
             keys = list(f.keys())
             # LoRA files typically have keys with 'lora' in them
             has_lora_keys = any('lora' in key.lower() for key in keys)
-            return has_lora_keys or len(keys) > 0
-    except Exception:
+            # Also check for common LoRA patterns like 'down' and 'up' blocks
+            has_lora_structure = any(
+                'lora_down' in key.lower() or 'lora_up' in key.lower()
+                for key in keys
+            )
+            return has_lora_keys or has_lora_structure
+    except (OSError, RuntimeError) as e:
+        logger.debug(f"File validation failed for {file_path}: {e}")
         return False
