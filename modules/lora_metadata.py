@@ -587,11 +587,18 @@ class LoraMetadataScanner:
             blocking: If True, wait for scan to complete. If False,
                      run in background thread.
         """
-        if self._is_scanning:
-            logger.warning("Scan already in progress, ignoring start request")
-            return
+        with self._lock:
+            if self._is_scanning:
+                logger.warning("Scan already in progress, ignoring start request")
+                return
 
-        self._stop_requested = False
+            # Initialize scan state atomically while holding the lock
+            self._is_scanning = True
+            self._scan_complete = False
+            self._stop_requested = False
+            self._files_scanned = 0
+            self._files_failed = 0
+            self._scan_start_time = time.time()
 
         if blocking:
             self._run_scan()
@@ -682,12 +689,6 @@ class LoraMetadataScanner:
 
     def _run_scan(self) -> None:
         """Execute the scan operation."""
-        self._is_scanning = True
-        self._scan_complete = False
-        self._files_scanned = 0
-        self._files_failed = 0
-        self._scan_start_time = time.time()
-
         try:
             # Load paths from config if not provided
             if not self._lora_paths:
@@ -719,7 +720,7 @@ class LoraMetadataScanner:
                     metadata = extract_metadata(file_path)
                     with self._lock:
                         self._metadata_index[file_path] = metadata
-                    self._files_scanned += 1
+                        self._files_scanned += 1
 
                     # Log progress every 10 files or at milestones
                     if (index + 1) % 10 == 0 or (index + 1) == total_files:
@@ -730,7 +731,8 @@ class LoraMetadataScanner:
                         )
 
                 except Exception as e:
-                    self._files_failed += 1
+                    with self._lock:
+                        self._files_failed += 1
                     logger.error(f"Failed to extract metadata from {file_path}: {e}")
 
             elapsed = time.time() - self._scan_start_time
@@ -743,8 +745,9 @@ class LoraMetadataScanner:
             logger.error(f"Scan failed with error: {e}")
 
         finally:
-            self._is_scanning = False
-            self._scan_complete = True
+            with self._lock:
+                self._is_scanning = False
+                self._scan_complete = True
 
     def _load_lora_paths_from_config(self) -> list[str]:
         """Load LoRA directory paths from config."""
