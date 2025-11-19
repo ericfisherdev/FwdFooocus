@@ -14,6 +14,8 @@ import modules.gradio_hijack as grh
 import modules.style_sorter as style_sorter
 import modules.meta_parser
 import modules.lora_presets
+import modules.lora_library
+import modules.lora_metadata
 import args_manager
 import copy
 import launch
@@ -24,6 +26,7 @@ from modules.private_logger import get_current_html_path
 from modules.ui_gradio_extensions import reload_javascript
 from modules.auth import auth_enabled, check_auth
 from modules.util import is_json
+from fastapi import Response
 
 def get_task(*args):
     args = list(args)
@@ -698,6 +701,7 @@ with shared.gradio_root:
                                                       elem_id='save_preset_button')
                     lora_ctrls = []
 
+                    lora_library_buttons = []
                     for i, (enabled, filename, weight) in enumerate(modules.config.default_loras):
                         with gr.Row():
                             lora_enabled = gr.Checkbox(label='Enable', value=enabled,
@@ -708,7 +712,13 @@ with shared.gradio_root:
                             lora_weight = gr.Slider(label='Weight', minimum=modules.config.default_loras_min_weight,
                                                     maximum=modules.config.default_loras_max_weight, step=0.01, value=weight,
                                                     elem_classes='lora_weight', scale=5)
+                            # Library link button - visible when LoRA is selected
+                            lora_library_btn = gr.Button(value='📚', variant='secondary', size='sm',
+                                                        elem_classes='lora_library_btn', scale=0,
+                                                        visible=(filename != 'None'),
+                                                        min_width=40)
                             lora_ctrls += [lora_enabled, lora_model, lora_weight]
+                            lora_library_buttons.append((lora_model, lora_library_btn))
 
                 with gr.Row():
                     refresh_files = gr.Button(label='Refresh', value='\U0001f504 Refresh All Files', variant='secondary', elem_classes='refresh_button')
@@ -915,6 +925,47 @@ with shared.gradio_root:
                 refresh_files_output += [preset_dropdown]
                 refresh_files.click(refresh_files_clicked, [], refresh_files_output + lora_ctrls,
                                     queue=False, show_progress=False)
+
+                # LoRA Library button handlers
+                def update_library_btn_visibility(lora_filename):
+                    """Update library button visibility based on LoRA selection."""
+                    return gr.update(visible=(lora_filename != 'None'))
+
+                def get_library_anchor(filename):
+                    """Generate sanitized anchor ID for a LoRA filename."""
+                    import re
+                    name = filename.rsplit('.', 1)[0] if '.' in filename else filename
+                    sanitized = re.sub(r'[^a-zA-Z0-9]', '-', name)
+                    sanitized = re.sub(r'-+', '-', sanitized).strip('-')
+                    return sanitized.lower() if sanitized else 'lora'
+
+                # Connect library button handlers for each LoRA slot
+                for lora_model, lora_library_btn in lora_library_buttons:
+                    # Update visibility when LoRA selection changes
+                    lora_model.change(
+                        fn=update_library_btn_visibility,
+                        inputs=[lora_model],
+                        outputs=[lora_library_btn],
+                        queue=False,
+                        show_progress=False
+                    )
+
+                    # Open library page when button is clicked
+                    lora_library_btn.click(
+                        fn=lambda x: None,
+                        inputs=[lora_model],
+                        outputs=[],
+                        queue=False,
+                        show_progress=False,
+                        _js=f'''(filename) => {{
+                            if (filename && filename !== 'None') {{
+                                // Generate anchor ID matching Python sanitization
+                                let name = filename.includes('.') ? filename.substring(0, filename.lastIndexOf('.')) : filename;
+                                let anchor = name.replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'lora';
+                                window.open('/lora-library#' + anchor, 'lora_library');
+                            }}
+                        }}'''
+                    )
 
                 # LoRA Preset handlers
                 def save_preset_clicked(*lora_values):
@@ -1287,6 +1338,21 @@ def dump_default_english_config():
 
 
 # dump_default_english_config()
+
+# Add custom routes for LoRA library
+app = shared.gradio_root.app
+
+@app.get("/lora-library")
+async def lora_library_page():
+    """Serve the LoRA library page."""
+    html_content = modules.lora_library.generate_library_html()
+    return Response(content=html_content, media_type="text/html")
+
+@app.get("/api/lora-trigger-words/{filename}")
+async def get_lora_trigger_words(filename: str):
+    """Get trigger words for a specific LoRA."""
+    trigger_words = modules.lora_metadata.get_trigger_words_for_filename(filename)
+    return {"filename": filename, "trigger_words": trigger_words}
 
 shared.gradio_root.launch(
     inbrowser=args_manager.args.in_browser,
