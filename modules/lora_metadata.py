@@ -7,6 +7,7 @@ trigger words, descriptions, character names, and style information.
 This module provides the foundation for the LoRA Library feature (Epic 2).
 """
 
+import copy
 import json
 import logging
 import os
@@ -626,10 +627,13 @@ class LoraMetadataScanner:
             file_path: Path to the LoRA file.
 
         Returns:
-            Metadata dictionary or None if not indexed.
+            Metadata dictionary (deep copy) or None if not indexed.
         """
         with self._lock:
-            return self._metadata_index.get(file_path)
+            metadata = self._metadata_index.get(file_path)
+            if metadata is None:
+                return None
+            return copy.deepcopy(metadata)
 
     def get_metadata_by_filename(self, filename: str) -> list[dict[str, Any]]:
         """
@@ -639,13 +643,13 @@ class LoraMetadataScanner:
             filename: Filename to search for (without path).
 
         Returns:
-            List of metadata dictionaries for matching files.
+            List of metadata dictionaries (deep copies) for matching files.
         """
         results = []
         with self._lock:
             for path, metadata in self._metadata_index.items():
                 if os.path.basename(path) == filename:
-                    results.append(metadata)
+                    results.append(copy.deepcopy(metadata))
         return results
 
     def search_by_base_model(self, base_model: str) -> list[dict[str, Any]]:
@@ -656,7 +660,7 @@ class LoraMetadataScanner:
             base_model: Base model name to search for.
 
         Returns:
-            List of metadata dictionaries for matching LoRAs.
+            List of metadata dictionaries (deep copies) for matching LoRAs.
         """
         results = []
         base_model_lower = base_model.lower()
@@ -664,7 +668,7 @@ class LoraMetadataScanner:
             for metadata in self._metadata_index.values():
                 if metadata.get('base_model'):
                     if base_model_lower in metadata['base_model'].lower():
-                        results.append(metadata)
+                        results.append(copy.deepcopy(metadata))
         return results
 
     def search_by_trigger_word(self, trigger_word: str) -> list[dict[str, Any]]:
@@ -675,7 +679,7 @@ class LoraMetadataScanner:
             trigger_word: Trigger word to search for.
 
         Returns:
-            List of metadata dictionaries for matching LoRAs.
+            List of metadata dictionaries (deep copies) for matching LoRAs.
         """
         results = []
         trigger_lower = trigger_word.lower()
@@ -683,7 +687,7 @@ class LoraMetadataScanner:
             for metadata in self._metadata_index.values():
                 for word in metadata.get('trigger_words', []):
                     if trigger_lower in word.lower():
-                        results.append(metadata)
+                        results.append(copy.deepcopy(metadata))
                         break
         return results
 
@@ -832,20 +836,26 @@ class LoraMetadataScanner:
             self._scan_complete = False
 
 
-# Global scanner instance
+# Global scanner instance and lock for thread-safe singleton
 _scanner: LoraMetadataScanner | None = None
+_scanner_lock: threading.Lock = threading.Lock()
 
 
 def get_scanner() -> LoraMetadataScanner:
     """
     Get the global scanner instance.
 
+    Uses double-checked locking to ensure thread-safe singleton creation.
+
     Returns:
         The global LoraMetadataScanner instance.
     """
     global _scanner
     if _scanner is None:
-        _scanner = LoraMetadataScanner()
+        with _scanner_lock:
+            # Double-check after acquiring lock
+            if _scanner is None:
+                _scanner = LoraMetadataScanner()
     return _scanner
 
 
