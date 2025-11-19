@@ -26,7 +26,7 @@ from modules.private_logger import get_current_html_path
 from modules.ui_gradio_extensions import reload_javascript
 from modules.auth import auth_enabled, check_auth
 from modules.util import is_json
-from fastapi import Response
+from fastapi import FastAPI, Response
 
 def get_task(*args):
     args = list(args)
@@ -1339,21 +1339,22 @@ def dump_default_english_config():
 
 # dump_default_english_config()
 
-# Add custom routes for LoRA library
-app = shared.gradio_root.app
+# Create FastAPI app with custom routes for LoRA library
+custom_app = FastAPI()
 
-@app.get("/lora-library")
+@custom_app.get("/lora-library")
 async def lora_library_page():
     """Serve the LoRA library page."""
     html_content = modules.lora_library.generate_library_html()
     return Response(content=html_content, media_type="text/html")
 
-@app.get("/api/lora-trigger-words/{filename}")
+@custom_app.get("/api/lora-trigger-words/{filename}")
 async def get_lora_trigger_words(filename: str):
     """Get trigger words for a specific LoRA."""
     trigger_words = modules.lora_metadata.get_trigger_words_for_filename(filename)
     return {"filename": filename, "trigger_words": trigger_words}
 
+# Launch with custom FastAPI app
 shared.gradio_root.launch(
     inbrowser=args_manager.args.in_browser,
     server_name=args_manager.args.listen,
@@ -1361,5 +1362,6 @@ shared.gradio_root.launch(
     share=args_manager.args.share,
     auth=check_auth if (args_manager.args.share or args_manager.args.listen) and auth_enabled else None,
     allowed_paths=[modules.config.path_outputs],
-    blocked_paths=[constants.AUTH_FILENAME]
+    blocked_paths=[constants.AUTH_FILENAME],
+    app=custom_app
 )
