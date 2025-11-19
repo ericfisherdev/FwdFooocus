@@ -25,7 +25,6 @@ from modules.lora_metadata import (
     _extract_styles,
     LoraMetadataScanner,
     get_scanner,
-    start_background_scan,
 )
 
 
