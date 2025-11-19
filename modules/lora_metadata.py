@@ -71,7 +71,7 @@ METADATA_KEY_MAPPINGS = {
 BASE_MODEL_PATTERNS = {
     r'sd[-_]?1\.?5|stable[-_]?diffusion[-_]?1\.?5': 'SD 1.5',
     r'sd[-_]?2\.?1|stable[-_]?diffusion[-_]?2\.?1': 'SD 2.1',
-    r'sdxl[-_]?1\.?0|stable[-_]?diffusion[-_]?xl': 'SDXL 1.0',
+    r'sdxl(?:[-_ ]?1\.?0)?|stable[-_]?diffusion[-_]?xl': 'SDXL 1.0',
     r'pony|pdxl': 'Pony',
     r'sd[-_]?3|stable[-_]?diffusion[-_]?3': 'SD 3',
     r'flux': 'Flux',
@@ -274,8 +274,9 @@ def _extract_trigger_words(metadata: dict) -> list[str]:
 def _extract_description(metadata: dict) -> str | None:
     """Extract description from metadata."""
     for key in METADATA_KEY_MAPPINGS['description']:
-        if key in metadata and metadata[key]:
-            return str(metadata[key]).strip()
+        value = metadata.get(key)
+        if value:
+            return str(value).strip()
     return None
 
 
@@ -346,8 +347,8 @@ def _extract_characters(text: str, metadata: dict) -> list[str]:
     # Check for character-related metadata keys
     character_keys = ['ss_character', 'character', 'characters']
     for key in character_keys:
-        if key in metadata and metadata[key]:
-            value = metadata[key]
+        value = metadata.get(key)
+        if value:
             if isinstance(value, str):
                 characters.extend([c.strip() for c in value.split(',') if c.strip()])
             elif isinstance(value, list):
@@ -402,8 +403,8 @@ def _extract_styles(text: str, metadata: dict) -> list[str]:
     # Check for style-related metadata keys
     style_keys = ['ss_style', 'style', 'styles', 'art_style']
     for key in style_keys:
-        if key in metadata and metadata[key]:
-            value = metadata[key]
+        value = metadata.get(key)
+        if value:
             if isinstance(value, str):
                 styles.extend([s.strip() for s in value.split(',') if s.strip()])
             elif isinstance(value, list):
