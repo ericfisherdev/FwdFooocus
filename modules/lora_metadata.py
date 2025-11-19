@@ -11,6 +11,8 @@ import json
 import logging
 import os
 import re
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -508,3 +510,347 @@ def is_valid_lora_file(file_path: str) -> bool:
     except (OSError, RuntimeError) as e:
         logger.debug(f"File validation failed for {file_path}: {e}")
         return False
+
+
+class LoraMetadataScanner:
+    """
+    Background scanner for LoRA metadata extraction.
+
+    Scans configured directories for .safetensors files and builds
+    an in-memory index of extracted metadata. Runs in a background
+    thread to avoid blocking UI startup.
+    """
+
+    def __init__(self, lora_paths: list[str] | None = None):
+        """
+        Initialize the scanner.
+
+        Args:
+            lora_paths: List of directory paths to scan. If None, will be
+                       loaded from config when scan starts.
+        """
+        self._lora_paths: list[str] = lora_paths or []
+        self._metadata_index: dict[str, dict[str, Any]] = {}
+        self._scan_thread: threading.Thread | None = None
+        self._is_scanning: bool = False
+        self._scan_complete: bool = False
+        self._lock: threading.Lock = threading.Lock()
+        self._stop_requested: bool = False
+        self._scan_start_time: float = 0.0
+        self._files_scanned: int = 0
+        self._files_failed: int = 0
+
+    @property
+    def is_scanning(self) -> bool:
+        """Check if a scan is currently in progress."""
+        return self._is_scanning
+
+    @property
+    def scan_complete(self) -> bool:
+        """Check if the initial scan has completed."""
+        return self._scan_complete
+
+    @property
+    def metadata_index(self) -> dict[str, dict[str, Any]]:
+        """
+        Get the current metadata index.
+
+        Returns:
+            Dictionary mapping file paths to their extracted metadata.
+        """
+        with self._lock:
+            return dict(self._metadata_index)
+
+    @property
+    def scan_stats(self) -> dict[str, Any]:
+        """
+        Get statistics about the last/current scan.
+
+        Returns:
+            Dictionary with scan statistics.
+        """
+        with self._lock:
+            return {
+                'is_scanning': self._is_scanning,
+                'scan_complete': self._scan_complete,
+                'files_scanned': self._files_scanned,
+                'files_failed': self._files_failed,
+                'total_indexed': len(self._metadata_index),
+                'elapsed_time': time.time() - self._scan_start_time if self._scan_start_time else 0,
+            }
+
+    def start_scan(self, blocking: bool = False) -> None:
+        """
+        Start scanning for LoRA files.
+
+        Args:
+            blocking: If True, wait for scan to complete. If False,
+                     run in background thread.
+        """
+        if self._is_scanning:
+            logger.warning("Scan already in progress, ignoring start request")
+            return
+
+        self._stop_requested = False
+
+        if blocking:
+            self._run_scan()
+        else:
+            self._scan_thread = threading.Thread(
+                target=self._run_scan,
+                name="LoraMetadataScanner",
+                daemon=True
+            )
+            self._scan_thread.start()
+            logger.info("Started background LoRA metadata scan")
+
+    def stop_scan(self) -> None:
+        """Request the current scan to stop."""
+        self._stop_requested = True
+        if self._scan_thread and self._scan_thread.is_alive():
+            logger.info("Stopping LoRA metadata scan...")
+            self._scan_thread.join(timeout=5.0)
+
+    def get_metadata(self, file_path: str) -> dict[str, Any] | None:
+        """
+        Get metadata for a specific file.
+
+        Args:
+            file_path: Path to the LoRA file.
+
+        Returns:
+            Metadata dictionary or None if not indexed.
+        """
+        with self._lock:
+            return self._metadata_index.get(file_path)
+
+    def get_metadata_by_filename(self, filename: str) -> list[dict[str, Any]]:
+        """
+        Get metadata for files matching a filename.
+
+        Args:
+            filename: Filename to search for (without path).
+
+        Returns:
+            List of metadata dictionaries for matching files.
+        """
+        results = []
+        with self._lock:
+            for path, metadata in self._metadata_index.items():
+                if os.path.basename(path) == filename:
+                    results.append(metadata)
+        return results
+
+    def search_by_base_model(self, base_model: str) -> list[dict[str, Any]]:
+        """
+        Find all LoRAs for a specific base model.
+
+        Args:
+            base_model: Base model name to search for.
+
+        Returns:
+            List of metadata dictionaries for matching LoRAs.
+        """
+        results = []
+        base_model_lower = base_model.lower()
+        with self._lock:
+            for metadata in self._metadata_index.values():
+                if metadata.get('base_model'):
+                    if base_model_lower in metadata['base_model'].lower():
+                        results.append(metadata)
+        return results
+
+    def search_by_trigger_word(self, trigger_word: str) -> list[dict[str, Any]]:
+        """
+        Find all LoRAs containing a specific trigger word.
+
+        Args:
+            trigger_word: Trigger word to search for.
+
+        Returns:
+            List of metadata dictionaries for matching LoRAs.
+        """
+        results = []
+        trigger_lower = trigger_word.lower()
+        with self._lock:
+            for metadata in self._metadata_index.values():
+                for word in metadata.get('trigger_words', []):
+                    if trigger_lower in word.lower():
+                        results.append(metadata)
+                        break
+        return results
+
+    def _run_scan(self) -> None:
+        """Execute the scan operation."""
+        self._is_scanning = True
+        self._scan_complete = False
+        self._files_scanned = 0
+        self._files_failed = 0
+        self._scan_start_time = time.time()
+
+        try:
+            # Load paths from config if not provided
+            if not self._lora_paths:
+                self._lora_paths = self._load_lora_paths_from_config()
+
+            if not self._lora_paths:
+                logger.warning("No LoRA paths configured, scan aborted")
+                return
+
+            logger.info(f"Starting LoRA scan in {len(self._lora_paths)} directories")
+
+            # Find all .safetensors files
+            files_to_scan = self._discover_lora_files()
+            total_files = len(files_to_scan)
+
+            if total_files == 0:
+                logger.info("No LoRA files found to scan")
+                return
+
+            logger.info(f"Found {total_files} LoRA files to scan")
+
+            # Process each file
+            for index, file_path in enumerate(files_to_scan):
+                if self._stop_requested:
+                    logger.info("Scan stopped by request")
+                    break
+
+                try:
+                    metadata = extract_metadata(file_path)
+                    with self._lock:
+                        self._metadata_index[file_path] = metadata
+                    self._files_scanned += 1
+
+                    # Log progress every 10 files or at milestones
+                    if (index + 1) % 10 == 0 or (index + 1) == total_files:
+                        progress = ((index + 1) / total_files) * 100
+                        logger.info(
+                            f"Scan progress: {index + 1}/{total_files} "
+                            f"({progress:.1f}%) - {metadata['filename']}"
+                        )
+
+                except Exception as e:
+                    self._files_failed += 1
+                    logger.error(f"Failed to extract metadata from {file_path}: {e}")
+
+            elapsed = time.time() - self._scan_start_time
+            logger.info(
+                f"LoRA scan complete: {self._files_scanned} files indexed, "
+                f"{self._files_failed} failures, {elapsed:.2f}s elapsed"
+            )
+
+        except Exception as e:
+            logger.error(f"Scan failed with error: {e}")
+
+        finally:
+            self._is_scanning = False
+            self._scan_complete = True
+
+    def _load_lora_paths_from_config(self) -> list[str]:
+        """Load LoRA directory paths from config."""
+        try:
+            # Import here to avoid circular imports
+            from modules.config import paths_loras
+
+            if isinstance(paths_loras, list):
+                return [str(p) for p in paths_loras]
+            elif paths_loras:
+                return [str(paths_loras)]
+            return []
+        except ImportError as e:
+            logger.error(f"Failed to import config: {e}")
+            return []
+
+    def _discover_lora_files(self) -> list[str]:
+        """
+        Recursively discover all .safetensors files in configured paths.
+
+        Returns:
+            List of file paths to scan.
+        """
+        files = []
+
+        for lora_path in self._lora_paths:
+            path = Path(lora_path)
+
+            if not path.exists():
+                logger.warning(f"LoRA path does not exist: {lora_path}")
+                continue
+
+            if not path.is_dir():
+                logger.warning(f"LoRA path is not a directory: {lora_path}")
+                continue
+
+            # Recursively find all .safetensors files
+            for file_path in path.rglob('*.safetensors'):
+                files.append(str(file_path))
+
+        return sorted(files)
+
+    def refresh_file(self, file_path: str) -> dict[str, Any] | None:
+        """
+        Refresh metadata for a specific file.
+
+        Args:
+            file_path: Path to the file to refresh.
+
+        Returns:
+            Updated metadata or None if extraction failed.
+        """
+        try:
+            metadata = extract_metadata(file_path)
+            with self._lock:
+                self._metadata_index[file_path] = metadata
+            return metadata
+        except Exception as e:
+            logger.error(f"Failed to refresh metadata for {file_path}: {e}")
+            return None
+
+    def remove_file(self, file_path: str) -> bool:
+        """
+        Remove a file from the index.
+
+        Args:
+            file_path: Path to remove from index.
+
+        Returns:
+            True if file was in index and removed.
+        """
+        with self._lock:
+            if file_path in self._metadata_index:
+                del self._metadata_index[file_path]
+                return True
+        return False
+
+    def clear_index(self) -> None:
+        """Clear all indexed metadata."""
+        with self._lock:
+            self._metadata_index.clear()
+            self._scan_complete = False
+
+
+# Global scanner instance
+_scanner: LoraMetadataScanner | None = None
+
+
+def get_scanner() -> LoraMetadataScanner:
+    """
+    Get the global scanner instance.
+
+    Returns:
+        The global LoraMetadataScanner instance.
+    """
+    global _scanner
+    if _scanner is None:
+        _scanner = LoraMetadataScanner()
+    return _scanner
+
+
+def start_background_scan() -> None:
+    """
+    Start the background LoRA metadata scan.
+
+    This is the main entry point for initiating the scan at application startup.
+    """
+    scanner = get_scanner()
+    scanner.start_scan(blocking=False)
