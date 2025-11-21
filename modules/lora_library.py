@@ -516,10 +516,10 @@ def _generate_lora_card(metadata: dict[str, Any]) -> str:
         more_count = len(trigger_words) - 5
         more_html = f'<span class="trigger-more">+{more_count} more</span>' if more_count > 0 else ''
 
-        # Create JSON for copy button
+        # Create JSON for copy button (no html.escape - JSON is valid JS)
         words_json = json.dumps(trigger_words)
         copy_btn = f'''<button class="copy-triggers-btn"
-                              onclick="copyTriggerWords(this, {html.escape(words_json)})">
+                              onclick="copyTriggerWords(this, {words_json})">
                         📋 Copy
                       </button>'''
 

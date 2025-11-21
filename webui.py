@@ -950,8 +950,9 @@ with shared.gradio_root:
                     )
 
                     # Open library page when button is clicked
+                    # Input is passed to _js, fn ignores it (Gradio pattern)
                     lora_library_btn.click(
-                        fn=lambda x: None,
+                        fn=lambda _: None,
                         inputs=[lora_model],
                         outputs=[],
                         queue=False,
@@ -961,7 +962,7 @@ with shared.gradio_root:
                                 // Generate anchor ID matching Python sanitization
                                 let name = filename.includes('.') ? filename.substring(0, filename.lastIndexOf('.')) : filename;
                                 let anchor = name.replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'lora';
-                                window.open('file={os.path.abspath(modules.config.path_outputs)}/lora_library.html#' + anchor, 'lora_library');
+                                window.open('/file={os.path.abspath(modules.config.path_outputs)}/lora_library.html#' + anchor, 'lora_library');
                             }}
                         }}'''
                     )
