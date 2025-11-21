@@ -51,6 +51,9 @@ def generate_library_html() -> str:
                 <div class="results-count" id="results-count">
                     {len(library_data)} LoRAs
                 </div>
+                <button onclick="rescanLibrary()" class="rescan-btn" id="rescan-btn" title="Rescan LoRA directory">
+                    🔄 Rescan
+                </button>
             </div>
         </header>
 
@@ -189,7 +192,31 @@ def _get_library_css() -> str:
         .results-count {
             color: var(--text-secondary);
             font-size: 14px;
+        }
+
+        .rescan-btn {
+            padding: 10px 16px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            font-size: 14px;
+            cursor: pointer;
+            transition: background 0.2s;
             margin-left: auto;
+        }
+
+        .rescan-btn:hover {
+            background: var(--accent);
+        }
+
+        .rescan-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .rescan-btn.scanning {
+            background: var(--warning);
         }
 
         .library-content {
@@ -465,6 +492,71 @@ def _get_library_javascript(library_data: list[dict[str, Any]]) -> str:
                 }}
             }}
         }});
+
+        // Rescan library functionality
+        let rescanPollInterval = null;
+
+        function rescanLibrary() {{
+            const btn = document.getElementById('rescan-btn');
+            btn.disabled = true;
+            btn.classList.add('scanning');
+            btn.textContent = '🔄 Scanning...';
+
+            // Trigger rescan
+            fetch('/lora-library-rescan', {{ method: 'POST' }})
+                .then(response => response.json())
+                .then(data => {{
+                    if (data.success) {{
+                        // Start polling for scan status
+                        rescanPollInterval = setInterval(pollRescanStatus, 1000);
+                    }} else {{
+                        alert('Failed to start rescan: ' + (data.error || 'Unknown error'));
+                        resetRescanButton();
+                    }}
+                }})
+                .catch(err => {{
+                    console.error('Rescan request failed:', err);
+                    alert('Failed to start rescan');
+                    resetRescanButton();
+                }});
+        }}
+
+        function pollRescanStatus() {{
+            fetch('/lora-library-scan-status')
+                .then(response => response.json())
+                .then(data => {{
+                    const btn = document.getElementById('rescan-btn');
+                    if (data.is_scanning) {{
+                        // Update button with progress
+                        btn.textContent = `🔄 Scanning (${data.files_scanned} files)...`;
+                    }} else {{
+                        // Scan complete
+                        clearInterval(rescanPollInterval);
+                        rescanPollInterval = null;
+
+                        // Show completion message
+                        const resultMsg = `Scan complete: ${data.files_scanned} files scanned`;
+                        btn.textContent = resultMsg;
+                        setTimeout(() => {{
+                            resetRescanButton();
+                            // Reload the page to show updated library
+                            window.location.reload();
+                        }}, 2000);
+                    }}
+                }})
+                .catch(err => {{
+                    console.error('Status poll failed:', err);
+                    clearInterval(rescanPollInterval);
+                    resetRescanButton();
+                }});
+        }}
+
+        function resetRescanButton() {{
+            const btn = document.getElementById('rescan-btn');
+            btn.disabled = false;
+            btn.classList.remove('scanning');
+            btn.textContent = '🔄 Rescan';
+        }}
     '''
 
 
@@ -499,6 +591,7 @@ def _generate_lora_card(metadata: dict[str, Any]) -> str:
     network_dim = metadata.get('network_dim')
     network_alpha = metadata.get('network_alpha')
     resolution = metadata.get('resolution')
+    extraction_errors = metadata.get('extraction_errors') or []
 
     # Calculate suggested weight from network parameters
     suggested_weight = None
@@ -538,7 +631,7 @@ def _generate_lora_card(metadata: dict[str, Any]) -> str:
         trigger_html = '''
             <div class="meta-row">
                 <span class="meta-label">Triggers:</span>
-                <span class="meta-value" style="color: var(--text-secondary);">No trigger words</span>
+                <span class="meta-value" style="color: var(--text-secondary);">No trigger words available</span>
             </div>
         '''
 
@@ -550,6 +643,13 @@ def _generate_lora_card(metadata: dict[str, Any]) -> str:
             <div class="meta-row">
                 <span class="meta-label">Description:</span>
                 <span class="meta-value truncate">{desc_escaped}</span>
+            </div>
+        '''
+    else:
+        desc_html = '''
+            <div class="meta-row">
+                <span class="meta-label">Description:</span>
+                <span class="meta-value" style="color: var(--text-secondary);">No description</span>
             </div>
         '''
 
@@ -601,6 +701,22 @@ def _generate_lora_card(metadata: dict[str, Any]) -> str:
             </div>
         '''
 
+    # Generate extraction error warning
+    error_html = ''
+    if extraction_errors:
+        error_count = len(extraction_errors)
+        error_summary = html.escape('; '.join(extraction_errors[:2]))
+        if error_count > 2:
+            error_summary += f'... (+{error_count - 2} more)'
+        error_html = f'''
+            <div class="meta-row">
+                <span class="meta-label">⚠️ Warnings:</span>
+                <span class="meta-value" style="color: var(--warning); font-size: 12px;" title="{error_summary}">
+                    {error_count} metadata extraction issue{'s' if error_count > 1 else ''}
+                </span>
+            </div>
+        '''
+
     return f'''
         <div class="lora-card" id="{card_id}">
             <div class="lora-header">
@@ -619,6 +735,7 @@ def _generate_lora_card(metadata: dict[str, Any]) -> str:
                 {trigger_html}
                 {desc_html}
                 {extras_html}
+                {error_html}
             </div>
         </div>
     '''

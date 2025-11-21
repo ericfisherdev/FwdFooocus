@@ -874,13 +874,25 @@ def get_all_library_data() -> list[dict[str, Any]]:
     Get all LoRA metadata for the library page.
 
     Returns:
-        List of metadata dictionaries sorted by filename.
+        List of metadata dictionaries sorted by filename with fallback values applied.
     """
     scanner = get_scanner()
     index = scanner.metadata_index
 
-    # Convert to list and sort by filename
-    library_data = list(index.values())
+    # Convert to list, apply fallbacks, and sort by filename
+    library_data = []
+    for metadata in index.values():
+        # Apply fallback values for missing metadata
+        processed = dict(metadata)
+        if not processed.get('base_model'):
+            processed['base_model'] = 'Unknown'
+        if not processed.get('trigger_words'):
+            processed['trigger_words'] = []
+        if not processed.get('description'):
+            processed['description'] = ''
+
+        library_data.append(processed)
+
     library_data.sort(key=lambda x: x.get('filename', '').lower())
 
     return library_data

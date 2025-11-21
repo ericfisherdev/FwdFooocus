@@ -3,6 +3,8 @@ import random
 import os
 import json
 import time
+import logging
+from flask import request
 import shared
 import modules.config
 import fooocus_version
@@ -26,6 +28,8 @@ from modules.private_logger import get_current_html_path
 from modules.ui_gradio_extensions import reload_javascript
 from modules.auth import auth_enabled, check_auth
 from modules.util import is_json
+
+logger = logging.getLogger(__name__)
 
 def get_task(*args):
     args = list(args)
@@ -701,6 +705,7 @@ with shared.gradio_root:
                     lora_ctrls = []
 
                     lora_library_buttons = []
+                    lora_clipboard_buttons = []
                     for i, (enabled, filename, weight) in enumerate(modules.config.default_loras):
                         with gr.Row():
                             lora_enabled = gr.Checkbox(label='Enable', value=enabled,
@@ -716,8 +721,15 @@ with shared.gradio_root:
                                                         elem_classes='lora_library_btn', scale=0,
                                                         visible=(filename != 'None'),
                                                         min_width=40)
+                            # Clipboard copy button for trigger words - visible when LoRA has triggers
+                            lora_clipboard_btn = gr.Button(value='📋', variant='secondary', size='sm',
+                                                          elem_classes='lora_clipboard_btn', scale=0,
+                                                          visible=False,
+                                                          min_width=40,
+                                                          elem_id=f'lora_clipboard_btn_{i}')
                             lora_ctrls += [lora_enabled, lora_model, lora_weight]
                             lora_library_buttons.append((lora_model, lora_library_btn))
+                            lora_clipboard_buttons.append((lora_model, lora_clipboard_btn))
 
                 with gr.Row():
                     refresh_files = gr.Button(label='Refresh', value='\U0001f504 Refresh All Files', variant='secondary', elem_classes='refresh_button')
@@ -970,6 +982,78 @@ with shared.gradio_root:
                                 window.open('/file={library_html_path}#' + anchor, 'lora_library');
                             }}
                         }}'''
+                    )
+
+                # LoRA Clipboard button handlers
+                def update_clipboard_btn_visibility(lora_filename):
+                    """Update clipboard button visibility based on LoRA trigger words."""
+                    if not lora_filename or lora_filename == 'None':
+                        return gr.update(visible=False)
+
+                    # Check if LoRA has trigger words
+                    trigger_words = modules.lora_metadata.get_trigger_words_for_filename(lora_filename)
+                    return gr.update(visible=len(trigger_words) > 0)
+
+                def get_trigger_words_for_copy(lora_filename):
+                    """Get trigger words as comma-separated string for clipboard."""
+                    if not lora_filename or lora_filename == 'None':
+                        return ''
+
+                    trigger_words = modules.lora_metadata.get_trigger_words_for_filename(lora_filename)
+                    return ', '.join(trigger_words) if trigger_words else ''
+
+                # Connect clipboard button handlers for each LoRA slot
+                for lora_model, lora_clipboard_btn in lora_clipboard_buttons:
+                    # Update visibility when LoRA selection changes
+                    lora_model.change(
+                        fn=update_clipboard_btn_visibility,
+                        inputs=[lora_model],
+                        outputs=[lora_clipboard_btn],
+                        queue=False,
+                        show_progress=False
+                    )
+
+                    # Copy trigger words to clipboard when button clicked
+                    lora_clipboard_btn.click(
+                        fn=get_trigger_words_for_copy,
+                        inputs=[lora_model],
+                        outputs=[],
+                        queue=False,
+                        show_progress=False,
+                        _js='''(filename, triggerWords) => {
+                            if (navigator.clipboard && navigator.clipboard.writeText) {
+                                fetch('/lora-trigger-words?filename=' + encodeURIComponent(filename))
+                                    .then(response => response.json())
+                                    .then(data => {
+                                        if (data.trigger_words && data.trigger_words.length > 0) {
+                                            const text = data.trigger_words.join(', ');
+                                            navigator.clipboard.writeText(text).then(() => {
+                                                // Show temporary success message
+                                                const btn = event.target.closest('button');
+                                                const originalText = btn.textContent;
+                                                btn.textContent = '✓';
+                                                btn.style.background = '#10b981';
+                                                setTimeout(() => {
+                                                    btn.textContent = originalText;
+                                                    btn.style.background = '';
+                                                }, 1500);
+                                            }).catch(err => {
+                                                console.error('Failed to copy:', err);
+                                                alert('Failed to copy to clipboard');
+                                            });
+                                        } else {
+                                            alert('No trigger words available for this LoRA');
+                                        }
+                                    })
+                                    .catch(err => {
+                                        console.error('Failed to fetch trigger words:', err);
+                                        alert('Failed to fetch trigger words');
+                                    });
+                            } else {
+                                alert('Clipboard API not available in your browser');
+                            }
+                            return filename;
+                        }'''
                     )
 
                 # LoRA Preset handlers
@@ -1343,6 +1427,59 @@ def dump_default_english_config():
 
 
 # dump_default_english_config()
+
+# Add Flask routes for LoRA library rescan functionality
+@shared.gradio_root.app.post("/lora-library-rescan")
+def lora_library_rescan():
+    """Trigger a rescan of the LoRA library."""
+    try:
+        scanner = modules.lora_metadata.get_scanner()
+        if scanner.is_scanning:
+            return {"success": False, "error": "Scan already in progress"}
+
+        scanner.start_scan(blocking=False)
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"Failed to start rescan: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@shared.gradio_root.app.get("/lora-library-scan-status")
+def lora_library_scan_status():
+    """Get the current scan status."""
+    try:
+        scanner = modules.lora_metadata.get_scanner()
+        stats = scanner.scan_stats
+        return {
+            "is_scanning": stats['is_scanning'],
+            "scan_complete": stats['scan_complete'],
+            "files_scanned": stats['files_scanned'],
+            "files_failed": stats['files_failed'],
+            "total_indexed": stats['total_indexed'],
+            "elapsed_time": stats['elapsed_time']
+        }
+    except Exception as e:
+        logger.error(f"Failed to get scan status: {e}")
+        return {"error": str(e)}
+
+
+@shared.gradio_root.app.get("/lora-trigger-words")
+def lora_trigger_words():
+    """Get trigger words for a specific LoRA filename."""
+    try:
+        filename = request.args.get('filename')
+        if not filename:
+            return {"error": "No filename provided"}
+
+        trigger_words = modules.lora_metadata.get_trigger_words_for_filename(filename)
+        return {
+            "filename": filename,
+            "trigger_words": trigger_words
+        }
+    except Exception as e:
+        logger.error(f"Failed to get trigger words: {e}")
+        return {"error": str(e)}
+
 
 # Launch the server
 shared.gradio_root.launch(
