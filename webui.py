@@ -938,6 +938,11 @@ with shared.gradio_root:
                     sanitized = re.sub(r'-+', '-', sanitized).strip('-')
                     return sanitized.lower() if sanitized else 'lora'
 
+                # Precompute library path with forward slashes for cross-platform JS compatibility
+                library_html_path = os.path.abspath(
+                    os.path.join(modules.config.path_outputs, 'lora_library.html')
+                ).replace('\\', '/')
+
                 # Connect library button handlers for each LoRA slot
                 for lora_model, lora_library_btn in lora_library_buttons:
                     # Update visibility when LoRA selection changes
@@ -962,7 +967,7 @@ with shared.gradio_root:
                                 // Generate anchor ID matching Python sanitization
                                 let name = filename.includes('.') ? filename.substring(0, filename.lastIndexOf('.')) : filename;
                                 let anchor = name.replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'lora';
-                                window.open('/file={os.path.abspath(modules.config.path_outputs)}/lora_library.html#' + anchor, 'lora_library');
+                                window.open('/file={library_html_path}#' + anchor, 'lora_library');
                             }}
                         }}'''
                     )

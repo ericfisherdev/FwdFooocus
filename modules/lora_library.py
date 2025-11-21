@@ -438,7 +438,8 @@ def _get_library_javascript(library_data: list[dict[str, Any]]) -> str:
             filterLibrary();
         }}
 
-        function copyTriggerWords(button, words) {{
+        function copyTriggerWords(button) {{
+            const words = JSON.parse(button.dataset.triggerWords);
             const text = words.join(', ');
             navigator.clipboard.writeText(text).then(() => {{
                 button.classList.add('copied');
@@ -516,10 +517,11 @@ def _generate_lora_card(metadata: dict[str, Any]) -> str:
         more_count = len(trigger_words) - 5
         more_html = f'<span class="trigger-more">+{more_count} more</span>' if more_count > 0 else ''
 
-        # Create JSON for copy button (no html.escape - JSON is valid JS)
-        words_json = json.dumps(trigger_words)
+        # Create JSON for copy button - use data attribute for safe HTML encoding
+        words_json = html.escape(json.dumps(trigger_words))
         copy_btn = f'''<button class="copy-triggers-btn"
-                              onclick="copyTriggerWords(this, {words_json})">
+                              data-trigger-words="{words_json}"
+                              onclick="copyTriggerWords(this)">
                         📋 Copy
                       </button>'''
 
