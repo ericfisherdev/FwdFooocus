@@ -3,6 +3,8 @@ import random
 import os
 import json
 import time
+import logging
+from flask import request
 import shared
 import modules.config
 import fooocus_version
@@ -26,6 +28,8 @@ from modules.private_logger import get_current_html_path
 from modules.ui_gradio_extensions import reload_javascript
 from modules.auth import auth_enabled, check_auth
 from modules.util import is_json
+
+logger = logging.getLogger(__name__)
 
 def get_task(*args):
     args = list(args)
@@ -1463,7 +1467,6 @@ def lora_library_scan_status():
 def lora_trigger_words():
     """Get trigger words for a specific LoRA filename."""
     try:
-        from flask import request
         filename = request.args.get('filename')
         if not filename:
             return {"error": "No filename provided"}
