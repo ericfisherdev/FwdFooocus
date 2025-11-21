@@ -14,6 +14,8 @@ import modules.gradio_hijack as grh
 import modules.style_sorter as style_sorter
 import modules.meta_parser
 import modules.lora_presets
+import modules.lora_library
+import modules.lora_metadata
 import args_manager
 import copy
 import launch
@@ -698,6 +700,7 @@ with shared.gradio_root:
                                                       elem_id='save_preset_button')
                     lora_ctrls = []
 
+                    lora_library_buttons = []
                     for i, (enabled, filename, weight) in enumerate(modules.config.default_loras):
                         with gr.Row():
                             lora_enabled = gr.Checkbox(label='Enable', value=enabled,
@@ -708,7 +711,13 @@ with shared.gradio_root:
                             lora_weight = gr.Slider(label='Weight', minimum=modules.config.default_loras_min_weight,
                                                     maximum=modules.config.default_loras_max_weight, step=0.01, value=weight,
                                                     elem_classes='lora_weight', scale=5)
+                            # Library link button - visible when LoRA is selected
+                            lora_library_btn = gr.Button(value='📚', variant='secondary', size='sm',
+                                                        elem_classes='lora_library_btn', scale=0,
+                                                        visible=(filename != 'None'),
+                                                        min_width=40)
                             lora_ctrls += [lora_enabled, lora_model, lora_weight]
+                            lora_library_buttons.append((lora_model, lora_library_btn))
 
                 with gr.Row():
                     refresh_files = gr.Button(label='Refresh', value='\U0001f504 Refresh All Files', variant='secondary', elem_classes='refresh_button')
@@ -915,6 +924,53 @@ with shared.gradio_root:
                 refresh_files_output += [preset_dropdown]
                 refresh_files.click(refresh_files_clicked, [], refresh_files_output + lora_ctrls,
                                     queue=False, show_progress=False)
+
+                # LoRA Library button handlers
+                def update_library_btn_visibility(lora_filename):
+                    """Update library button visibility based on LoRA selection."""
+                    return gr.update(visible=(lora_filename != 'None'))
+
+                def get_library_anchor(filename):
+                    """Generate sanitized anchor ID for a LoRA filename."""
+                    import re
+                    name = filename.rsplit('.', 1)[0] if '.' in filename else filename
+                    sanitized = re.sub(r'[^a-zA-Z0-9]', '-', name)
+                    sanitized = re.sub(r'-+', '-', sanitized).strip('-')
+                    return sanitized.lower() if sanitized else 'lora'
+
+                # Precompute library path with forward slashes for cross-platform JS compatibility
+                library_html_path = os.path.abspath(
+                    os.path.join(modules.config.path_outputs, 'lora_library.html')
+                ).replace('\\', '/')
+
+                # Connect library button handlers for each LoRA slot
+                for lora_model, lora_library_btn in lora_library_buttons:
+                    # Update visibility when LoRA selection changes
+                    lora_model.change(
+                        fn=update_library_btn_visibility,
+                        inputs=[lora_model],
+                        outputs=[lora_library_btn],
+                        queue=False,
+                        show_progress=False
+                    )
+
+                    # Open library page when button is clicked
+                    # Input is passed to _js, fn ignores it (Gradio pattern)
+                    lora_library_btn.click(
+                        fn=lambda _: None,
+                        inputs=[lora_model],
+                        outputs=[],
+                        queue=False,
+                        show_progress=False,
+                        _js=f'''(filename) => {{
+                            if (filename && filename !== 'None') {{
+                                // Generate anchor ID matching Python sanitization
+                                let name = filename.includes('.') ? filename.substring(0, filename.lastIndexOf('.')) : filename;
+                                let anchor = name.replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'lora';
+                                window.open('/file={library_html_path}#' + anchor, 'lora_library');
+                            }}
+                        }}'''
+                    )
 
                 # LoRA Preset handlers
                 def save_preset_clicked(*lora_values):
@@ -1288,6 +1344,7 @@ def dump_default_english_config():
 
 # dump_default_english_config()
 
+# Launch the server
 shared.gradio_root.launch(
     inbrowser=args_manager.args.in_browser,
     server_name=args_manager.args.listen,
@@ -1295,5 +1352,24 @@ shared.gradio_root.launch(
     share=args_manager.args.share,
     auth=check_auth if (args_manager.args.share or args_manager.args.listen) and auth_enabled else None,
     allowed_paths=[modules.config.path_outputs],
-    blocked_paths=[constants.AUTH_FILENAME]
+    blocked_paths=[constants.AUTH_FILENAME],
+    prevent_thread_lock=True
 )
+
+# Generate LoRA library HTML file
+print("[LoRA Library] Generating library HTML file...")
+try:
+    library_html_path = os.path.abspath(os.path.join(modules.config.path_outputs, 'lora_library.html'))
+    print(f"[LoRA Library] path_outputs = {modules.config.path_outputs}")
+    print(f"[LoRA Library] absolute path = {library_html_path}")
+    html_content = modules.lora_library.generate_library_html()
+    with open(library_html_path, 'w', encoding='utf-8') as f:
+        f.write(html_content)
+    print(f"[LoRA Library] Generated library ({len(html_content)} bytes)")
+except Exception as e:
+    print(f"[LoRA Library] ERROR generating library: {e}")
+    import traceback
+    traceback.print_exc()
+
+# Block the main thread
+shared.gradio_root.block_thread()

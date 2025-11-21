@@ -867,3 +867,110 @@ def start_background_scan() -> None:
     """
     scanner = get_scanner()
     scanner.start_scan(blocking=False)
+
+
+def get_all_library_data() -> list[dict[str, Any]]:
+    """
+    Get all LoRA metadata for the library page.
+
+    Returns:
+        List of metadata dictionaries sorted by filename.
+    """
+    scanner = get_scanner()
+    index = scanner.metadata_index
+
+    # Convert to list and sort by filename
+    library_data = list(index.values())
+    library_data.sort(key=lambda x: x.get('filename', '').lower())
+
+    return library_data
+
+
+def get_distinct_base_models() -> list[str]:
+    """
+    Get all distinct base model types from the library.
+
+    Returns:
+        Sorted list of unique base model names.
+    """
+    scanner = get_scanner()
+    index = scanner.metadata_index
+
+    base_models = set()
+    for metadata in index.values():
+        model = metadata.get('base_model')
+        if model:
+            base_models.add(model)
+
+    # Return sorted list with 'Unknown' at the end if present
+    models = sorted(base_models)
+    if 'Unknown' in models:
+        models.remove('Unknown')
+        models.append('Unknown')
+
+    return models
+
+
+def get_trigger_words_for_filename(filename: str) -> list[str]:
+    """
+    Get trigger words for a specific LoRA by filename.
+
+    Args:
+        filename: The LoRA filename (without path).
+
+    Returns:
+        List of trigger words, or empty list if not found.
+    """
+    scanner = get_scanner()
+    results = scanner.get_metadata_by_filename(filename)
+
+    if results:
+        return results[0].get('trigger_words', [])
+
+    return []
+
+
+def search_library(
+    query: str = '',
+    base_model_filter: str = ''
+) -> list[dict[str, Any]]:
+    """
+    Search and filter the LoRA library.
+
+    Args:
+        query: Text search query (searches all metadata fields).
+        base_model_filter: Filter by specific base model (empty for all).
+
+    Returns:
+        List of matching metadata dictionaries.
+    """
+    library_data = get_all_library_data()
+    results = []
+
+    query_lower = query.lower().strip()
+
+    for metadata in library_data:
+        # Apply base model filter
+        if base_model_filter:
+            if metadata.get('base_model') != base_model_filter:
+                continue
+
+        # Apply text search
+        if query_lower:
+            # Build searchable text from all fields
+            searchable_parts = [
+                metadata.get('filename', ''),
+                metadata.get('base_model', ''),
+                metadata.get('description', ''),
+                ' '.join(metadata.get('trigger_words', [])),
+                ' '.join(metadata.get('characters', [])),
+                ' '.join(metadata.get('styles', [])),
+            ]
+            searchable_text = ' '.join(str(p) for p in searchable_parts).lower()
+
+            if query_lower not in searchable_text:
+                continue
+
+        results.append(metadata)
+
+    return results
