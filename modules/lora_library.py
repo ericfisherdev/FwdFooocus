@@ -320,6 +320,16 @@ def _get_library_css() -> str:
             font-weight: 500;
         }
 
+        .weight-badge {
+            display: inline-block;
+            background: var(--warning);
+            color: var(--bg-primary);
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
         .empty-state {
             text-align: center;
             padding: 60px 20px;
@@ -476,15 +486,23 @@ def _generate_lora_cards(library_data: list[dict[str, Any]]) -> str:
 
 def _generate_lora_card(metadata: dict[str, Any]) -> str:
     """Generate HTML for a single LoRA card."""
-    filename = metadata.get('filename', 'Unknown')
+    filename = metadata.get('filename') or 'Unknown'
     card_id = _sanitize_id(filename)
-    file_size = metadata.get('file_size', 0)
+    file_size = metadata.get('file_size') or 0
     size_mb = file_size / (1024 * 1024)
-    base_model = metadata.get('base_model', 'Unknown')
-    trigger_words = metadata.get('trigger_words', [])
-    description = metadata.get('description', '')
-    characters = metadata.get('characters', [])
-    styles = metadata.get('styles', [])
+    base_model = metadata.get('base_model') or 'Unknown'
+    trigger_words = metadata.get('trigger_words') or []
+    description = metadata.get('description') or ''
+    characters = metadata.get('characters') or []
+    styles = metadata.get('styles') or []
+    network_dim = metadata.get('network_dim')
+    network_alpha = metadata.get('network_alpha')
+    resolution = metadata.get('resolution')
+
+    # Calculate suggested weight from network parameters
+    suggested_weight = None
+    if network_dim and network_alpha:
+        suggested_weight = network_alpha / network_dim
 
     # Generate trigger words display
     trigger_html = ''
@@ -559,6 +577,28 @@ def _generate_lora_card(metadata: dict[str, Any]) -> str:
 
     extras_html = ''.join(extras)
 
+    # Generate suggested weight display
+    weight_html = ''
+    if suggested_weight is not None:
+        weight_html = f'''
+            <div class="meta-row">
+                <span class="meta-label">Suggested Weight:</span>
+                <span class="meta-value">
+                    <span class="weight-badge">{suggested_weight:.2f}</span>
+                </span>
+            </div>
+        '''
+
+    # Generate resolution display
+    resolution_html = ''
+    if resolution:
+        resolution_html = f'''
+            <div class="meta-row">
+                <span class="meta-label">Resolution:</span>
+                <span class="meta-value">{html.escape(str(resolution))}</span>
+            </div>
+        '''
+
     return f'''
         <div class="lora-card" id="{card_id}">
             <div class="lora-header">
@@ -572,6 +612,8 @@ def _generate_lora_card(metadata: dict[str, Any]) -> str:
                         <span class="base-model-badge">{html.escape(base_model)}</span>
                     </span>
                 </div>
+                {weight_html}
+                {resolution_html}
                 {trigger_html}
                 {desc_html}
                 {extras_html}

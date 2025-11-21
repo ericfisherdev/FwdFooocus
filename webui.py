@@ -26,7 +26,6 @@ from modules.private_logger import get_current_html_path
 from modules.ui_gradio_extensions import reload_javascript
 from modules.auth import auth_enabled, check_auth
 from modules.util import is_json
-from fastapi import FastAPI, Response
 
 def get_task(*args):
     args = list(args)
@@ -962,7 +961,7 @@ with shared.gradio_root:
                                 // Generate anchor ID matching Python sanitization
                                 let name = filename.includes('.') ? filename.substring(0, filename.lastIndexOf('.')) : filename;
                                 let anchor = name.replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'lora';
-                                window.open('/lora-library#' + anchor, 'lora_library');
+                                window.open('file={os.path.abspath(modules.config.path_outputs)}/lora_library.html#' + anchor, 'lora_library');
                             }}
                         }}'''
                     )
@@ -1339,22 +1338,7 @@ def dump_default_english_config():
 
 # dump_default_english_config()
 
-# Create FastAPI app with custom routes for LoRA library
-custom_app = FastAPI()
-
-@custom_app.get("/lora-library")
-async def lora_library_page():
-    """Serve the LoRA library page."""
-    html_content = modules.lora_library.generate_library_html()
-    return Response(content=html_content, media_type="text/html")
-
-@custom_app.get("/api/lora-trigger-words/{filename}")
-async def get_lora_trigger_words(filename: str):
-    """Get trigger words for a specific LoRA."""
-    trigger_words = modules.lora_metadata.get_trigger_words_for_filename(filename)
-    return {"filename": filename, "trigger_words": trigger_words}
-
-# Launch with custom FastAPI app
+# Launch the server
 shared.gradio_root.launch(
     inbrowser=args_manager.args.in_browser,
     server_name=args_manager.args.listen,
@@ -1363,5 +1347,23 @@ shared.gradio_root.launch(
     auth=check_auth if (args_manager.args.share or args_manager.args.listen) and auth_enabled else None,
     allowed_paths=[modules.config.path_outputs],
     blocked_paths=[constants.AUTH_FILENAME],
-    app=custom_app
+    prevent_thread_lock=True
 )
+
+# Generate LoRA library HTML file
+print("[LoRA Library] Generating library HTML file...")
+try:
+    library_html_path = os.path.abspath(os.path.join(modules.config.path_outputs, 'lora_library.html'))
+    print(f"[LoRA Library] path_outputs = {modules.config.path_outputs}")
+    print(f"[LoRA Library] absolute path = {library_html_path}")
+    html_content = modules.lora_library.generate_library_html()
+    with open(library_html_path, 'w', encoding='utf-8') as f:
+        f.write(html_content)
+    print(f"[LoRA Library] Generated library ({len(html_content)} bytes)")
+except Exception as e:
+    print(f"[LoRA Library] ERROR generating library: {e}")
+    import traceback
+    traceback.print_exc()
+
+# Block the main thread
+shared.gradio_root.block_thread()
