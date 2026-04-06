@@ -528,14 +528,14 @@ def _get_library_javascript(library_data: list[dict[str, Any]]) -> str:
                     const btn = document.getElementById('rescan-btn');
                     if (data.is_scanning) {{
                         // Update button with progress
-                        btn.textContent = `🔄 Scanning (${data.files_scanned} files)...`;
+                        btn.textContent = `🔄 Scanning (${{data.files_scanned}} files)...`;
                     }} else {{
                         // Scan complete
                         clearInterval(rescanPollInterval);
                         rescanPollInterval = null;
 
                         // Show completion message
-                        const resultMsg = `Scan complete: ${data.files_scanned} files scanned`;
+                        const resultMsg = `Scan complete: ${{data.files_scanned}} files scanned`;
                         btn.textContent = resultMsg;
                         setTimeout(() => {{
                             resetRescanButton();
