@@ -1,6 +1,7 @@
 import threading
 
 from extras.inpaint_mask import generate_mask_from_image, SAMOptions
+from modules.heartbeat import is_browser_connected
 from modules.patch import PatchSettings, patch_settings, patch_all
 import modules.config
 
@@ -1279,6 +1280,10 @@ def worker():
         persist_image = not async_task.should_enhance or not async_task.save_final_enhanced_image_only
 
         for current_task_id, task in enumerate(tasks):
+            if not is_browser_connected():
+                print('[Batch] Browser disconnected, cancelling remaining images')
+                break
+
             progressbar(async_task, current_progress, f'Preparing task {current_task_id + 1}/{async_task.image_number} ...')
             execution_start_time = time.perf_counter()
 
@@ -1333,6 +1338,10 @@ def worker():
         enhance_steps, _, _, _ = apply_overrides(async_task, async_task.original_steps, height, width)
         exception_result = None
         for index, img in enumerate(images_to_enhance):
+            if not is_browser_connected():
+                print('[Enhance] Browser disconnected, cancelling remaining enhancements')
+                break
+
             async_task.enhance_stats[index] = 0
             enhancement_image_start_time = time.perf_counter()
 
