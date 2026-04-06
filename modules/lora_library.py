@@ -6,6 +6,8 @@ Generates the HTML page for browsing the LoRA library with search and filter fun
 
 import html
 import json
+import os
+import re
 from typing import Any
 
 from modules.lora_metadata import get_all_library_data, get_distinct_base_models
@@ -271,6 +273,13 @@ def _get_library_css() -> str:
             margin-left: 8px;
         }
 
+        .lora-subdir {
+            color: var(--text-secondary);
+            font-size: 12px;
+            margin-bottom: 8px;
+            word-break: break-word;
+        }
+
         .lora-meta {
             display: flex;
             flex-direction: column;
@@ -401,8 +410,9 @@ def _get_library_javascript(library_data: list[dict[str, Any]]) -> str:
     # Embed library data as JSON for client-side filtering
     library_json = json.dumps([
         {
-            'id': _sanitize_id(item.get('filename', '')),
+            'id': _sanitize_id(item.get('relative_path', item.get('filename', ''))),
             'filename': item.get('filename', ''),
+            'relative_path': item.get('relative_path', item.get('filename', '')),
             'base_model': item.get('base_model', ''),
             'trigger_words': item.get('trigger_words', []),
             'description': item.get('description', ''),
@@ -435,6 +445,7 @@ def _get_library_javascript(library_data: list[dict[str, Any]]) -> str:
                 if (show && searchTerm) {{
                     const searchableText = [
                         data.filename,
+                        data.relative_path,
                         data.base_model,
                         data.description,
                         data.trigger_words.join(' '),
@@ -580,7 +591,8 @@ def _generate_lora_cards(library_data: list[dict[str, Any]]) -> str:
 def _generate_lora_card(metadata: dict[str, Any]) -> str:
     """Generate HTML for a single LoRA card."""
     filename = metadata.get('filename') or 'Unknown'
-    card_id = _sanitize_id(filename)
+    relative_path = metadata.get('relative_path') or filename
+    card_id = _sanitize_id(relative_path)
     file_size = metadata.get('file_size') or 0
     size_mb = file_size / (1024 * 1024)
     base_model = metadata.get('base_model') or 'Unknown'
@@ -717,12 +729,23 @@ def _generate_lora_card(metadata: dict[str, Any]) -> str:
             </div>
         '''
 
+    # Show subdirectory path if the file is nested
+    subdirectory = os.path.dirname(relative_path)
+    subdir_html = ''
+    if subdirectory:
+        subdir_html = f'''
+            <div class="lora-subdir" title="{html.escape(relative_path)}">
+                📁 {html.escape(subdirectory)}/
+            </div>
+        '''
+
     return f'''
         <div class="lora-card" id="{card_id}">
             <div class="lora-header">
                 <span class="lora-filename">{html.escape(filename)}</span>
                 <span class="lora-size">{size_mb:.1f} MB</span>
             </div>
+            {subdir_html}
             <div class="lora-meta">
                 <div class="meta-row">
                     <span class="meta-label">Base Model:</span>
@@ -751,20 +774,20 @@ def _generate_empty_state() -> str:
     '''
 
 
-def _sanitize_id(filename: str) -> str:
+def _sanitize_id(name: str) -> str:
     """
-    Sanitize a filename to use as an HTML ID.
+    Sanitize a filename or relative path to use as an HTML ID.
 
     Args:
-        filename: The filename to sanitize.
+        name: The filename or relative path to sanitize
+              (e.g. 'my_lora.safetensors' or 'pony/characters/my_lora.safetensors').
 
     Returns:
         Sanitized string safe for use as an HTML ID.
     """
     # Remove extension and replace non-alphanumeric chars with hyphens
-    import re
-    name = filename.rsplit('.', 1)[0] if '.' in filename else filename
-    sanitized = re.sub(r'[^a-zA-Z0-9]', '-', name)
+    without_ext = name.rsplit('.', 1)[0] if '.' in name else name
+    sanitized = re.sub(r'[^a-zA-Z0-9]', '-', without_ext)
     # Remove consecutive hyphens and trim
     sanitized = re.sub(r'-+', '-', sanitized).strip('-')
     return sanitized.lower() if sanitized else 'lora'
