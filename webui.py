@@ -968,9 +968,10 @@ with shared.gradio_root:
                         show_progress=False,
                         _js=f'''(filename) => {{
                             if (filename && filename !== 'None') {{
-                                // Generate anchor ID matching Python sanitization
+                                // Generate anchor ID matching Python _sanitize_id
                                 let name = filename.includes('.') ? filename.substring(0, filename.lastIndexOf('.')) : filename;
                                 let anchor = name.replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'lora';
+                                if (anchor && /^[0-9]/.test(anchor)) anchor = 'lora-' + anchor;
                                 window.open('/file={library_html_path}#' + anchor, 'lora_library');
                             }}
                         }}'''
