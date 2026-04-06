@@ -13,6 +13,7 @@ from extras.expansion import FooocusExpansion
 from ldm_patched.modules.model_base import SDXL, SDXLRefiner
 from modules.sample_hijack import clip_separate
 from modules.util import get_file_from_folder_list, get_enabled_loras
+from modules.fast_checkpoint import resolve_checkpoint_path
 
 
 model_base = core.StableDiffusionModel()
@@ -62,7 +63,9 @@ def assert_model_integrity():
 def refresh_base_model(name, vae_name=None):
     global model_base
 
-    filename = get_file_from_folder_list(name, modules.config.paths_checkpoints)
+    filename = resolve_checkpoint_path(
+        name, modules.config.paths_checkpoints, modules.config.path_fast_checkpoints
+    )
 
     vae_filename = None
     if vae_name is not None and vae_name != modules.flags.default_vae:
@@ -82,7 +85,9 @@ def refresh_base_model(name, vae_name=None):
 def refresh_refiner_model(name):
     global model_refiner
 
-    filename = get_file_from_folder_list(name, modules.config.paths_checkpoints)
+    filename = resolve_checkpoint_path(
+        name, modules.config.paths_checkpoints, modules.config.path_fast_checkpoints
+    )
 
     if model_refiner.filename == filename:
         return
