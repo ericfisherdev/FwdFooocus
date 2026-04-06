@@ -160,6 +160,10 @@ if isinstance(args_manager.args.preset, str):
 shared.gradio_root = gr.Blocks(title=title).queue()
 
 with shared.gradio_root:
+    gr.HTML(
+        value='<script>setInterval(()=>fetch("/heartbeat",{method:"POST"}).catch(()=>{}),5000)</script>',
+        visible=False
+    )
     currentTask = gr.State(worker.AsyncTask(args=[]))
     inpaint_engine_state = gr.State('empty')
     with gr.Row():
@@ -1487,6 +1491,14 @@ def lora_trigger_words():
     except Exception as e:
         logger.error(f"Failed to get trigger words: {e}")
         return {"error": str(e)}
+
+
+@shared.gradio_root.app.post("/heartbeat")
+def heartbeat_ping():
+    """Receive a heartbeat ping from the browser client."""
+    from modules.heartbeat import update_heartbeat
+    update_heartbeat()
+    return {"ok": True}
 
 
 # Launch the server
