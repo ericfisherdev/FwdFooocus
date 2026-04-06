@@ -10,6 +10,10 @@ class TestSessionState(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+        from modules import session_state
+        if session_state._connection is not None:
+            session_state._connection.close()
+            session_state._connection = None
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def _get_module(self):

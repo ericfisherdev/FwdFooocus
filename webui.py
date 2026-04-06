@@ -734,7 +734,7 @@ with shared.gradio_root:
                             sl = _session_loras[i]
                             filename = sl.get('filename', filename)
                             weight = sl.get('weight', weight)
-                            enabled = True
+                            enabled = True  # Saved LoRAs were always enabled (via get_enabled_loras)
                         with gr.Row():
                             lora_enabled = gr.Checkbox(label='Enable', value=enabled,
                                                        elem_classes=['lora_enable', 'min_check'], scale=1)

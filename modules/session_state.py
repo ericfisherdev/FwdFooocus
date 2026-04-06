@@ -9,6 +9,7 @@ so the user's prompt, settings, and LoRAs persist between browser sessions.
 import json
 import logging
 import sqlite3
+import threading
 import time
 from typing import Any
 
@@ -16,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 _db_path: str = './session_states.db'
 _connection: sqlite3.Connection | None = None
+_lock: threading.RLock = threading.RLock()
 
 
 def _get_connection() -> sqlite3.Connection:
@@ -23,18 +25,21 @@ def _get_connection() -> sqlite3.Connection:
     Get or create the SQLite database connection.
 
     Creates the database and table on first access.
+    Thread-safe via double-checked locking.
     """
     global _connection
     if _connection is None:
-        _connection = sqlite3.connect(_db_path, check_same_thread=False)
-        _connection.execute('''
-            CREATE TABLE IF NOT EXISTS session_states (
-                base_model TEXT PRIMARY KEY,
-                state_json TEXT NOT NULL,
-                updated_at REAL NOT NULL
-            )
-        ''')
-        _connection.commit()
+        with _lock:
+            if _connection is None:
+                _connection = sqlite3.connect(_db_path, check_same_thread=False)
+                _connection.execute('''
+                    CREATE TABLE IF NOT EXISTS session_states (
+                        base_model TEXT PRIMARY KEY,
+                        state_json TEXT NOT NULL,
+                        updated_at REAL NOT NULL
+                    )
+                ''')
+                _connection.commit()
     return _connection
 
 
@@ -54,16 +59,17 @@ def save_state(base_model: str, state: dict[str, Any]) -> None:
         state_copy.pop('seed', None)
 
     try:
-        conn = _get_connection()
-        conn.execute(
-            '''INSERT INTO session_states (base_model, state_json, updated_at)
-               VALUES (?, ?, ?)
-               ON CONFLICT(base_model) DO UPDATE SET
-                   state_json = excluded.state_json,
-                   updated_at = excluded.updated_at''',
-            (base_model, json.dumps(state_copy), time.time())
-        )
-        conn.commit()
+        with _lock:
+            conn = _get_connection()
+            conn.execute(
+                '''INSERT INTO session_states (base_model, state_json, updated_at)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(base_model) DO UPDATE SET
+                       state_json = excluded.state_json,
+                       updated_at = excluded.updated_at''',
+                (base_model, json.dumps(state_copy), time.time())
+            )
+            conn.commit()
         logger.debug(f"Session state saved for base model: {base_model}")
     except sqlite3.Error as e:
         logger.warning(f"Failed to save session state: {e}")
