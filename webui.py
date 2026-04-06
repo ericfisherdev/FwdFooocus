@@ -942,14 +942,6 @@ with shared.gradio_root:
                     """Update library button visibility based on LoRA selection."""
                     return gr.update(visible=(lora_filename != 'None'))
 
-                def get_library_anchor(filename):
-                    """Generate sanitized anchor ID for a LoRA filename."""
-                    import re
-                    name = filename.rsplit('.', 1)[0] if '.' in filename else filename
-                    sanitized = re.sub(r'[^a-zA-Z0-9]', '-', name)
-                    sanitized = re.sub(r'-+', '-', sanitized).strip('-')
-                    return sanitized.lower() if sanitized else 'lora'
-
                 # Precompute library path with forward slashes for cross-platform JS compatibility
                 library_html_path = os.path.abspath(
                     os.path.join(modules.config.path_outputs, 'lora_library.html')
