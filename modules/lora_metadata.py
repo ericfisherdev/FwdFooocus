@@ -715,13 +715,14 @@ class LoraMetadataScanner:
             logger.info(f"Found {total_files} LoRA files to scan")
 
             # Process each file
-            for index, file_path in enumerate(files_to_scan):
+            for index, (file_path, relative_path) in enumerate(files_to_scan):
                 if self._stop_requested:
                     logger.info("Scan stopped by request")
                     break
 
                 try:
                     metadata = extract_metadata(file_path)
+                    metadata['relative_path'] = relative_path
                     with self._lock:
                         self._metadata_index[file_path] = metadata
                         self._files_scanned += 1
@@ -768,12 +769,14 @@ class LoraMetadataScanner:
             logger.error(f"Failed to import config: {e}")
             return []
 
-    def _discover_lora_files(self) -> list[str]:
+    def _discover_lora_files(self) -> list[tuple[str, str]]:
         """
         Recursively discover all .safetensors files in configured paths.
 
         Returns:
-            List of file paths to scan.
+            List of (absolute_path, relative_path) tuples. The relative_path
+            is relative to the LoRA root directory and matches what the UI
+            dropdown displays (e.g. 'pony/characters/my_lora.safetensors').
         """
         files = []
 
@@ -790,9 +793,10 @@ class LoraMetadataScanner:
 
             # Recursively find all .safetensors files
             for file_path in path.rglob('*.safetensors'):
-                files.append(str(file_path))
+                relative = str(file_path.relative_to(path))
+                files.append((str(file_path), relative))
 
-        return sorted(files)
+        return sorted(files, key=lambda x: x[0])
 
     def refresh_file(self, file_path: str) -> dict[str, Any] | None:
         """
@@ -806,12 +810,30 @@ class LoraMetadataScanner:
         """
         try:
             metadata = extract_metadata(file_path)
+            metadata['relative_path'] = self._compute_relative_path(file_path)
             with self._lock:
                 self._metadata_index[file_path] = metadata
             return metadata
         except Exception as e:
             logger.error(f"Failed to refresh metadata for {file_path}: {e}")
             return None
+
+    def _compute_relative_path(self, file_path: str) -> str:
+        """
+        Compute the relative path of a file from its LoRA root directory.
+
+        Args:
+            file_path: Absolute path to the LoRA file.
+
+        Returns:
+            Path relative to the LoRA root, or the basename as fallback.
+        """
+        for lora_path in self._lora_paths:
+            try:
+                return str(Path(file_path).relative_to(lora_path))
+            except ValueError:
+                continue
+        return os.path.basename(file_path)
 
     def remove_file(self, file_path: str) -> bool:
         """
@@ -879,7 +901,7 @@ def get_all_library_data() -> list[dict[str, Any]]:
     scanner = get_scanner()
     index = scanner.metadata_index
 
-    # Convert to list, apply fallbacks, and sort by filename
+    # Convert to list, apply fallbacks, and sort by relative path
     library_data = []
     for metadata in index.values():
         # Apply fallback values for missing metadata
@@ -890,10 +912,12 @@ def get_all_library_data() -> list[dict[str, Any]]:
             processed['trigger_words'] = []
         if not processed.get('description'):
             processed['description'] = ''
+        if not processed.get('relative_path'):
+            processed['relative_path'] = processed.get('filename', '')
 
         library_data.append(processed)
 
-    library_data.sort(key=lambda x: x.get('filename', '').lower())
+    library_data.sort(key=lambda x: x.get('relative_path', '').lower())
 
     return library_data
 
@@ -925,17 +949,25 @@ def get_distinct_base_models() -> list[str]:
 
 def get_trigger_words_for_filename(filename: str) -> list[str]:
     """
-    Get trigger words for a specific LoRA by filename.
+    Get trigger words for a specific LoRA by filename or relative path.
 
     Args:
-        filename: The LoRA filename (without path).
+        filename: The LoRA filename (basename) or relative path
+                  (e.g. 'pony/characters/my_lora.safetensors').
 
     Returns:
         List of trigger words, or empty list if not found.
     """
     scanner = get_scanner()
-    results = scanner.get_metadata_by_filename(filename)
 
+    # First try matching by relative path (handles subdirectory LoRAs)
+    index = scanner.metadata_index
+    for metadata in index.values():
+        if metadata.get('relative_path') == filename:
+            return metadata.get('trigger_words', [])
+
+    # Fall back to basename matching
+    results = scanner.get_metadata_by_filename(filename)
     if results:
         return results[0].get('trigger_words', [])
 
@@ -972,6 +1004,7 @@ def search_library(
             # Build searchable text from all fields
             searchable_parts = [
                 metadata.get('filename', ''),
+                metadata.get('relative_path', ''),
                 metadata.get('base_model', ''),
                 metadata.get('description', ''),
                 ' '.join(metadata.get('trigger_words', [])),
