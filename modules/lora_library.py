@@ -548,11 +548,22 @@ def _get_library_javascript(library_data: list[dict[str, Any]]) -> str:
                         // Show completion message
                         const resultMsg = `Scan complete: ${{data.files_scanned}} files scanned`;
                         btn.textContent = resultMsg;
-                        setTimeout(() => {{
-                            resetRescanButton();
-                            // Reload the page to show updated library
-                            window.location.reload();
-                        }}, 2000);
+
+                        // Regenerate the static HTML then reload
+                        fetch('/lora-library-regenerate', {{ method: 'POST' }})
+                            .then(() => {{
+                                setTimeout(() => {{
+                                    resetRescanButton();
+                                    window.location.reload();
+                                }}, 1500);
+                            }})
+                            .catch(() => {{
+                                // Reload anyway as fallback
+                                setTimeout(() => {{
+                                    resetRescanButton();
+                                    window.location.reload();
+                                }}, 2000);
+                            }});
                     }}
                 }})
                 .catch(err => {{

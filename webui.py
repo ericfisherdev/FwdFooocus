@@ -721,10 +721,10 @@ with shared.gradio_root:
                                                         elem_classes='lora_library_btn', scale=0,
                                                         visible=(filename != 'None'),
                                                         min_width=40)
-                            # Clipboard copy button for trigger words - visible when LoRA has triggers
+                            # Clipboard copy button for trigger words - visible when LoRA is selected
                             lora_clipboard_btn = gr.Button(value='📋', variant='secondary', size='sm',
                                                           elem_classes='lora_clipboard_btn', scale=0,
-                                                          visible=False,
+                                                          visible=(filename != 'None'),
                                                           min_width=40,
                                                           elem_id=f'lora_clipboard_btn_{i}')
                             lora_ctrls += [lora_enabled, lora_model, lora_weight]
@@ -978,13 +978,8 @@ with shared.gradio_root:
 
                 # LoRA Clipboard button handlers
                 def update_clipboard_btn_visibility(lora_filename):
-                    """Update clipboard button visibility based on LoRA trigger words."""
-                    if not lora_filename or lora_filename == 'None':
-                        return gr.update(visible=False)
-
-                    # Check if LoRA has trigger words
-                    trigger_words = modules.lora_metadata.get_trigger_words_for_filename(lora_filename)
-                    return gr.update(visible=len(trigger_words) > 0)
+                    """Update clipboard button visibility based on LoRA selection."""
+                    return gr.update(visible=(lora_filename is not None and lora_filename != 'None'))
 
                 def get_trigger_words_for_copy(lora_filename):
                     """Get trigger words as comma-separated string for clipboard."""
@@ -995,7 +990,7 @@ with shared.gradio_root:
                     return ', '.join(trigger_words) if trigger_words else ''
 
                 # Connect clipboard button handlers for each LoRA slot
-                for lora_model, lora_clipboard_btn in lora_clipboard_buttons:
+                for btn_idx, (lora_model, lora_clipboard_btn) in enumerate(lora_clipboard_buttons):
                     # Update visibility when LoRA selection changes
                     lora_model.change(
                         fn=update_clipboard_btn_visibility,
@@ -1006,46 +1001,50 @@ with shared.gradio_root:
                     )
 
                     # Copy trigger words to clipboard when button clicked
+                    btn_elem_id = f'lora_clipboard_btn_{btn_idx}'
                     lora_clipboard_btn.click(
                         fn=get_trigger_words_for_copy,
                         inputs=[lora_model],
                         outputs=[],
                         queue=False,
                         show_progress=False,
-                        _js='''(filename, triggerWords) => {
-                            if (navigator.clipboard && navigator.clipboard.writeText) {
+                        _js=f'''(filename) => {{
+                            if (navigator.clipboard && navigator.clipboard.writeText) {{
                                 fetch('/lora-trigger-words?filename=' + encodeURIComponent(filename))
                                     .then(response => response.json())
-                                    .then(data => {
-                                        if (data.trigger_words && data.trigger_words.length > 0) {
+                                    .then(data => {{
+                                        if (data.trigger_words && data.trigger_words.length > 0) {{
                                             const text = data.trigger_words.join(', ');
-                                            navigator.clipboard.writeText(text).then(() => {
+                                            navigator.clipboard.writeText(text).then(() => {{
                                                 // Show temporary success message
-                                                const btn = event.target.closest('button');
-                                                const originalText = btn.textContent;
-                                                btn.textContent = '✓';
-                                                btn.style.background = '#10b981';
-                                                setTimeout(() => {
-                                                    btn.textContent = originalText;
-                                                    btn.style.background = '';
-                                                }, 1500);
-                                            }).catch(err => {
+                                                const btn = document.querySelector('#{btn_elem_id} button') ||
+                                                            document.getElementById('{btn_elem_id}');
+                                                if (btn) {{
+                                                    const originalText = btn.textContent;
+                                                    btn.textContent = '✓';
+                                                    btn.style.background = '#10b981';
+                                                    setTimeout(() => {{
+                                                        btn.textContent = originalText;
+                                                        btn.style.background = '';
+                                                    }}, 1500);
+                                                }}
+                                            }}).catch(err => {{
                                                 console.error('Failed to copy:', err);
                                                 alert('Failed to copy to clipboard');
-                                            });
-                                        } else {
+                                            }});
+                                        }} else {{
                                             alert('No trigger words available for this LoRA');
-                                        }
-                                    })
-                                    .catch(err => {
+                                        }}
+                                    }})
+                                    .catch(err => {{
                                         console.error('Failed to fetch trigger words:', err);
                                         alert('Failed to fetch trigger words');
-                                    });
-                            } else {
+                                    }});
+                            }} else {{
                                 alert('Clipboard API not available in your browser');
-                            }
+                            }}
                             return filename;
-                        }'''
+                        }}'''
                     )
 
                 # LoRA Preset handlers
@@ -1453,6 +1452,22 @@ def lora_library_scan_status():
     except Exception as e:
         logger.error(f"Failed to get scan status: {e}")
         return {"error": str(e)}
+
+
+@shared.gradio_root.app.post("/lora-library-regenerate")
+def lora_library_regenerate():
+    """Regenerate the static LoRA library HTML file from current metadata."""
+    try:
+        library_html_path = os.path.abspath(
+            os.path.join(modules.config.path_outputs, 'lora_library.html')
+        )
+        html_content = modules.lora_library.generate_library_html()
+        with open(library_html_path, 'w', encoding='utf-8') as f:
+            f.write(html_content)
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"Failed to regenerate library HTML: {e}")
+        return {"success": False, "error": str(e)}
 
 
 @shared.gradio_root.app.get("/lora-trigger-words")
