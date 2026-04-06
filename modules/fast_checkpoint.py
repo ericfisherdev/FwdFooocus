@@ -55,7 +55,17 @@ def resolve_checkpoint_path(
     if fast_path is None:
         return _find_in_folders(checkpoint_name, checkpoint_folders)
 
-    fast_file = os.path.join(fast_path, checkpoint_name)
+    # Validate that the destination stays inside the fast cache root
+    safe_name = os.path.normpath(checkpoint_name)
+    if os.path.isabs(safe_name) or safe_name.startswith('..' + os.sep) or safe_name == '..':
+        logger.warning(f"Refusing unsafe checkpoint path for fast cache: {checkpoint_name}")
+        return _find_in_folders(checkpoint_name, checkpoint_folders)
+
+    fast_root = os.path.abspath(os.path.realpath(fast_path))
+    fast_file = os.path.abspath(os.path.realpath(os.path.join(fast_root, safe_name)))
+    if os.path.commonpath([fast_root, fast_file]) != fast_root:
+        logger.warning(f"Resolved fast-cache path escapes cache root: {checkpoint_name}")
+        return _find_in_folders(checkpoint_name, checkpoint_folders)
 
     if os.path.isfile(fast_file):
         return fast_file

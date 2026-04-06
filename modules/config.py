@@ -237,7 +237,7 @@ def get_config_item_or_set_default(key, default_value, validator, disable_empty_
 path_fast_checkpoints = get_config_item_or_set_default(
     key='path_fast_checkpoints',
     default_value=None,
-    validator=lambda x: x is None or isinstance(x, str),
+    validator=lambda x: x is None or (isinstance(x, str) and x.strip() != ''),
     disable_empty_as_none=True,
     expected_type=str
 )
