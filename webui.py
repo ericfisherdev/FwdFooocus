@@ -157,6 +157,22 @@ title = f'FwdFooocus {fooocus_version.version}'
 if isinstance(args_manager.args.preset, str):
     title += ' ' + args_manager.args.preset
 
+# Load saved session state for resume-on-close
+_saved_session_state = None
+if modules.config.default_base_model is not None:
+    from modules.session_state import load_state
+    _saved_session_state = load_state(modules.config.default_base_model)
+    if _saved_session_state:
+        print(f'[Session] Restored state for base model: {modules.config.default_base_model}')
+
+
+def _session_default(key, fallback):
+    """Get a value from saved session state, falling back to config default."""
+    if _saved_session_state is not None and key in _saved_session_state:
+        return _saved_session_state[key]
+    return fallback
+
+
 shared.gradio_root = gr.Blocks(title=title).queue()
 
 with shared.gradio_root:
@@ -183,7 +199,7 @@ with shared.gradio_root:
                     prompt = gr.Textbox(show_label=False, placeholder="Type prompt here or paste parameters.", elem_id='positive_prompt',
                                         autofocus=True, lines=3)
 
-                    default_prompt = modules.config.default_prompt
+                    default_prompt = _session_default('prompt', modules.config.default_prompt)
                     if isinstance(default_prompt, str) and default_prompt != '':
                         shared.gradio_root.load(lambda: default_prompt, outputs=prompt)
 
@@ -576,20 +592,20 @@ with shared.gradio_root:
 
                 performance_selection = gr.Radio(label='Performance',
                                                  choices=flags.Performance.values(),
-                                                 value=modules.config.default_performance,
+                                                 value=_session_default('performance', modules.config.default_performance),
                                                  elem_classes=['performance_selection'])
 
                 with gr.Accordion(label='Aspect Ratios', open=False, elem_id='aspect_ratios_accordion') as aspect_ratios_accordion:
                     aspect_ratios_selection = gr.Radio(label='Aspect Ratios', show_label=False,
                                                        choices=modules.config.available_aspect_ratios_labels,
-                                                       value=modules.config.default_aspect_ratio,
+                                                       value=_session_default('aspect_ratios_selection', modules.config.default_aspect_ratio),
                                                        info='width × height',
                                                        elem_classes='aspect_ratios')
 
                     aspect_ratios_selection.change(lambda x: None, inputs=aspect_ratios_selection, queue=False, show_progress=False, _js='(x)=>{refresh_aspect_ratios_label(x);}')
                     shared.gradio_root.load(lambda x: None, inputs=aspect_ratios_selection, queue=False, show_progress=False, _js='(x)=>{refresh_aspect_ratios_label(x);}')
 
-                image_number = gr.Slider(label='Image Number', minimum=1, maximum=modules.config.default_max_image_number, step=1, value=modules.config.default_image_number)
+                image_number = gr.Slider(label='Image Number', minimum=1, maximum=modules.config.default_max_image_number, step=1, value=_session_default('image_number', modules.config.default_image_number))
 
                 output_format = gr.Radio(label='Output Format',
                                          choices=flags.OutputFormat.list(),
@@ -598,7 +614,7 @@ with shared.gradio_root:
                 negative_prompt = gr.Textbox(label='Negative Prompt', show_label=True, placeholder="Type prompt here.",
                                              info='Describing what you do not want to see.', lines=2,
                                              elem_id='negative_prompt',
-                                             value=modules.config.default_prompt_negative)
+                                             value=_session_default('negative_prompt', modules.config.default_prompt_negative))
                 seed_random = gr.Checkbox(label='Random', value=True)
                 image_seed = gr.Textbox(label='Seed', value=0, max_lines=1, visible=False) # workaround for https://github.com/gradio-app/gradio/issues/5354
 
@@ -640,7 +656,7 @@ with shared.gradio_root:
                                               label='Search Styles')
                 style_selections = gr.CheckboxGroup(show_label=False, container=False,
                                                     choices=copy.deepcopy(style_sorter.all_styles),
-                                                    value=copy.deepcopy(modules.config.default_styles),
+                                                    value=_session_default('style_selections', copy.deepcopy(modules.config.default_styles)),
                                                     label='Selected Styles',
                                                     elem_classes=['style_selections'])
                 gradio_receiver_style_selections = gr.Textbox(elem_id='gradio_receiver_style_selections', visible=False)
@@ -665,8 +681,8 @@ with shared.gradio_root:
             with gr.Tab(label='Models'):
                 with gr.Group():
                     with gr.Row():
-                        base_model = gr.Dropdown(label='Base Model (SDXL only)', choices=modules.config.model_filenames, value=modules.config.default_base_model_name, show_label=True)
-                        refiner_model = gr.Dropdown(label='Refiner (SDXL or SD 1.5)', choices=['None'] + modules.config.model_filenames, value=modules.config.default_refiner_model_name, show_label=True)
+                        base_model = gr.Dropdown(label='Base Model (SDXL only)', choices=modules.config.model_filenames, value=_session_default('base_model_name', modules.config.default_base_model_name), show_label=True)
+                        refiner_model = gr.Dropdown(label='Refiner (SDXL or SD 1.5)', choices=['None'] + modules.config.model_filenames, value=_session_default('refiner_model_name', modules.config.default_refiner_model_name), show_label=True)
 
                     refiner_switch = gr.Slider(label='Refiner Switch At', minimum=0.1, maximum=1.0, step=0.0001,
                                                info='Use 0.4 for SD1.5 realistic models; '
@@ -710,7 +726,15 @@ with shared.gradio_root:
 
                     lora_library_buttons = []
                     lora_clipboard_buttons = []
+                    _session_loras = None
+                    if _saved_session_state and 'loras' in _saved_session_state:
+                        _session_loras = _saved_session_state['loras']
                     for i, (enabled, filename, weight) in enumerate(modules.config.default_loras):
+                        if _session_loras is not None and i < len(_session_loras):
+                            sl = _session_loras[i]
+                            filename = sl.get('filename', filename)
+                            weight = sl.get('weight', weight)
+                            enabled = True
                         with gr.Row():
                             lora_enabled = gr.Checkbox(label='Enable', value=enabled,
                                                        elem_classes=['lora_enable', 'min_check'], scale=1)
@@ -739,10 +763,10 @@ with shared.gradio_root:
                     refresh_files = gr.Button(label='Refresh', value='\U0001f504 Refresh All Files', variant='secondary', elem_classes='refresh_button')
             with gr.Tab(label='Advanced'):
                 guidance_scale = gr.Slider(label='Guidance Scale', minimum=1.0, maximum=30.0, step=0.01,
-                                           value=modules.config.default_cfg_scale,
+                                           value=_session_default('cfg_scale', modules.config.default_cfg_scale),
                                            info='Higher value means style is cleaner, vivider, and more artistic.')
                 sharpness = gr.Slider(label='Image Sharpness', minimum=0.0, maximum=30.0, step=0.001,
-                                      value=modules.config.default_sample_sharpness,
+                                      value=_session_default('sharpness', modules.config.default_sample_sharpness),
                                       info='Higher value means image and texture are sharper.')
                 gr.HTML('<a href="https://github.com/lllyasviel/Fooocus/discussions/117" target="_blank">\U0001F4D4 Documentation</a>')
                 dev_mode = gr.Checkbox(label='Developer Debug Mode', value=modules.config.default_developer_debug_mode_checkbox, container=False)
@@ -768,11 +792,11 @@ with shared.gradio_root:
                                                  value=modules.config.default_clip_skip,
                                                  info='Bypass CLIP layers to avoid overfitting (use 1 to not skip any layers, 2 is recommended).')
                         sampler_name = gr.Dropdown(label='Sampler', choices=flags.sampler_list,
-                                                   value=modules.config.default_sampler)
+                                                   value=_session_default('sampler', modules.config.default_sampler))
                         scheduler_name = gr.Dropdown(label='Scheduler', choices=flags.scheduler_list,
-                                                     value=modules.config.default_scheduler)
+                                                     value=_session_default('scheduler', modules.config.default_scheduler))
                         vae_name = gr.Dropdown(label='VAE', choices=[modules.flags.default_vae] + modules.config.vae_filenames,
-                                                     value=modules.config.default_vae, show_label=True)
+                                                     value=_session_default('vae_name', modules.config.default_vae), show_label=True)
 
                         generate_image_grid = gr.Checkbox(label='Generate Image Grid for Each Batch',
                                                           info='(Experimental) This may cause performance problems on some computers and certain internet conditions.',
