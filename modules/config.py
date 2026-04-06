@@ -210,7 +210,7 @@ def get_config_item_or_set_default(key, default_value, validator, disable_empty_
 
     if key not in visited_keys:
         visited_keys.append(key)
-    
+
     v = os.getenv(key)
     if v is not None:
         v = try_eval_env_var(v, expected_type)
@@ -232,6 +232,15 @@ def get_config_item_or_set_default(key, default_value, validator, disable_empty_
             print(f'Failed to load config key: {json.dumps({key:v})} is invalid; will use {json.dumps({key:default_value})} instead.')
         config_dict[key] = default_value
         return default_value
+
+
+path_fast_checkpoints = get_config_item_or_set_default(
+    key='path_fast_checkpoints',
+    default_value=None,
+    validator=lambda x: x is None or isinstance(x, str),
+    disable_empty_as_none=True,
+    expected_type=str
+)
 
 
 def init_temp_path(path: str | None, default_path: str) -> str:
