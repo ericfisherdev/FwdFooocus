@@ -551,18 +551,24 @@ def _get_library_javascript(library_data: list[dict[str, Any]]) -> str:
 
                         // Regenerate the static HTML then reload
                         fetch('/lora-library-regenerate', {{ method: 'POST' }})
-                            .then(() => {{
-                                setTimeout(() => {{
-                                    resetRescanButton();
-                                    window.location.reload();
-                                }}, 1500);
+                            .then(response => {{
+                                if (!response.ok) throw new Error('HTTP ' + response.status);
+                                return response.json();
                             }})
-                            .catch(() => {{
-                                // Reload anyway as fallback
-                                setTimeout(() => {{
+                            .then(data => {{
+                                if (data.success) {{
+                                    setTimeout(() => {{
+                                        resetRescanButton();
+                                        window.location.reload();
+                                    }}, 1500);
+                                }} else {{
+                                    console.error('Library regeneration failed:', data.error);
                                     resetRescanButton();
-                                    window.location.reload();
-                                }}, 2000);
+                                }}
+                            }})
+                            .catch(err => {{
+                                console.error('Library regeneration request failed:', err);
+                                resetRescanButton();
                             }});
                     }}
                 }})
@@ -800,5 +806,10 @@ def _sanitize_id(name: str) -> str:
     without_ext = name.rsplit('.', 1)[0] if '.' in name else name
     sanitized = re.sub(r'[^a-zA-Z0-9]', '-', without_ext)
     # Remove consecutive hyphens and trim
-    sanitized = re.sub(r'-+', '-', sanitized).strip('-')
-    return sanitized.lower() if sanitized else 'lora'
+    sanitized = re.sub(r'-+', '-', sanitized).strip('-').lower()
+    if not sanitized:
+        return 'lora'
+    # Prefix with 'lora-' if ID starts with a digit (invalid CSS selector)
+    if sanitized[0].isdigit():
+        sanitized = 'lora-' + sanitized
+    return sanitized
