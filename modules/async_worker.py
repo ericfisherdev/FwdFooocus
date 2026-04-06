@@ -1509,15 +1509,14 @@ def worker():
                     build_image_wall(task)
                 task.yields.append(['finish', task.results])
                 # Save session state for resume-on-close
-                try:
-                    import modules.config
-                    if modules.config.default_base_model is not None:
+                if modules.config.default_base_model is not None:
+                    try:
                         save_session_state(
                             modules.config.default_base_model,
                             _build_session_state(task)
                         )
-                except Exception as e:
-                    print(f'[Session] Failed to save state: {e}')
+                    except Exception as e:
+                        print(f'[Session] Failed to save state: {type(e).__name__}: {e}')
                 pipeline.prepare_text_encoder(async_call=True)
             except:
                 traceback.print_exc()
