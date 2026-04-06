@@ -3,6 +3,7 @@ import threading
 from extras.inpaint_mask import generate_mask_from_image, SAMOptions
 from modules.heartbeat import is_browser_connected
 from modules.patch import PatchSettings, patch_settings, patch_all
+from modules.session_state import save_state as save_session_state
 import modules.config
 
 patch_all()
@@ -160,6 +161,32 @@ class AsyncTask:
         self.enhance_stats = {}
 
 async_tasks = []
+
+
+def _build_session_state(task: AsyncTask) -> dict:
+    """Extract UI state from a completed task for session persistence."""
+    state = {
+        'prompt': task.prompt,
+        'negative_prompt': task.negative_prompt,
+        'style_selections': task.style_selections,
+        'base_model_name': task.base_model_name,
+        'refiner_model_name': task.refiner_model_name,
+        'vae_name': task.vae_name,
+        'loras': [
+            {'filename': filename, 'weight': weight}
+            for filename, weight in task.loras
+        ],
+        'sampler': task.sampler_name,
+        'scheduler': task.scheduler_name,
+        'steps': task.original_steps,
+        'cfg_scale': task.cfg_scale,
+        'performance': task.performance_selection.value,
+        'image_number': task.image_number,
+        'sharpness': task.sharpness,
+        'seed': task.seed,
+        'aspect_ratios_selection': task.aspect_ratios_selection,
+    }
+    return state
 
 
 class EarlyReturnException(BaseException):
@@ -1481,6 +1508,16 @@ def worker():
                 if task.generate_image_grid:
                     build_image_wall(task)
                 task.yields.append(['finish', task.results])
+                # Save session state for resume-on-close
+                try:
+                    import modules.config
+                    if modules.config.default_base_model is not None:
+                        save_session_state(
+                            modules.config.default_base_model,
+                            _build_session_state(task)
+                        )
+                except Exception as e:
+                    print(f'[Session] Failed to save state: {e}')
                 pipeline.prepare_text_encoder(async_call=True)
             except:
                 traceback.print_exc()
