@@ -21,16 +21,20 @@
          navNext() {
              const imgs = $root.__x.$data.images;
              const sel = $root.__x.$data.selectedImages;
-             let next = sel[1] + 1;
-             if (next === sel[0]) next++;
-             if (next < imgs.length) sel[1] = next;
+             const total = imgs.length;
+             if (total < 2) return;
+             let next = (sel[1] + 1) % total;
+             if (next === sel[0]) next = (next + 1) % total;
+             sel[1] = next;
          },
          navPrev() {
              const imgs = $root.__x.$data.images;
              const sel = $root.__x.$data.selectedImages;
-             let prev = sel[1] - 1;
-             if (prev === sel[0]) prev--;
-             if (prev >= 0) sel[1] = prev;
+             const total = imgs.length;
+             if (total < 2) return;
+             let prev = (sel[1] - 1 + total) % total;
+             if (prev === sel[0]) prev = (prev - 1 + total) % total;
+             sel[1] = prev;
          },
      }"
      @keydown.escape.window="exitCompare()"
@@ -96,9 +100,9 @@
                     <span class="text-label gallery-compare__diff-key"
                           x-text="GalleryCompare.formatKey(row.key)"></span>
                     <span class="text-body-sm gallery-compare__diff-val gallery-compare__diff-val--changed"
-                          x-text="GalleryCompare.formatValue(row.valueA)"></span>
+                          x-text="GalleryCompare.formatValue(row.valueA ?? '—')"></span>
                     <span class="text-body-sm gallery-compare__diff-val gallery-compare__diff-val--changed"
-                          x-text="GalleryCompare.formatValue(row.valueB)"></span>
+                          x-text="GalleryCompare.formatValue(row.valueB ?? '—')"></span>
                 </div>
             </template>
         </div>

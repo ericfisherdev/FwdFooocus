@@ -21,16 +21,20 @@ const GalleryCompare = (() => {
         const keys = [
             'seed', 'prompt', 'negative_prompt', 'cfg_scale',
             'sampler', 'scheduler', 'steps', 'base_model',
-            'width', 'height',
+            'dimensions', 'width', 'height',
         ];
 
         return keys
-            .map(key => ({
-                key,
-                valueA: a?.[key] ?? '—',
-                valueB: b?.[key] ?? '—',
-                differs: JSON.stringify(a?.[key]) !== JSON.stringify(b?.[key]),
-            }))
+            .map(key => {
+                const valueA = a?.[key] ?? null;
+                const valueB = b?.[key] ?? null;
+                return {
+                    key,
+                    valueA,
+                    valueB,
+                    differs: JSON.stringify(valueA) !== JSON.stringify(valueB),
+                };
+            })
             .filter(row => row.differs);
     }
 
@@ -47,6 +51,7 @@ const GalleryCompare = (() => {
             scheduler: 'Scheduler',
             steps: 'Steps',
             base_model: 'Model',
+            dimensions: 'Dimensions',
             width: 'Width',
             height: 'Height',
         };
