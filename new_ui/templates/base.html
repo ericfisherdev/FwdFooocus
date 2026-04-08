@@ -11,7 +11,10 @@
     <link rel="stylesheet" href="/static/css/components.css">
     <link rel="stylesheet" href="/static/css/layout.css">
 
-    <!-- Alpine.js (defer so x-cloak works) -->
+    <!-- App stores (must load before Alpine.js) -->
+    <script src="/static/js/stores.js"></script>
+
+    <!-- Alpine.js (defer so x-cloak works, stores register via alpine:init) -->
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <style>[x-cloak] { display: none !important; }</style>
 
@@ -29,23 +32,31 @@
     <header class="status-bar" role="banner">
         <div class="status-bar__left">
             {% block status_left %}
-            <span class="text-caption status-bar__model">Loading...</span>
+            <span class="text-caption status-bar__model"
+                  x-text="$store.config.loaded ? $store.config.defaultModel.replace('.safetensors', '') : 'Loading...'"></span>
             <span class="text-caption status-bar__sep">&middot;</span>
-            <span class="text-caption status-bar__performance">Speed</span>
+            <span class="text-caption status-bar__performance"
+                  x-text="$store.config.defaultPerformance"></span>
             <span class="text-caption status-bar__sep">&middot;</span>
-            <span class="text-caption status-bar__connection" data-state="connected">Connected</span>
+            <span class="text-caption status-bar__connection"
+                  x-text="$store.generation.isGenerating ? ('Generating ' + $store.generation.currentImage + '/' + $store.generation.totalImages) : 'Connected'"
+                  :data-state="$store.generation.isGenerating ? 'connected' : 'connected'"></span>
             {% endblock %}
         </div>
         <div class="status-bar__right">
             {% block status_right %}
             <button type="button" class="btn btn-ghost btn-sm status-bar__settings-btn"
+                    @click="$store.ui.toggleSettings()"
+                    :aria-pressed="$store.ui.settingsDrawerOpen"
                     aria-label="Toggle settings drawer">
                 Settings
             </button>
             <button type="button" class="btn btn-ghost btn-sm status-bar__dev-btn"
+                    @click="$store.ui.toggleDevTools()"
+                    :aria-pressed="$store.ui.devToolsOpen"
                     aria-label="Toggle developer tools"
-                    x-cloak
-                    style="display: none;">
+                    x-show="$store.ui.devModeEnabled"
+                    x-cloak>
                 Dev
             </button>
             {% endblock %}
