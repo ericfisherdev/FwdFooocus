@@ -24,8 +24,11 @@ function settingsState() {
         availableSamplers: [],
         availableSchedulers: [],
 
-        init() {
+        async init() {
             const cfg = Alpine.store('config');
+            if (!cfg.loaded) {
+                await cfg.load();
+            }
             this.baseModel = cfg.defaultModel || '';
             this.refinerModel = cfg.defaultRefiner || 'None';
             this.refinerSwitch = cfg.defaultRefinerSwitch ?? 0.8;
@@ -45,7 +48,7 @@ function settingsState() {
                     this.availableSamplers = data.samplers || [];
                     this.availableSchedulers = data.schedulers || [];
                 }
-            } catch { /* non-critical */ }
+            } catch (e) { console.warn('[settingsState] Failed to load samplers:', e); }
         },
     };
 }
