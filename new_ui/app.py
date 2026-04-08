@@ -173,6 +173,33 @@ def _encode_preview_image(img) -> str | None:
         return None
 
 
+def _build_yield_message(flag: str, product) -> dict | None:
+    """Build a JSON-serialisable message dict from a task yield entry."""
+    if flag == "preview":
+        percentage, text, img = product
+        return {
+            "type": "preview",
+            "percentage": percentage,
+            "text": text,
+            "image": _encode_preview_image(img),
+        }
+    if flag == "results":
+        return {
+            "type": "results",
+            "images": [
+                str(p) if not isinstance(p, str) else p for p in product
+            ],
+        }
+    if flag == "finish":
+        return {
+            "type": "finish",
+            "images": [
+                str(p) if not isinstance(p, str) else p for p in product
+            ],
+        }
+    return None
+
+
 @app.websocket("/ws/generation")
 async def ws_generation(websocket: WebSocket):
     """
@@ -206,6 +233,13 @@ async def ws_generation(websocket: WebSocket):
         while True:
             # Find an active (processing) task
             if active_task is None or not active_task.processing:
+                # Drain any remaining yields before discarding the task
+                if active_task is not None:
+                    remaining = active_task.yields[yield_index:]
+                    for flag, product in remaining:
+                        msg = _build_yield_message(flag, product)
+                        if msg is not None:
+                            await websocket.send_json(msg)
                 active_task = None
                 yield_index = 0
                 for task in list(async_tasks):
@@ -219,35 +253,11 @@ async def ws_generation(websocket: WebSocket):
                 flag, product = current_yields[yield_index]
                 yield_index += 1
 
-                if flag == "preview":
-                    percentage, text, img = product
-                    msg = {
-                        "type": "preview",
-                        "percentage": percentage,
-                        "text": text,
-                        "image": _encode_preview_image(img),
-                    }
+                msg = _build_yield_message(flag, product)
+                if msg is not None:
                     await websocket.send_json(msg)
 
-                elif flag == "results":
-                    msg = {
-                        "type": "results",
-                        "images": [
-                            str(p) if not isinstance(p, str) else p
-                            for p in product
-                        ],
-                    }
-                    await websocket.send_json(msg)
-
-                elif flag == "finish":
-                    msg = {
-                        "type": "finish",
-                        "images": [
-                            str(p) if not isinstance(p, str) else p
-                            for p in product
-                        ],
-                    }
-                    await websocket.send_json(msg)
+                if flag == "finish":
                     active_task = None
                     yield_index = 0
             else:
