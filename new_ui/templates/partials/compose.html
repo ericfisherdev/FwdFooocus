@@ -1,0 +1,134 @@
+{#
+  Compose pane content — left side of split-pane.
+  Slots are structured with correct spacing from screen-spec-generation.md.
+  Each slot will be replaced by a real component in later phases.
+#}
+
+<!-- Prompt Editor (positive) -->
+<div class="compose__prompt-positive">
+    <label class="text-label">Prompt</label>
+    <div class="compose__prompt-editor input"
+         style="min-height: 80px; resize: vertical; overflow: auto;"
+         contenteditable="false"
+         role="textbox"
+         aria-multiline="true"
+         aria-label="Positive prompt">
+        <span class="text-placeholder">Type prompt here or paste parameters.</span>
+    </div>
+</div>
+
+<!-- Negative Prompt (collapsible) -->
+<div class="compose__negative-prompt">
+    <button class="collapsible-header text-label"
+            aria-expanded="false"
+            aria-controls="negative-prompt-content"
+            @click="$el.setAttribute('aria-expanded', $el.getAttribute('aria-expanded') === 'true' ? 'false' : 'true')">
+        <svg class="collapsible-chevron" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M6 3l5 5-5 5z"/>
+        </svg>
+        Negative Prompt
+    </button>
+    <div id="negative-prompt-content"
+         class="collapsible-content"
+         x-show="$el.previousElementSibling.getAttribute('aria-expanded') === 'true'"
+         x-cloak>
+        <div class="input" style="min-height: 48px;">
+            <span class="text-placeholder">Describe what you do not want to see.</span>
+        </div>
+    </div>
+</div>
+
+<!-- Quick Settings (2-column grid) -->
+<div class="compose__quick-settings">
+    <div class="quick-settings-grid">
+        <div class="quick-settings__item">
+            <label class="text-label">Performance</label>
+            <div class="quick-settings__radio-group">
+                <button class="btn btn-secondary btn-sm"
+                        :class="{ 'btn-primary': $store.config.defaultPerformance === 'Speed' }"
+                        disabled>Speed</button>
+                <button class="btn btn-secondary btn-sm" disabled>Quality</button>
+                <button class="btn btn-secondary btn-sm" disabled>Extreme</button>
+            </div>
+        </div>
+        <div class="quick-settings__item">
+            <label class="text-label">Aspect Ratio</label>
+            <select class="select" disabled>
+                <template x-for="ar in $store.config.availableAspectRatios" :key="ar">
+                    <option :value="ar" x-text="ar.replace('*', ' × ')"
+                            :selected="ar === $store.config.defaultAspectRatio"></option>
+                </template>
+            </select>
+        </div>
+        <div class="quick-settings__item">
+            <label class="text-label">Images</label>
+            <div style="display: flex; align-items: center; gap: var(--space-2);">
+                <input type="range" class="slider" min="1"
+                       :max="$store.config.maxImageNumber"
+                       :value="$store.config.defaultImageNumber"
+                       disabled>
+                <span class="text-mono" x-text="$store.config.defaultImageNumber"
+                      style="min-width: 2ch; text-align: right;"></span>
+            </div>
+        </div>
+        <div class="quick-settings__item">
+            <label class="text-label">Format</label>
+            <div class="quick-settings__radio-group">
+                <button class="btn btn-secondary btn-sm" disabled>PNG</button>
+                <button class="btn btn-secondary btn-sm" disabled>WebP</button>
+                <button class="btn btn-secondary btn-sm" disabled>JPEG</button>
+            </div>
+        </div>
+        <div class="quick-settings__item">
+            <label class="text-label">Seed</label>
+            <div style="display: flex; align-items: center; gap: var(--space-2);">
+                <button class="btn btn-secondary btn-sm" disabled title="Random seed">🎲</button>
+                <input type="text" class="input input-sm text-mono" value="-1" disabled
+                       style="flex: 1;">
+            </div>
+        </div>
+        <div class="quick-settings__item">
+            <label class="text-label">Styles</label>
+            <button class="btn btn-secondary btn-sm" disabled style="width: 100%; justify-content: flex-start;">
+                Browse styles...
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- LoRA Slots -->
+<div class="compose__lora-slots">
+    <label class="text-label">LoRAs</label>
+    <div class="compose__lora-list">
+        <p class="text-body-muted" style="margin: 0;">No LoRAs active.</p>
+    </div>
+    <button class="btn btn-secondary btn-sm" disabled>+ Add LoRA</button>
+</div>
+
+<!-- Generate Row -->
+<div class="compose__generate-row">
+    <button class="btn btn-primary" disabled style="width: 100%; height: 44px;">
+        Generate
+    </button>
+</div>
+
+<!-- Queue Panel (collapsible) -->
+<div class="compose__queue-panel">
+    <button class="collapsible-header text-heading-base"
+            aria-expanded="false"
+            aria-controls="queue-content"
+            @click="$el.setAttribute('aria-expanded', $el.getAttribute('aria-expanded') === 'true' ? 'false' : 'true')">
+        <svg class="collapsible-chevron" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M6 3l5 5-5 5z"/>
+        </svg>
+        Queue
+        <span class="badge" style="margin-left: auto;">0</span>
+    </button>
+    <div id="queue-content" class="collapsible-content"
+         x-show="$el.previousElementSibling.getAttribute('aria-expanded') === 'true'"
+         x-cloak>
+        <p class="text-body-muted" style="padding: var(--space-3) 0;">
+            No jobs queued. Click '+ Add Job' to queue your current settings.
+        </p>
+    </div>
+</div>
