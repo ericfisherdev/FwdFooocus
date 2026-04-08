@@ -155,13 +155,13 @@
     </div>
     <div style="position: relative;">
         <button type="button" class="btn btn-secondary btn-sm"
-                @click="pickerOpen = !pickerOpen"
+                @click="pickerOpen = !pickerOpen; $nextTick(() => { if (pickerOpen) $refs.loraPicker.querySelector('button')?.focus() })"
                 :disabled="!canAdd">
             + Add LoRA
         </button>
-        <div class="lora-picker-mini" x-show="pickerOpen" x-cloak
+        <div class="lora-picker-mini" x-show="pickerOpen" x-cloak x-ref="loraPicker"
              @click.outside="pickerOpen = false"
-             @keydown.escape="pickerOpen = false">
+             @keydown.escape.window="if (pickerOpen) { pickerOpen = false; $event.stopPropagation() }">
             <template x-if="availableLoras.length === 0">
                 <p class="lora-picker-mini__empty text-body-muted">No LoRAs available.</p>
             </template>
