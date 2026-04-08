@@ -10,6 +10,7 @@
     <link rel="stylesheet" href="/static/css/typography.css">
     <link rel="stylesheet" href="/static/css/components.css">
     <link rel="stylesheet" href="/static/css/layout.css">
+    <link rel="stylesheet" href="/static/css/settings-drawer.css">
 
     <!-- App stores (must load before Alpine.js) -->
     <script src="/static/js/stores.js"></script>
@@ -66,7 +67,8 @@
     <!-- ============================================================
          MAIN SPLIT-PANE LAYOUT
          ============================================================ -->
-    <main class="split-pane" role="main">
+    <main class="split-pane" role="main"
+          x-data="{ inputImageEnabled: false, enhanceEnabled: false }">
 
         <!-- COMPOSE PANE (left) -->
         <section class="split-pane__compose" role="region" aria-label="Compose">
@@ -94,10 +96,13 @@
             {% endblock %}
         </section>
 
+        <!-- SETTINGS DRAWER (between gallery and end of split-pane) -->
+        {% include "partials/settings-drawer.html" %}
+
     </main>
 
     <!-- ============================================================
-         OVERLAY SLOTS (drawer, picker, lightbox)
+         OVERLAY SLOTS (picker, lightbox)
          ============================================================ -->
     {% block overlays %}{% endblock %}
 
