@@ -28,7 +28,7 @@ function loraSlots() {
                 this.maxSlots = config.defaultMaxLoraNumber ?? 5;
                 (config.defaultLoras || []).forEach(([filename, weight]) => {
                     if (filename && filename !== 'None') {
-                        this.addLora(filename, weight, true);
+                        this.addLora(filename, weight, false);
                     }
                 });
             };
@@ -75,6 +75,7 @@ function loraSlots() {
                 const resp = await fetch(`/api/lora-trigger-words?filename=${encodeURIComponent(filename)}`);
                 if (resp.ok) {
                     const data = await resp.json();
+                    if (!this.slots.includes(slot)) return;
                     slot.triggerWords = data.trigger_words || [];
                     if (!skipEvent) {
                         this._dispatchChanged(slot);
