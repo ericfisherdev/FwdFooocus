@@ -228,6 +228,7 @@ def worker():
     from modules.upscaler import perform_upscale
     from modules.flags import Performance
     from modules.meta_parser import get_metadata_parser
+    from modules.heartbeat import update_heartbeat
 
     pid = os.getpid()
     print(f'Started worker with PID {pid}')
@@ -244,11 +245,6 @@ def worker():
     def progressbar(async_task, number, text):
         print(f'[FwdFooocus] {text}')
         async_task.yields.append(['preview', (number, text, None)])
-        # Refresh heartbeat from the worker thread directly.
-        # The server-side heartbeat POST may not be processed during
-        # GPU work because the GIL is held by CUDA operations,
-        # preventing uvicorn from handling incoming requests.
-        from modules.heartbeat import update_heartbeat
         update_heartbeat()
 
     def yield_result(async_task, imgs, progressbar_index, black_out_nsfw, censor=True, do_not_show_finished_images=False):
@@ -1313,6 +1309,7 @@ def worker():
         persist_image = not async_task.should_enhance or not async_task.save_final_enhanced_image_only
 
         for current_task_id, task in enumerate(tasks):
+            update_heartbeat()  # keep heartbeat alive between images
             if not is_browser_connected():
                 print('[Batch] Browser disconnected, cancelling remaining images')
                 break
@@ -1371,6 +1368,7 @@ def worker():
         enhance_steps, _, _, _ = apply_overrides(async_task, async_task.original_steps, height, width)
         exception_result = None
         for index, img in enumerate(images_to_enhance):
+            update_heartbeat()  # keep heartbeat alive between enhancements
             if not is_browser_connected():
                 print('[Enhance] Browser disconnected, cancelling remaining enhancements')
                 break
