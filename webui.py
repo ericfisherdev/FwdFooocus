@@ -1539,8 +1539,13 @@ shared.gradio_root.launch(
 
 # Launch the new UI server alongside Gradio
 import new_ui.server as new_ui_server
-new_ui_host = args_manager.args.listen if args_manager.args.listen else "127.0.0.1"
-new_ui_server.start(host=new_ui_host, port=new_ui_server.DEFAULT_PORT)
+# When auth is enabled, keep the new UI on localhost only — it has no auth layer yet.
+if (args_manager.args.share or args_manager.args.listen) and auth_enabled:
+    new_ui_host = "127.0.0.1"
+else:
+    new_ui_host = args_manager.args.listen if args_manager.args.listen else "127.0.0.1"
+new_ui_port = (args_manager.args.port or 7865) + 1
+new_ui_server.start(host=new_ui_host, port=new_ui_port)
 
 # Generate LoRA library HTML file
 print("[LoRA Library] Generating library HTML file...")
