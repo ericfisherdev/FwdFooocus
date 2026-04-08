@@ -1,0 +1,230 @@
+/*
+ * FwdFooocus Design Tokens
+ *
+ * 3-tier token system: Global (primitives) → Semantic (roles) → Component (overrides).
+ * Components reference Tier 2 semantic tokens. Tier 1 globals are never used directly.
+ * Spec: research/design-tokens.md
+ */
+
+:root {
+
+    /* ================================================================
+     * TIER 1: GLOBAL (primitive palette)
+     * Raw values. Never reference these in components.
+     * ================================================================ */
+
+    /* Grays (Tailwind Gray scale) */
+    --color-gray-950: #0b0f19;
+    --color-gray-800: #1f2937;
+    --color-gray-700: #374151;
+    --color-gray-600: #4b5563;
+    --color-gray-400: #9ca3af;
+    --color-gray-50:  #f9fafb;
+
+    /* Blue */
+    --color-blue-600: #2563eb;
+    --color-blue-500: #3b82f6;
+    --color-blue-400: #60a5fa;
+
+    /* Green */
+    --color-green-500: #10b981;
+    --color-green-400: #34d399;
+
+    /* Amber */
+    --color-amber-500: #f59e0b;
+    --color-amber-400: #fbbf24;
+
+    /* Red */
+    --color-red-500: #ef4444;
+    --color-red-400: #f87171;
+
+    /* White and black */
+    --color-white: #ffffff;
+    --color-black: #000000;
+
+
+    /* ================================================================
+     * TIER 2: SEMANTIC (role-based)
+     * Components reference these tokens.
+     * ================================================================ */
+
+    /* -- Surfaces --------------------------------------------------- */
+    --surface-base:    var(--color-gray-950);
+    --surface-raised:  var(--color-gray-800);
+    --surface-overlay: var(--color-gray-700);
+    --surface-scrim:   rgba(0, 0, 0, 0.6);
+
+    /* -- Text ------------------------------------------------------- */
+    --text-default:    var(--color-gray-50);
+    --text-muted:      var(--color-gray-400);
+    --text-on-accent:  var(--color-white);
+    --text-on-warning: var(--color-gray-950);
+
+    /* -- Interactive ------------------------------------------------ */
+    --interactive-default:    var(--color-blue-500);
+    --interactive-hover:      var(--color-blue-600);
+    --interactive-focus-ring: var(--color-blue-400);
+
+    /* -- Borders ---------------------------------------------------- */
+    --border-default: var(--color-gray-600);
+    --border-subtle:  var(--color-gray-700);
+    --border-focus:   var(--color-blue-500);
+
+    /* -- Feedback --------------------------------------------------- */
+    --feedback-success: var(--color-green-500);
+    --feedback-warning: var(--color-amber-500);
+    --feedback-error:   var(--color-red-500);
+    --feedback-info:    var(--color-blue-500);
+
+
+    /* ================================================================
+     * TIER 3: COMPONENT (specific overrides)
+     * Only when a component needs to deviate from semantic tokens.
+     * ================================================================ */
+
+    /* Prompt Editor */
+    --prompt-bg:          var(--surface-raised);
+    --prompt-text:        var(--text-default);
+    --prompt-placeholder: var(--text-muted);
+
+    /* Gallery */
+    --gallery-bg:            var(--surface-base);
+    --gallery-item-border:   var(--border-subtle);
+    --gallery-item-selected: var(--interactive-default);
+
+    /* LoRA trigger word highlighting (16 colors, assigned per-LoRA) */
+    --lora-color-1:  #f472b6;   /* pink */
+    --lora-color-2:  #a78bfa;   /* violet */
+    --lora-color-3:  #67e8f9;   /* cyan */
+    --lora-color-4:  #fbbf24;   /* amber */
+    --lora-color-5:  #86efac;   /* green */
+    --lora-color-6:  #fdba74;   /* orange */
+    --lora-color-7:  #c4b5fd;   /* lavender */
+    --lora-color-8:  #fda4af;   /* rose */
+    --lora-color-9:  #7dd3fc;   /* sky */
+    --lora-color-10: #d9f99d;   /* lime */
+    --lora-color-11: #fca5a5;   /* red */
+    --lora-color-12: #99f6e4;   /* teal */
+    --lora-color-13: #e9d5ff;   /* purple */
+    --lora-color-14: #fed7aa;   /* peach */
+    --lora-color-15: #a5f3fc;   /* ice */
+    --lora-color-16: #fde68a;   /* gold */
+
+    /* Queue / Progress */
+    --progress-bar:      var(--interactive-default);
+    --progress-track:    var(--surface-overlay);
+    --progress-complete: var(--feedback-success);
+
+
+    /* ================================================================
+     * TYPOGRAPHY
+     * ================================================================ */
+
+    /* Font families */
+    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI',
+                 Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    --font-mono: 'SF Mono', 'Fira Code', 'Cascadia Code',
+                 'JetBrains Mono', Consolas, monospace;
+
+    /* Font sizes (modular scale, base 14px, ratio 1.25) */
+    --text-xs:   0.75rem;     /* 12px */
+    --text-sm:   0.8125rem;   /* 13px */
+    --text-base: 0.875rem;    /* 14px */
+    --text-lg:   1rem;        /* 16px */
+    --text-xl:   1.25rem;     /* 20px */
+    --text-2xl:  1.75rem;     /* 28px */
+
+    /* Font weights */
+    --font-normal:   400;
+    --font-medium:   500;
+    --font-semibold: 600;
+    --font-bold:     700;
+
+    /* Line heights (snapped to 4px grid) */
+    --leading-tight:   1.25;
+    --leading-normal:  1.5;
+    --leading-relaxed: 1.6;
+
+    /* Letter spacing */
+    --tracking-tight:  -0.01em;
+    --tracking-normal:  0;
+    --tracking-wide:    0.02em;
+    --tracking-wider:   0.04em;
+
+
+    /* ================================================================
+     * SPACING (4px base unit)
+     * ================================================================ */
+
+    --space-0:  0;
+    --space-1:  0.25rem;   /*  4px */
+    --space-2:  0.5rem;    /*  8px */
+    --space-3:  0.75rem;   /* 12px */
+    --space-4:  1rem;      /* 16px */
+    --space-5:  1.25rem;   /* 20px */
+    --space-6:  1.5rem;    /* 24px */
+    --space-8:  2rem;      /* 32px */
+    --space-10: 2.5rem;    /* 40px */
+    --space-12: 3rem;      /* 48px */
+    --space-16: 4rem;      /* 64px */
+
+
+    /* ================================================================
+     * BORDER RADIUS
+     * ================================================================ */
+
+    --radius-sm:   4px;
+    --radius-md:   6px;
+    --radius-lg:   8px;
+    --radius-full: 9999px;
+
+
+    /* ================================================================
+     * SHADOWS
+     * ================================================================ */
+
+    --shadow-sm:    0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-md:    0 4px 6px rgba(0, 0, 0, 0.3);
+    --shadow-lg:    0 8px 16px rgba(0, 0, 0, 0.4);
+    --shadow-focus: 0 0 0 2px var(--interactive-focus-ring);
+
+
+    /* ================================================================
+     * MOTION
+     * ================================================================ */
+
+    --duration-fast:   0.15s;
+    --duration-normal: 0.25s;
+    --duration-slow:   0.4s;
+
+    --ease-default: cubic-bezier(0.4, 0, 0.2, 1);
+    --ease-in:      cubic-bezier(0.4, 0, 1, 1);
+    --ease-out:     cubic-bezier(0, 0, 0.2, 1);
+    --ease-spring:  cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+
+/* =================================================================
+ * LIGHT THEME (future — structure only, not populated)
+ * ================================================================= */
+
+:root.light {
+    --surface-base:    var(--color-gray-50);
+    --surface-raised:  var(--color-white);
+    --text-default:    var(--color-gray-950);
+    --text-muted:      var(--color-gray-600);
+    --border-default:  var(--color-gray-400);
+}
+
+
+/* =================================================================
+ * REDUCED MOTION
+ * ================================================================= */
+
+@media (prefers-reduced-motion: reduce) {
+    :root {
+        --duration-fast:   0s;
+        --duration-normal: 0s;
+        --duration-slow:   0s;
+    }
+}
