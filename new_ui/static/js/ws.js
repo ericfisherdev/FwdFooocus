@@ -19,7 +19,8 @@ document.addEventListener('alpine:init', () => {
     let ws = null;
     let backoff = WS_INITIAL_BACKOFF_MS;
     let reconnectTimer = null;
-    let connectionState = 'disconnected'; // connected | reconnecting | disconnected
+    let hasConnectedBefore = false;
+    let connectionState = 'disconnected'; // connected | connecting | reconnecting | disconnected
 
     function getWsUrl() {
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -37,10 +38,11 @@ document.addEventListener('alpine:init', () => {
             return;
         }
 
-        setConnectionState('reconnecting');
+        setConnectionState(hasConnectedBefore ? 'reconnecting' : 'connecting');
         ws = new WebSocket(getWsUrl());
 
         ws.onopen = () => {
+            hasConnectedBefore = true;
             backoff = WS_INITIAL_BACKOFF_MS;
             setConnectionState('connected');
         };
@@ -74,16 +76,33 @@ document.addEventListener('alpine:init', () => {
         }, backoff);
     }
 
+    /**
+     * Parse "Image X/Y" from progress text to extract current/total image counts.
+     * Returns { current, total } or null if the pattern is not found.
+     */
+    function parseImageProgress(text) {
+        if (!text) return null;
+        const match = text.match(/Image\s+(\d+)\/(\d+)/i);
+        if (!match) return null;
+        return { current: parseInt(match[1], 10), total: parseInt(match[2], 10) };
+    }
+
     function handleMessage(msg) {
         switch (msg.type) {
-            case 'preview':
+            case 'preview': {
                 gen.isGenerating = true;
                 gen.percentage = msg.percentage ?? 0;
                 gen.progressText = msg.text ?? '';
                 if (msg.image) {
                     gen.previewImage = 'data:image/jpeg;base64,' + msg.image;
                 }
+                const progress = parseImageProgress(msg.text);
+                if (progress) {
+                    gen.currentImage = progress.current;
+                    gen.totalImages = progress.total;
+                }
                 break;
+            }
 
             case 'results':
                 // Intermediate results (images completed so far)
@@ -94,13 +113,10 @@ document.addEventListener('alpine:init', () => {
                 break;
 
             case 'finish':
-                gen.isGenerating = false;
-                gen.previewImage = null;
-                gen.percentage = 0;
-                gen.progressText = '';
                 window.dispatchEvent(new CustomEvent('generation-finish', {
                     detail: { images: msg.images }
                 }));
+                gen.reset();
                 break;
 
             case 'heartbeat':
