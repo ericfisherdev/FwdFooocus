@@ -1537,6 +1537,11 @@ shared.gradio_root.launch(
     prevent_thread_lock=True
 )
 
+# Launch the new UI server alongside Gradio
+import new_ui.server as new_ui_server
+new_ui_host = args_manager.args.listen if args_manager.args.listen else "127.0.0.1"
+new_ui_server.start(host=new_ui_host, port=new_ui_server.DEFAULT_PORT)
+
 # Generate LoRA library HTML file
 print("[LoRA Library] Generating library HTML file...")
 try:
