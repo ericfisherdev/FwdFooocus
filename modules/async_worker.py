@@ -244,6 +244,12 @@ def worker():
     def progressbar(async_task, number, text):
         print(f'[FwdFooocus] {text}')
         async_task.yields.append(['preview', (number, text, None)])
+        # Refresh heartbeat from the worker thread directly.
+        # The server-side heartbeat POST may not be processed during
+        # GPU work because the GIL is held by CUDA operations,
+        # preventing uvicorn from handling incoming requests.
+        from modules.heartbeat import update_heartbeat
+        update_heartbeat()
 
     def yield_result(async_task, imgs, progressbar_index, black_out_nsfw, censor=True, do_not_show_finished_images=False):
         if not isinstance(imgs, list):
