@@ -76,11 +76,11 @@ document.addEventListener('alpine:init', () => {
         }
     }
 
-    function scheduleHighlight() {
+    function scheduleHighlight(delay = 150) {
         clearTimeout(highlightTimeout);
         highlightTimeout = setTimeout(() => {
             applyHighlights('positive');
-        }, 150);
+        }, delay);
     }
 
     // Listen for LoRA changes
@@ -112,7 +112,7 @@ document.addEventListener('alpine:init', () => {
 
     window.addEventListener('lora-removed', (e) => {
         const detail = e.detail;
-        activeLoRAs = activeLoRAs.filter(l => l.filename !== detail.filename);
+        activeLoRAs = activeLoRAs.filter(l => l.slotIndex !== detail.index);
         scheduleHighlight();
 
         window.dispatchEvent(new CustomEvent('active-loras-updated', {
@@ -120,10 +120,10 @@ document.addEventListener('alpine:init', () => {
         }));
     });
 
-    // Re-highlight when prompt text changes
+    // Re-highlight when prompt text changes (already debounced upstream)
     window.addEventListener('prompt-changed', (e) => {
         if (e.detail.mode === 'positive' && activeLoRAs.length > 0) {
-            scheduleHighlight();
+            scheduleHighlight(0);
         }
     });
 });
