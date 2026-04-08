@@ -33,9 +33,9 @@
              if (prev >= 0) sel[1] = prev;
          },
      }"
-     @keydown.escape="exitCompare()"
-     @keydown.left="navPrev()"
-     @keydown.right="navNext()">
+     @keydown.escape.window="exitCompare()"
+     @keydown.left.window.prevent="navPrev()"
+     @keydown.right.window.prevent="navNext()">
 
     <!-- Screen reader announcements for compare mode -->
     <div class="sr-only" aria-live="polite"
@@ -53,6 +53,18 @@
                      alt="Comparison image A">
             </template>
             <span class="text-caption gallery-compare__label">Image A</span>
+            <div class="gallery-compare__meta" x-show="imageA">
+                <span x-text="'Seed: ' + (imageA?.metadata?.seed ?? imageA?.seed ?? 'N/A')"></span>
+                <template x-if="imageA?.metadata?.steps">
+                    <span x-text="'Steps: ' + imageA.metadata.steps"></span>
+                </template>
+                <template x-if="imageA?.metadata?.cfg">
+                    <span x-text="'CFG: ' + imageA.metadata.cfg"></span>
+                </template>
+                <template x-if="imageA?.metadata?.sampler">
+                    <span x-text="'Sampler: ' + imageA.metadata.sampler"></span>
+                </template>
+            </div>
         </div>
         <div class="gallery-compare__side">
             <template x-if="imageB">
@@ -61,6 +73,18 @@
                      alt="Comparison image B">
             </template>
             <span class="text-caption gallery-compare__label">Image B</span>
+            <div class="gallery-compare__meta" x-show="imageB">
+                <span x-text="'Seed: ' + (imageB?.metadata?.seed ?? imageB?.seed ?? 'N/A')"></span>
+                <template x-if="imageB?.metadata?.steps">
+                    <span x-text="'Steps: ' + imageB.metadata.steps"></span>
+                </template>
+                <template x-if="imageB?.metadata?.cfg">
+                    <span x-text="'CFG: ' + imageB.metadata.cfg"></span>
+                </template>
+                <template x-if="imageB?.metadata?.sampler">
+                    <span x-text="'Sampler: ' + imageB.metadata.sampler"></span>
+                </template>
+            </div>
         </div>
     </div>
 
