@@ -216,7 +216,7 @@ def _build_generate_args(body: dict) -> list:
         body.get("style_selections", []),
         body.get("performance_selection", body.get("performance", config.default_performance)),
         body.get("aspect_ratios_selection", config.default_aspect_ratio),
-        int(body.get("image_number", 2)),
+        max(1, min(int(body.get("image_number", config.default_image_number)), config.default_max_image_number)),
         body.get("output_format", "png"),
         int(body.get("seed", -1)),
         body.get("read_wildcards_in_order", False),
@@ -328,6 +328,9 @@ async def generate_stop():
             model_management.interrupt_current_processing()
             return {"stopped": True}
 
+    # Clear queued tasks so the next job doesn't start immediately
+    async_tasks.clear()
+
     return {"stopped": False}
 
 
@@ -411,7 +414,7 @@ async def ws_generation(websocket: WebSocket):
         await websocket.send_json(message)
         update_heartbeat()
 
-    from modules.async_worker import async_tasks
+    from modules.async_worker import async_tasks, current_task
 
     try:
         yield_index = 0
@@ -434,6 +437,10 @@ async def ws_generation(websocket: WebSocket):
                     if task.processing:
                         active_task = task
                         break
+                # Fallback: the worker pops the task from async_tasks
+                # before processing, so check current_task as well.
+                if active_task is None and current_task is not None and current_task.processing:
+                    active_task = current_task
 
             # Always refresh heartbeat so the backend knows a client
             # is connected — even when the pipeline is between yields
