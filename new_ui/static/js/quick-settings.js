@@ -19,11 +19,12 @@ function quickSettings() {
         selectedStyles: [],
         stylesOpen: false,
         styleSearch: '',
+        defaultsApplied: false,
 
         init() {
             const applyDefaults = () => {
-                if (this._defaultsApplied) return;
-                this._defaultsApplied = true;
+                if (this.defaultsApplied) return;
+                this.defaultsApplied = true;
                 const cfg = Alpine.store('config');
                 this.performance = cfg.defaultPerformance || 'Speed';
                 this.aspectRatio = cfg.defaultAspectRatio || '';
@@ -96,12 +97,18 @@ function quickSettings() {
         },
 
         updateImageNumber(value) {
-            this.imageNumber = parseInt(value, 10) || 1;
+            const parsed = Number.parseInt(value, 10);
+            const max = Alpine.store('config').maxImageNumber || 32;
+            this.imageNumber = Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), max) : 1;
         },
 
         toggleRandomSeed() {
             this.randomSeed = !this.randomSeed;
-            if (this.randomSeed) this.seed = -1;
+            if (this.randomSeed) {
+                this.seed = -1;
+            } else if (this.seed < 0) {
+                this.seed = 0;
+            }
         },
     };
 }
