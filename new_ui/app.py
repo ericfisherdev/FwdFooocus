@@ -214,7 +214,7 @@ def _build_generate_args(body: dict) -> list:
         body.get("prompt", ""),
         body.get("negative_prompt", ""),
         body.get("style_selections", []),
-        body.get("performance", "Speed"),
+        body.get("performance_selection", body.get("performance", config.default_performance)),
         body.get("aspect_ratios_selection", config.default_aspect_ratio),
         int(body.get("image_number", 2)),
         body.get("output_format", "png"),
@@ -301,17 +301,33 @@ async def generate(request: Request):
     args = _build_generate_args(body)
     task = AsyncTask(args)
     async_tasks.append(task)
-    return {"queued": True}
+    return {"queued": True, "task_id": id(task)}
 
 
 @app.post("/api/generate/stop")
 async def generate_stop():
-    """Stop the current generation."""
-    from modules.async_worker import async_tasks
+    """Stop the current generation.
+
+    The worker pops the active task from async_tasks before processing,
+    so we must also check the module-level current_task reference.
+    Mirrors the stop logic used in the Gradio UI (webui.py stop_clicked).
+    """
+    import ldm_patched.modules.model_management as model_management
+    from modules.async_worker import async_tasks, current_task
+
+    # Check the currently running task first (already popped from queue)
+    if current_task is not None and current_task.processing:
+        current_task.last_stop = 'stop'
+        model_management.interrupt_current_processing()
+        return {"stopped": True}
+
+    # Fall back to queued tasks that may have started processing
     for task in async_tasks:
         if task.processing:
-            task.last_stop = True
+            task.last_stop = 'stop'
+            model_management.interrupt_current_processing()
             return {"stopped": True}
+
     return {"stopped": False}
 
 

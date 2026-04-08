@@ -161,6 +161,7 @@ class AsyncTask:
         self.enhance_stats = {}
 
 async_tasks = []
+current_task = None
 
 
 def _build_session_state(task: AsyncTask) -> dict:
@@ -1506,6 +1507,8 @@ def worker():
         time.sleep(0.01)
         if len(async_tasks) > 0:
             task = async_tasks.pop(0)
+            global current_task
+            current_task = task
 
             try:
                 handler(task)
@@ -1526,6 +1529,7 @@ def worker():
                 traceback.print_exc()
                 task.yields.append(['finish', task.results])
             finally:
+                current_task = None
                 if pid in modules.patch.patch_settings:
                     del modules.patch.patch_settings[pid]
     pass
