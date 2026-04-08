@@ -11,6 +11,7 @@
     <div class="prompt-editor__wrapper"
          :class="{ 'prompt-editor__wrapper--focused': focused }">
         <div :id="editorId"
+             x-ref="editor"
              class="prompt-editor__input text-prompt"
              contenteditable="true"
              role="textbox"
@@ -48,6 +49,7 @@
         <div class="prompt-editor__wrapper"
              :class="{ 'prompt-editor__wrapper--focused': focused }">
             <div :id="editorId"
+                 x-ref="editor"
                  class="prompt-editor__input prompt-editor__input--negative text-prompt"
                  contenteditable="true"
                  role="textbox"
@@ -62,7 +64,8 @@
             ></div>
             <span class="prompt-editor__placeholder text-placeholder"
                   x-show="isEmpty"
-                  x-text="placeholder"></span>
+                  x-text="placeholder"
+                  @click="$refs.editor?.focus()"></span>
         </div>
     </div>
 </div>
