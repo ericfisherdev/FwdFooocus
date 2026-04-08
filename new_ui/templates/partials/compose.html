@@ -5,24 +5,38 @@
 #}
 
 <!-- Prompt Editor (positive) -->
-<div class="compose__prompt-positive">
-    <label class="text-label">Prompt</label>
-    <div class="compose__prompt-editor input"
-         style="min-height: 80px; resize: vertical; overflow: auto;"
-         contenteditable="false"
-         role="textbox"
-         aria-multiline="true"
-         aria-label="Positive prompt">
-        <span class="text-placeholder">Type prompt here or paste parameters.</span>
+<div class="compose__prompt-positive"
+     x-data="promptEditor({ mode: 'positive', value: $store.config.defaultPrompt })">
+    <label class="text-label" :for="editorId" x-text="label"></label>
+    <div class="prompt-editor__wrapper"
+         :class="{ 'prompt-editor__wrapper--focused': focused }">
+        <div :id="editorId"
+             class="prompt-editor__input text-prompt"
+             contenteditable="true"
+             role="textbox"
+             aria-multiline="true"
+             :aria-label="label"
+             spellcheck="false"
+             @input.debounce.150ms="onInput"
+             @paste="onPaste"
+             @focus="onFocus"
+             @blur="onBlur"
+             @keydown="onKeydown"
+        ></div>
+        <span class="prompt-editor__placeholder text-placeholder"
+              x-show="isEmpty"
+              x-text="placeholder"
+              @click="$refs.editor?.focus()"></span>
     </div>
 </div>
 
 <!-- Negative Prompt (collapsible) -->
-<div class="compose__negative-prompt">
-    <button class="collapsible-header text-label"
-            aria-expanded="false"
+<div class="compose__negative-prompt"
+     x-data="{ negOpen: false }">
+    <button type="button" class="collapsible-header text-label"
+            :aria-expanded="negOpen.toString()"
             aria-controls="negative-prompt-content"
-            @click="$el.setAttribute('aria-expanded', $el.getAttribute('aria-expanded') === 'true' ? 'false' : 'true')">
+            @click="negOpen = !negOpen">
         <svg class="collapsible-chevron" viewBox="0 0 16 16" fill="currentColor">
             <path d="M6 3l5 5-5 5z"/>
         </svg>
@@ -30,10 +44,25 @@
     </button>
     <div id="negative-prompt-content"
          class="collapsible-content"
-         x-show="$el.previousElementSibling.getAttribute('aria-expanded') === 'true'"
-         x-cloak>
-        <div class="input" style="min-height: 48px;">
-            <span class="text-placeholder">Describe what you do not want to see.</span>
+         x-data="promptEditor({ mode: 'negative', value: $store.config.defaultPromptNegative })">
+        <div class="prompt-editor__wrapper"
+             :class="{ 'prompt-editor__wrapper--focused': focused }">
+            <div :id="editorId"
+                 class="prompt-editor__input prompt-editor__input--negative text-prompt"
+                 contenteditable="true"
+                 role="textbox"
+                 aria-multiline="true"
+                 :aria-label="label"
+                 spellcheck="false"
+                 @input.debounce.150ms="onInput"
+                 @paste="onPaste"
+                 @focus="onFocus"
+                 @blur="onBlur"
+                 @keydown="onKeydown"
+            ></div>
+            <span class="prompt-editor__placeholder text-placeholder"
+                  x-show="isEmpty"
+                  x-text="placeholder"></span>
         </div>
     </div>
 </div>
