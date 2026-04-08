@@ -146,6 +146,7 @@ document.addEventListener('alpine:init', () => {
         devToolsOpen: savedUi.devToolsOpen ?? false,
         devModeEnabled: savedUi.devModeEnabled ?? false,
         activeTab: savedUi.activeTab ?? 'compose',  // for tablet stacked mode
+        connectionState: 'disconnected',  // connected | connecting | reconnecting | disconnected
 
         toggleSettings() {
             this.settingsDrawerOpen = !this.settingsDrawerOpen;

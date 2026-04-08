@@ -12,6 +12,8 @@ import logging
 import os
 from pathlib import Path
 
+from urllib.parse import urlsplit
+
 from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -179,6 +181,19 @@ async def ws_generation(websocket: WebSocket):
     Polls the active task's yields list and forwards them as JSON messages.
     Message types: preview, results, finish, heartbeat.
     """
+    origin = websocket.headers.get("origin")
+    host = websocket.headers.get("host", "")
+    if origin:
+        origin_netloc = urlsplit(origin).netloc
+        if origin_netloc != host:
+            logger.warning(
+                "Rejected WebSocket from mismatched origin: %s (host: %s)",
+                origin,
+                host,
+            )
+            await websocket.close(code=1008, reason="Origin not allowed")
+            return
+
     await websocket.accept()
 
     from modules.async_worker import async_tasks
