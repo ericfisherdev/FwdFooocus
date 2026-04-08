@@ -110,7 +110,7 @@ const FWD_GSAP = (() => {
     /* -- Scale pulse (for badges, counts) --------------------------- */
 
     function pulse(target) {
-        if (reducedMotion) return;
+        if (reducedMotion) return gsap.set(target, { scale: 1 });
         return gsap.fromTo(target,
             { scale: 1 },
             { scale: 1.15, duration: getDuration('fast'), ease: getEasing('spring'), yoyo: true, repeat: 1 }
