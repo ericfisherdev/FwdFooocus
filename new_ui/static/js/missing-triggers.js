@@ -34,15 +34,19 @@ function missingTriggers() {
             return this.missing.length > 0;
         },
 
-        insertTrigger(triggerWord) {
+        insertTrigger(triggerWord, loraFilename) {
             // Dispatch to the prompt editor's insertAtCursor
             // The prompt editor listens for this custom event
             window.dispatchEvent(new CustomEvent('insert-trigger-word', {
-                detail: { word: triggerWord, mode: 'positive' },
+                detail: { word: triggerWord, loraFilename, mode: 'positive' },
             }));
 
-            // Optimistically remove from missing list
-            this.missing = this.missing.filter(m => m.triggerWord !== triggerWord);
+            // Optimistically remove from missing list — filter by both
+            // triggerWord AND loraFilename so unrelated rows sharing the
+            // same trigger word are not accidentally removed.
+            this.missing = this.missing.filter(
+                m => !(m.triggerWord === triggerWord && m.loraFilename === loraFilename)
+            );
         },
 
         displayName(filename) {
