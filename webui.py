@@ -176,10 +176,8 @@ def _session_default(key, fallback):
 shared.gradio_root = gr.Blocks(title=title).queue()
 
 with shared.gradio_root:
-    gr.HTML(
-        value='<script>setInterval(()=>fetch("/heartbeat",{method:"POST"}).catch(()=>{}),5000)</script>',
-        visible=False
-    )
+    # Heartbeat script moved to ui_gradio_extensions.py javascript_html()
+    # because Gradio sanitizes <script> tags in gr.HTML components.
     currentTask = gr.State(worker.AsyncTask(args=[]))
     inpaint_engine_state = gr.State('empty')
     with gr.Row():
