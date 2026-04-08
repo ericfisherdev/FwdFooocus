@@ -71,59 +71,88 @@
 </div>
 
 <!-- Quick Settings (2-column grid) -->
-<div class="compose__quick-settings">
+<div class="compose__quick-settings" x-data="quickSettings()">
     <div class="quick-settings-grid">
         <div class="quick-settings__item">
             <label class="text-label">Performance</label>
             <div class="quick-settings__radio-group">
-                <button class="btn btn-secondary btn-sm"
-                        :class="{ 'btn-primary': $store.config.defaultPerformance === 'Speed' }"
-                        disabled>Speed</button>
-                <button class="btn btn-secondary btn-sm" disabled>Quality</button>
-                <button class="btn btn-secondary btn-sm" disabled>Extreme</button>
+                <template x-for="perf in ['Speed', 'Quality', 'Extreme Speed']" :key="perf">
+                    <button type="button" class="btn btn-secondary btn-sm"
+                            :class="{ 'btn-primary': performance === perf }"
+                            @click="setPerformance(perf)"
+                            x-text="perf === 'Extreme Speed' ? 'Extreme' : perf"></button>
+                </template>
             </div>
         </div>
         <div class="quick-settings__item">
             <label class="text-label">Aspect Ratio</label>
-            <select class="select" disabled>
-                <template x-for="ar in $store.config.availableAspectRatios" :key="ar">
-                    <option :value="ar" x-text="ar.replace('*', ' × ')"
-                            :selected="ar === $store.config.defaultAspectRatio"></option>
-                </template>
-            </select>
+            <div class="select-wrapper">
+                <select class="select" x-model="aspectRatio">
+                    <template x-for="ar in $store.config.availableAspectRatios" :key="ar">
+                        <option :value="ar" x-text="ar.replace('*', ' × ')"></option>
+                    </template>
+                </select>
+            </div>
         </div>
         <div class="quick-settings__item">
             <label class="text-label">Images</label>
             <div style="display: flex; align-items: center; gap: var(--space-2);">
                 <input type="range" class="slider" min="1"
                        :max="$store.config.maxImageNumber"
-                       :value="$store.config.defaultImageNumber"
-                       disabled>
-                <span class="text-mono" x-text="$store.config.defaultImageNumber"
+                       :value="imageNumber"
+                       @input="updateImageNumber($event.target.value)">
+                <span class="text-mono" x-text="imageNumber"
                       style="min-width: 2ch; text-align: right;"></span>
             </div>
         </div>
         <div class="quick-settings__item">
             <label class="text-label">Format</label>
             <div class="quick-settings__radio-group">
-                <button class="btn btn-secondary btn-sm" disabled>PNG</button>
-                <button class="btn btn-secondary btn-sm" disabled>WebP</button>
-                <button class="btn btn-secondary btn-sm" disabled>JPEG</button>
+                <template x-for="fmt in ['png', 'webp', 'jpeg']" :key="fmt">
+                    <button type="button" class="btn btn-secondary btn-sm"
+                            :class="{ 'btn-primary': outputFormat === fmt }"
+                            @click="outputFormat = fmt"
+                            x-text="fmt.toUpperCase()"></button>
+                </template>
             </div>
         </div>
         <div class="quick-settings__item">
             <label class="text-label">Seed</label>
             <div style="display: flex; align-items: center; gap: var(--space-2);">
-                <button class="btn btn-secondary btn-sm" disabled title="Random seed">🎲</button>
-                <input type="text" class="input input-sm text-mono" value="-1" disabled
+                <button type="button" class="btn btn-sm"
+                        :class="randomSeed ? 'btn-primary' : 'btn-secondary'"
+                        @click="toggleRandomSeed()"
+                        title="Random seed">🎲</button>
+                <input type="number" class="input input-sm text-mono"
+                       :value="effectiveSeed"
+                       :disabled="randomSeed"
+                       @change="seed = parseInt($event.target.value) || 0"
                        style="flex: 1;">
             </div>
         </div>
-        <div class="quick-settings__item">
+        <div class="quick-settings__item" style="position: relative;">
             <label class="text-label">Styles</label>
-            <button class="btn btn-secondary btn-sm" disabled style="width: 100%; justify-content: flex-start;">
-                Browse styles...
+            <button type="button" class="btn btn-secondary btn-sm"
+                    @click="stylesOpen = !stylesOpen"
+                    style="width: 100%; justify-content: flex-start;">
+                <span x-text="selectedStyleCount > 0 ? selectedStyleCount + ' selected' : 'Browse styles...'"></span>
             </button>
+            <div class="styles-dropdown" x-show="stylesOpen" x-cloak
+                 @click.outside="stylesOpen = false"
+                 @keydown.escape="stylesOpen = false">
+                <input type="search" class="input input-sm" placeholder="Search styles..."
+                       x-model="styleSearch" style="margin-bottom: var(--space-2);">
+                <div class="styles-dropdown__list">
+                    <template x-for="style in filteredStyles" :key="style">
+                        <label class="styles-dropdown__item">
+                            <input type="checkbox"
+                                   :checked="isStyleSelected(style)"
+                                   @change="toggleStyle(style)">
+                            <span class="text-body-sm" x-text="style"></span>
+                        </label>
+                    </template>
+                </div>
+            </div>
         </div>
     </div>
 </div>

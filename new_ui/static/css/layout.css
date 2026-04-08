@@ -212,6 +212,50 @@ html, body {
 
 
 /* ================================================================
+ * STYLES DROPDOWN
+ * ================================================================ */
+
+.styles-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 20;
+    margin-top: var(--space-1);
+    padding: var(--space-3);
+    background: var(--surface-raised);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
+}
+
+.styles-dropdown__list {
+    max-height: 200px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.styles-dropdown__item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+
+.styles-dropdown__item:hover {
+    background: var(--surface-overlay);
+}
+
+.styles-dropdown__item input[type="checkbox"] {
+    accent-color: var(--interactive-default);
+}
+
+
+/* ================================================================
  * GALLERY STRUCTURE
  * ================================================================ */
 
