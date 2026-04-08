@@ -86,9 +86,9 @@
             </div>
         </div>
         <div class="quick-settings__item">
-            <label class="text-label">Aspect Ratio</label>
+            <label class="text-label" for="quick-settings-aspect-ratio">Aspect Ratio</label>
             <div class="select-wrapper">
-                <select class="select" x-model="aspectRatio">
+                <select id="quick-settings-aspect-ratio" class="select" x-model="aspectRatio">
                     <template x-for="ar in $store.config.availableAspectRatios" :key="ar">
                         <option :value="ar" x-text="ar.replace('*', ' × ')"></option>
                     </template>
@@ -96,9 +96,9 @@
             </div>
         </div>
         <div class="quick-settings__item">
-            <label class="text-label">Images</label>
+            <label class="text-label" for="quick-settings-image-count">Images</label>
             <div style="display: flex; align-items: center; gap: var(--space-2);">
-                <input type="range" class="slider" min="1"
+                <input id="quick-settings-image-count" type="range" class="slider" min="1"
                        :max="$store.config.maxImageNumber"
                        :value="imageNumber"
                        @input="updateImageNumber($event.target.value)">
