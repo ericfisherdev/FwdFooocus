@@ -251,6 +251,13 @@ async def ws_generation(websocket: WebSocket):
                         active_task = task
                         break
 
+            # Always refresh heartbeat so the backend knows a client
+            # is connected — even when the pipeline is between yields
+            # (model loading, long sampling steps).  The 15-second
+            # timeout in is_browser_connected() would otherwise fire
+            # during silent gaps between yield messages.
+            update_heartbeat()
+
             current_yields = active_task.yields if active_task is not None else []
             if yield_index < len(current_yields):
                 idle_count = 0
@@ -259,16 +266,16 @@ async def ws_generation(websocket: WebSocket):
 
                 msg = _build_yield_message(flag, product)
                 if msg is not None:
-                    await _send_and_heartbeat(msg)
+                    await websocket.send_json(msg)
 
                 if flag == "finish":
                     active_task = None
                     yield_index = 0
             else:
-                # No new yields — send heartbeat every ~5s of idle
+                # No new yields — send heartbeat message to client every ~5s
                 idle_count += 1
                 if idle_count >= 50:  # 50 * 100ms = 5s
-                    await _send_and_heartbeat({"type": "heartbeat"})
+                    await websocket.send_json({"type": "heartbeat"})
                     idle_count = 0
 
             await asyncio.sleep(0.1)
