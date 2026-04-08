@@ -249,7 +249,8 @@ html, body {
 
     .split-pane__gallery {
         min-width: 0;
-        /* Hidden by default on mobile — tab system will control visibility */
-        display: none;
+        display: flex;
+        flex: 1;
+        border-top: 1px solid var(--border-subtle);
     }
 }
