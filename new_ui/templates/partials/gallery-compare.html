@@ -21,17 +21,28 @@
          navNext() {
              const imgs = $root.__x.$data.images;
              const sel = $root.__x.$data.selectedImages;
-             if (sel[1] < imgs.length - 1) sel[1]++;
+             let next = sel[1] + 1;
+             if (next === sel[0]) next++;
+             if (next < imgs.length) sel[1] = next;
          },
          navPrev() {
              const imgs = $root.__x.$data.images;
              const sel = $root.__x.$data.selectedImages;
-             if (sel[1] > 0 && sel[1] !== sel[0]) sel[1]--;
+             let prev = sel[1] - 1;
+             if (prev === sel[0]) prev--;
+             if (prev >= 0) sel[1] = prev;
          },
      }"
      @keydown.escape="exitCompare()"
      @keydown.left="navPrev()"
      @keydown.right="navNext()">
+
+    <!-- Screen reader announcements for compare mode -->
+    <div class="sr-only" aria-live="polite"
+         x-text="imageA && imageB
+             ? 'Compare mode: viewing image ' + (parseInt($root.__x.$data.selectedImages[0]) + 1) + ' and image ' + (parseInt($root.__x.$data.selectedImages[1]) + 1)
+             : ''">
+    </div>
 
     <!-- Side-by-side images -->
     <div class="gallery-compare__images">
@@ -57,14 +68,14 @@
     <template x-if="diff.length > 0">
         <div class="gallery-compare__diff">
             <template x-for="row in diff" :key="row.key">
-                <template x-fragment>
+                <div class="gallery-compare__diff-row" style="display: contents">
                     <span class="text-label gallery-compare__diff-key"
                           x-text="GalleryCompare.formatKey(row.key)"></span>
                     <span class="text-body-sm gallery-compare__diff-val gallery-compare__diff-val--changed"
                           x-text="GalleryCompare.formatValue(row.valueA)"></span>
                     <span class="text-body-sm gallery-compare__diff-val gallery-compare__diff-val--changed"
                           x-text="GalleryCompare.formatValue(row.valueB)"></span>
-                </template>
+                </div>
             </template>
         </div>
     </template>
