@@ -122,7 +122,7 @@
 }
 
 .btn-danger:hover:not(:disabled) {
-    background: var(--color-red-400);
+    background: var(--feedback-error-hover);
 }
 
 
@@ -164,9 +164,10 @@
     font-size: var(--text-sm);
 }
 
-/* Select dropdown */
+/* Select dropdown — chevron uses CSS mask so fill follows the token system */
 .select {
     appearance: none;
+    position: relative;
     width: 100%;
     padding: var(--space-2) var(--space-3);
     padding-right: var(--space-8);
@@ -178,10 +179,29 @@
     font-size: var(--text-sm);
     line-height: 1.25rem;
     cursor: pointer;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%239ca3af' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right var(--space-3) center;
     transition: border-color var(--duration-fast) var(--ease-default);
+}
+
+.select-wrapper {
+    position: relative;
+    display: inline-block;
+    width: 100%;
+}
+
+.select-wrapper::after {
+    content: "";
+    position: absolute;
+    right: var(--space-3);
+    top: 50%;
+    transform: translateY(-50%);
+    width: 12px;
+    height: 12px;
+    background-color: var(--text-muted);
+    -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E");
+    mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E");
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    pointer-events: none;
 }
 
 .select:focus {
@@ -343,7 +363,7 @@
     left: 2px;
     width: 16px;
     height: 16px;
-    background: var(--color-white);
+    background: var(--text-on-accent);
     border-radius: 50%;
     transition: transform var(--duration-fast) var(--ease-default);
 }
