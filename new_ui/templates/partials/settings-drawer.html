@@ -21,7 +21,7 @@
     <!-- Header -->
     <div class="settings-drawer__header">
         <h2 class="text-heading-lg">Settings</h2>
-        <button class="btn btn-ghost btn-sm"
+        <button type="button" class="btn btn-ghost btn-sm"
                 @click="$store.ui.toggleSettings()"
                 aria-label="Close settings">
             ✕
@@ -30,22 +30,22 @@
 
     <!-- Feature Toggles -->
     <div class="settings-drawer__toggles">
-        <label class="settings-drawer__toggle-row">
+        <div class="settings-drawer__toggle-row">
             <span class="text-heading-base">Input Image</span>
             <label class="toggle">
                 <input type="checkbox" x-model="inputImageEnabled">
                 <span class="toggle-track"></span>
                 <span class="toggle-thumb"></span>
             </label>
-        </label>
-        <label class="settings-drawer__toggle-row">
+        </div>
+        <div class="settings-drawer__toggle-row">
             <span class="text-heading-base">Enhance</span>
             <label class="toggle">
                 <input type="checkbox" x-model="enhanceEnabled">
                 <span class="toggle-track"></span>
                 <span class="toggle-thumb"></span>
             </label>
-        </label>
+        </div>
     </div>
 
     <!-- Scrollable sections -->
@@ -53,7 +53,7 @@
 
         <!-- Model -->
         <div class="settings-drawer__section">
-            <button class="collapsible-header"
+            <button type="button" class="collapsible-header"
                     aria-expanded="true"
                     @click="$el.setAttribute('aria-expanded', $el.getAttribute('aria-expanded') === 'true' ? 'false' : 'true')">
                 <svg class="collapsible-chevron" viewBox="0 0 16 16" fill="currentColor"><path d="M6 3l5 5-5 5z"/></svg>
@@ -78,9 +78,9 @@
                         </select>
                     </div>
                     <div class="settings-drawer__field">
-                        <label class="text-label">Refiner Switch</label>
+                        <label class="text-label" for="refiner-switch">Refiner Switch</label>
                         <div style="display: flex; align-items: center; gap: var(--space-2);">
-                            <input type="range" class="slider" min="0" max="1" step="0.05"
+                            <input id="refiner-switch" type="range" class="slider" min="0" max="1" step="0.05"
                                    :value="$store.config.defaultRefinerSwitch" disabled>
                             <span class="text-mono" x-text="$store.config.defaultRefinerSwitch"></span>
                         </div>
@@ -91,7 +91,7 @@
 
         <!-- Sampling -->
         <div class="settings-drawer__section">
-            <button class="collapsible-header"
+            <button type="button" class="collapsible-header"
                     aria-expanded="false"
                     @click="$el.setAttribute('aria-expanded', $el.getAttribute('aria-expanded') === 'true' ? 'false' : 'true')">
                 <svg class="collapsible-chevron" viewBox="0 0 16 16" fill="currentColor"><path d="M6 3l5 5-5 5z"/></svg>
@@ -102,17 +102,17 @@
                  x-cloak>
                 <div class="settings-drawer__controls">
                     <div class="settings-drawer__field">
-                        <label class="text-label">Guidance Scale</label>
+                        <label class="text-label" for="guidance-scale">Guidance Scale</label>
                         <div style="display: flex; align-items: center; gap: var(--space-2);">
-                            <input type="range" class="slider" min="1" max="30" step="0.01"
+                            <input id="guidance-scale" type="range" class="slider" min="1" max="30" step="0.01"
                                    :value="$store.config.defaultCfgScale" disabled>
                             <span class="text-mono" x-text="$store.config.defaultCfgScale"></span>
                         </div>
                     </div>
                     <div class="settings-drawer__field">
-                        <label class="text-label">Sharpness</label>
+                        <label class="text-label" for="sharpness">Sharpness</label>
                         <div style="display: flex; align-items: center; gap: var(--space-2);">
-                            <input type="range" class="slider" min="0" max="30" step="0.01"
+                            <input id="sharpness" type="range" class="slider" min="0" max="30" step="0.01"
                                    :value="$store.config.defaultSampleSharpness" disabled>
                             <span class="text-mono" x-text="$store.config.defaultSampleSharpness"></span>
                         </div>
@@ -130,9 +130,9 @@
                         </select>
                     </div>
                     <div class="settings-drawer__field">
-                        <label class="text-label">CLIP Skip</label>
+                        <label class="text-label" for="clip-skip">CLIP Skip</label>
                         <div style="display: flex; align-items: center; gap: var(--space-2);">
-                            <input type="range" class="slider" min="1" max="12" step="1" value="2" disabled>
+                            <input id="clip-skip" type="range" class="slider" min="1" max="12" step="1" value="2" disabled>
                             <span class="text-mono">2</span>
                         </div>
                     </div>
@@ -148,7 +148,7 @@
 
         <!-- Output -->
         <div class="settings-drawer__section">
-            <button class="collapsible-header"
+            <button type="button" class="collapsible-header"
                     aria-expanded="false"
                     @click="$el.setAttribute('aria-expanded', $el.getAttribute('aria-expanded') === 'true' ? 'false' : 'true')">
                 <svg class="collapsible-chevron" viewBox="0 0 16 16" fill="currentColor"><path d="M6 3l5 5-5 5z"/></svg>
@@ -159,14 +159,14 @@
                  x-cloak>
                 <div class="settings-drawer__controls">
                     <div class="settings-drawer__field">
-                        <label class="settings-drawer__toggle-inline">
+                        <div class="settings-drawer__toggle-inline">
                             <span class="text-label">Save Metadata</span>
                             <label class="toggle">
                                 <input type="checkbox" checked disabled>
                                 <span class="toggle-track"></span>
                                 <span class="toggle-thumb"></span>
                             </label>
-                        </label>
+                        </div>
                     </div>
                     <div class="settings-drawer__field">
                         <label class="text-label">Metadata Scheme</label>
@@ -177,7 +177,7 @@
                         </select>
                     </div>
                     <div class="settings-drawer__field">
-                        <label class="settings-drawer__toggle-inline">
+                        <div class="settings-drawer__toggle-inline">
                             <span class="text-label">Developer Mode</span>
                             <label class="toggle">
                                 <input type="checkbox"
@@ -186,7 +186,7 @@
                                 <span class="toggle-track"></span>
                                 <span class="toggle-thumb"></span>
                             </label>
-                        </label>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -194,7 +194,7 @@
 
         <!-- Presets -->
         <div class="settings-drawer__section">
-            <button class="collapsible-header"
+            <button type="button" class="collapsible-header"
                     aria-expanded="false"
                     @click="$el.setAttribute('aria-expanded', $el.getAttribute('aria-expanded') === 'true' ? 'false' : 'true')">
                 <svg class="collapsible-chevron" viewBox="0 0 16 16" fill="currentColor"><path d="M6 3l5 5-5 5z"/></svg>
@@ -210,14 +210,14 @@
                             <option>Default</option>
                         </select>
                     </div>
-                    <button class="btn btn-secondary btn-sm" disabled>Save Current</button>
+                    <button type="button" class="btn btn-secondary btn-sm" disabled>Save Current</button>
                 </div>
             </div>
         </div>
 
         <!-- Input Image (contextual) -->
         <div class="settings-drawer__section" x-show="inputImageEnabled" x-cloak>
-            <button class="collapsible-header"
+            <button type="button" class="collapsible-header"
                     aria-expanded="true"
                     @click="$el.setAttribute('aria-expanded', $el.getAttribute('aria-expanded') === 'true' ? 'false' : 'true')">
                 <svg class="collapsible-chevron" viewBox="0 0 16 16" fill="currentColor"><path d="M6 3l5 5-5 5z"/></svg>
@@ -233,7 +233,7 @@
 
         <!-- Enhance (contextual) -->
         <div class="settings-drawer__section" x-show="enhanceEnabled" x-cloak>
-            <button class="collapsible-header"
+            <button type="button" class="collapsible-header"
                     aria-expanded="true"
                     @click="$el.setAttribute('aria-expanded', $el.getAttribute('aria-expanded') === 'true' ? 'false' : 'true')">
                 <svg class="collapsible-chevron" viewBox="0 0 16 16" fill="currentColor"><path d="M6 3l5 5-5 5z"/></svg>
