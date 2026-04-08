@@ -45,7 +45,9 @@
                   x-text="$store.config.defaultPerformance"></span>
             <span class="text-caption status-bar__sep">&middot;</span>
             <span class="text-caption status-bar__connection"
-                  x-text="$store.generation.isGenerating ? ('Generating ' + $store.generation.currentImage + '/' + $store.generation.totalImages) : 'Connected'"
+                  x-text="$store.generation.isGenerating
+                          ? ('Generating ' + $store.generation.currentImage + '/' + $store.generation.totalImages)
+                          : {'connected':'Connected','connecting':'Connecting\u2026','reconnecting':'Reconnecting\u2026','disconnected':'Disconnected'}[$store.ui.connectionState] || $store.ui.connectionState"
                   :data-state="$store.ui.connectionState"></span>
             {% endblock %}
         </div>
