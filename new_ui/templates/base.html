@@ -4,29 +4,109 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FwdFooocus</title>
+
+    <!-- Design system CSS -->
     <link rel="stylesheet" href="/static/css/tokens.css">
-    <style>
-        body {
-            margin: 0;
-            font-family: var(--font-sans);
-            background: var(--surface-base);
-            color: var(--text-default);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
-        }
-        .shell {
-            text-align: center;
-        }
-        h1 { font-size: var(--text-xl); font-weight: var(--font-semibold); margin-bottom: var(--space-2); }
-        p  { font-size: var(--text-base); color: var(--text-muted); }
-    </style>
+    <link rel="stylesheet" href="/static/css/typography.css">
+    <link rel="stylesheet" href="/static/css/components.css">
+    <link rel="stylesheet" href="/static/css/layout.css">
+
+    <!-- Alpine.js (defer so x-cloak works) -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <style>[x-cloak] { display: none !important; }</style>
+
+    <!-- HTMX -->
+    <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.4/dist/htmx.min.js"></script>
+
 </head>
-<body>
-    <div class="shell">
-        <h1>FwdFooocus — New UI</h1>
-        <p>Foundation shell running. Components will be added in subsequent tasks.</p>
-    </div>
+<body class="fwd" x-data>
+
+    <!-- ============================================================
+         STATUS BAR (32px fixed top)
+         ============================================================ -->
+    <header class="status-bar" role="banner">
+        <div class="status-bar__left">
+            {% block status_left %}
+            <span class="text-caption status-bar__model">Loading...</span>
+            <span class="text-caption status-bar__sep">&middot;</span>
+            <span class="text-caption status-bar__performance">Speed</span>
+            <span class="text-caption status-bar__sep">&middot;</span>
+            <span class="text-caption status-bar__connection" data-state="connected">Connected</span>
+            {% endblock %}
+        </div>
+        <div class="status-bar__right">
+            {% block status_right %}
+            <button class="btn btn-ghost btn-sm status-bar__settings-btn"
+                    aria-label="Toggle settings drawer">
+                Settings
+            </button>
+            <button class="btn btn-ghost btn-sm status-bar__dev-btn"
+                    aria-label="Toggle developer tools"
+                    x-cloak
+                    style="display: none;">
+                Dev
+            </button>
+            {% endblock %}
+        </div>
+    </header>
+
+    <!-- ============================================================
+         MAIN SPLIT-PANE LAYOUT
+         ============================================================ -->
+    <main class="split-pane" role="main">
+
+        <!-- COMPOSE PANE (left) -->
+        <section class="split-pane__compose" role="region" aria-label="Compose">
+            {% block compose %}
+            <div class="compose-slot compose-slot--placeholder" data-slot="prompt-positive">
+                <span class="text-label">Prompt Editor</span>
+            </div>
+            <div class="compose-slot compose-slot--placeholder" data-slot="prompt-negative">
+                <span class="text-label">Negative Prompt</span>
+            </div>
+            <div class="compose-slot compose-slot--placeholder" data-slot="quick-settings">
+                <span class="text-label">Quick Settings</span>
+            </div>
+            <div class="compose-slot compose-slot--placeholder" data-slot="lora-slots">
+                <span class="text-label">LoRA Slots</span>
+            </div>
+            <div class="compose-slot compose-slot--placeholder" data-slot="generate-row">
+                <span class="text-label">Generate</span>
+            </div>
+            <div class="compose-slot compose-slot--placeholder" data-slot="queue-panel">
+                <span class="text-label">Queue</span>
+            </div>
+            {% endblock %}
+        </section>
+
+        <!-- DRAG HANDLE -->
+        <div class="split-pane__handle"
+             role="separator"
+             aria-orientation="vertical"
+             aria-label="Resize panels"
+             tabindex="0">
+            <div class="split-pane__handle-grip"></div>
+        </div>
+
+        <!-- GALLERY PANE (right) -->
+        <section class="split-pane__gallery" role="complementary" aria-label="Image gallery">
+            {% block gallery %}
+            <div class="gallery-header">
+                <span class="text-body-muted">0 images</span>
+            </div>
+            <div class="gallery-empty">
+                <p class="text-heading-lg">Generate an image to see it here.</p>
+                <p class="text-body-muted">Your results will appear in this panel.</p>
+            </div>
+            {% endblock %}
+        </section>
+
+    </main>
+
+    <!-- ============================================================
+         OVERLAY SLOTS (drawer, picker, lightbox)
+         ============================================================ -->
+    {% block overlays %}{% endblock %}
+
 </body>
 </html>
