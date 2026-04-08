@@ -71,10 +71,11 @@
     --border-focus:   var(--color-blue-500);
 
     /* -- Feedback --------------------------------------------------- */
-    --feedback-success: var(--color-green-500);
-    --feedback-warning: var(--color-amber-500);
-    --feedback-error:   var(--color-red-500);
-    --feedback-info:    var(--color-blue-500);
+    --feedback-success:     var(--color-green-500);
+    --feedback-warning:     var(--color-amber-500);
+    --feedback-error:       var(--color-red-500);
+    --feedback-error-hover: var(--color-red-400);
+    --feedback-info:        var(--color-blue-500);
 
 
     /* ================================================================
