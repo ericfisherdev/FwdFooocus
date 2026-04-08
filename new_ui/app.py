@@ -223,6 +223,10 @@ async def ws_generation(websocket: WebSocket):
 
     await websocket.accept()
 
+    async def _send_and_heartbeat(message: dict) -> None:
+        await websocket.send_json(message)
+        update_heartbeat()
+
     from modules.async_worker import async_tasks
 
     try:
@@ -239,7 +243,7 @@ async def ws_generation(websocket: WebSocket):
                     for flag, product in remaining:
                         msg = _build_yield_message(flag, product)
                         if msg is not None:
-                            await websocket.send_json(msg)
+                            await _send_and_heartbeat(msg)
                 active_task = None
                 yield_index = 0
                 for task in list(async_tasks):
@@ -255,7 +259,7 @@ async def ws_generation(websocket: WebSocket):
 
                 msg = _build_yield_message(flag, product)
                 if msg is not None:
-                    await websocket.send_json(msg)
+                    await _send_and_heartbeat(msg)
 
                 if flag == "finish":
                     active_task = None
@@ -264,8 +268,7 @@ async def ws_generation(websocket: WebSocket):
                 # No new yields — send heartbeat every ~5s of idle
                 idle_count += 1
                 if idle_count >= 50:  # 50 * 100ms = 5s
-                    await websocket.send_json({"type": "heartbeat"})
-                    update_heartbeat()
+                    await _send_and_heartbeat({"type": "heartbeat"})
                     idle_count = 0
 
             await asyncio.sleep(0.1)
