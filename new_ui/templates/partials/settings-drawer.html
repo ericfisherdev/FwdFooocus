@@ -33,7 +33,7 @@
         <div class="settings-drawer__toggle-row">
             <span class="text-heading-base">Input Image</span>
             <label class="toggle">
-                <input type="checkbox" x-model="inputImageEnabled">
+                <input type="checkbox" x-model="inputImageEnabled" aria-label="Input Image">
                 <span class="toggle-track"></span>
                 <span class="toggle-thumb"></span>
             </label>
@@ -41,7 +41,7 @@
         <div class="settings-drawer__toggle-row">
             <span class="text-heading-base">Enhance</span>
             <label class="toggle">
-                <input type="checkbox" x-model="enhanceEnabled">
+                <input type="checkbox" x-model="enhanceEnabled" aria-label="Enhance">
                 <span class="toggle-track"></span>
                 <span class="toggle-thumb"></span>
             </label>
@@ -162,7 +162,7 @@
                         <div class="settings-drawer__toggle-inline">
                             <span class="text-label">Save Metadata</span>
                             <label class="toggle">
-                                <input type="checkbox" checked disabled>
+                                <input type="checkbox" checked disabled aria-label="Save Metadata">
                                 <span class="toggle-track"></span>
                                 <span class="toggle-thumb"></span>
                             </label>
@@ -181,6 +181,7 @@
                             <span class="text-label">Developer Mode</span>
                             <label class="toggle">
                                 <input type="checkbox"
+                                       aria-label="Developer Mode"
                                        :checked="$store.ui.devModeEnabled"
                                        @change="$store.ui.setDevMode($event.target.checked)">
                                 <span class="toggle-track"></span>
