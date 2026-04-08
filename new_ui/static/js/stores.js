@@ -195,6 +195,15 @@ document.addEventListener('alpine:init', () => {
         etaSeconds: null,
         progressText: '',
 
+        // Quick-settings values synced from the quickSettings component
+        // so the Generate button (outside its scope) can read them.
+        performance: 'Speed',
+        aspectRatio: '',
+        imageNumber: 2,
+        outputFormat: 'png',
+        seed: -1,
+        selectedStyles: [],
+
         reset() {
             this.isGenerating = false;
             this.currentImage = 0;
