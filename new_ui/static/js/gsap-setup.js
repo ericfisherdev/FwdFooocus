@@ -58,7 +58,7 @@ const FWD_GSAP = (() => {
     /* -- Slide in from direction ------------------------------------ */
 
     function slideIn(target, direction = 'right', duration = 'normal') {
-        const axis = (direction === 'left' || direction === 'right') ? 'x' : 'y';
+        const axis = (direction === 'left' || direction === 'right') ? 'xPercent' : 'yPercent';
         const offset = (direction === 'right' || direction === 'down') ? 100 : -100;
 
         gsap.set(target, { [axis]: offset, opacity: 0 });
@@ -73,7 +73,7 @@ const FWD_GSAP = (() => {
     /* -- Slide out to direction ------------------------------------- */
 
     function slideOut(target, direction = 'right', duration = 'normal') {
-        const axis = (direction === 'left' || direction === 'right') ? 'x' : 'y';
+        const axis = (direction === 'left' || direction === 'right') ? 'xPercent' : 'yPercent';
         const offset = (direction === 'right' || direction === 'down') ? 100 : -100;
 
         return gsap.to(target, {
