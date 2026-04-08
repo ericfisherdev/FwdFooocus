@@ -6,6 +6,7 @@
 #}
 
 <aside class="settings-drawer"
+       x-data="settingsState()"
        x-show="$store.ui.settingsDrawerOpen"
        x-transition:enter="settings-drawer--enter"
        x-transition:enter-start="settings-drawer--enter-start"
@@ -64,25 +65,31 @@
                 <div class="settings-drawer__controls">
                     <div class="settings-drawer__field">
                         <label class="text-label">Base Model</label>
-                        <select class="select" disabled>
-                            <template x-for="m in $store.data.modelList" :key="m">
-                                <option :value="m" x-text="m.replace('.safetensors', '')"
-                                        :selected="m === $store.config.defaultModel"></option>
-                            </template>
-                        </select>
+                        <div class="select-wrapper">
+                            <select class="select" x-model="baseModel">
+                                <template x-for="m in $store.data.modelList" :key="m">
+                                    <option :value="m" x-text="m.replace('.safetensors', '')"></option>
+                                </template>
+                            </select>
+                        </div>
                     </div>
                     <div class="settings-drawer__field">
                         <label class="text-label">Refiner</label>
-                        <select class="select" disabled>
-                            <option value="None">None</option>
-                        </select>
+                        <div class="select-wrapper">
+                            <select class="select" x-model="refinerModel">
+                                <option value="None">None</option>
+                                <template x-for="m in $store.data.modelList" :key="'ref-' + m">
+                                    <option :value="m" x-text="m.replace('.safetensors', '')"></option>
+                                </template>
+                            </select>
+                        </div>
                     </div>
                     <div class="settings-drawer__field">
                         <label class="text-label" for="refiner-switch">Refiner Switch</label>
                         <div style="display: flex; align-items: center; gap: var(--space-2);">
                             <input id="refiner-switch" type="range" class="slider" min="0" max="1" step="0.05"
-                                   :value="$store.config.defaultRefinerSwitch" disabled>
-                            <span class="text-mono" x-text="$store.config.defaultRefinerSwitch"></span>
+                                   x-model.number="refinerSwitch">
+                            <span class="text-mono" x-text="refinerSwitch.toFixed(2)"></span>
                         </div>
                     </div>
                 </div>
@@ -105,42 +112,53 @@
                         <label class="text-label" for="guidance-scale">Guidance Scale</label>
                         <div style="display: flex; align-items: center; gap: var(--space-2);">
                             <input id="guidance-scale" type="range" class="slider" min="1" max="30" step="0.01"
-                                   :value="$store.config.defaultCfgScale" disabled>
-                            <span class="text-mono" x-text="$store.config.defaultCfgScale"></span>
+                                   x-model.number="guidanceScale">
+                            <span class="text-mono" x-text="guidanceScale.toFixed(2)"></span>
                         </div>
                     </div>
                     <div class="settings-drawer__field">
                         <label class="text-label" for="sharpness">Sharpness</label>
                         <div style="display: flex; align-items: center; gap: var(--space-2);">
                             <input id="sharpness" type="range" class="slider" min="0" max="30" step="0.01"
-                                   :value="$store.config.defaultSampleSharpness" disabled>
-                            <span class="text-mono" x-text="$store.config.defaultSampleSharpness"></span>
+                                   x-model.number="sharpness">
+                            <span class="text-mono" x-text="sharpness.toFixed(2)"></span>
                         </div>
                     </div>
                     <div class="settings-drawer__field">
                         <label class="text-label">Sampler</label>
-                        <select class="select" disabled>
-                            <option x-text="$store.config.defaultSampler"></option>
-                        </select>
+                        <div class="select-wrapper">
+                            <select class="select" x-model="sampler">
+                                <template x-for="s in availableSamplers" :key="s">
+                                    <option :value="s" x-text="s"></option>
+                                </template>
+                            </select>
+                        </div>
                     </div>
                     <div class="settings-drawer__field">
                         <label class="text-label">Scheduler</label>
-                        <select class="select" disabled>
-                            <option x-text="$store.config.defaultScheduler"></option>
-                        </select>
+                        <div class="select-wrapper">
+                            <select class="select" x-model="scheduler">
+                                <template x-for="s in availableSchedulers" :key="s">
+                                    <option :value="s" x-text="s"></option>
+                                </template>
+                            </select>
+                        </div>
                     </div>
                     <div class="settings-drawer__field">
                         <label class="text-label" for="clip-skip">CLIP Skip</label>
                         <div style="display: flex; align-items: center; gap: var(--space-2);">
-                            <input id="clip-skip" type="range" class="slider" min="1" max="12" step="1" value="2" disabled>
-                            <span class="text-mono">2</span>
+                            <input id="clip-skip" type="range" class="slider" min="1" max="12" step="1"
+                                   x-model.number="clipSkip">
+                            <span class="text-mono" x-text="clipSkip"></span>
                         </div>
                     </div>
                     <div class="settings-drawer__field">
                         <label class="text-label">VAE</label>
-                        <select class="select" disabled>
-                            <option>Default</option>
-                        </select>
+                        <div class="select-wrapper">
+                            <select class="select" x-model="vae">
+                                <option value="Default (model)">Default (model)</option>
+                            </select>
+                        </div>
                     </div>
                 </div>
             </div>
