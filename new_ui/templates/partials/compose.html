@@ -79,6 +79,7 @@
                 <template x-for="perf in ['Speed', 'Quality', 'Extreme Speed']" :key="perf">
                     <button type="button" class="btn btn-secondary btn-sm"
                             :class="{ 'btn-primary': performance === perf }"
+                            :aria-pressed="(performance === perf).toString()"
                             @click="setPerformance(perf)"
                             x-text="perf === 'Extreme Speed' ? 'Extreme' : perf"></button>
                 </template>
@@ -111,6 +112,7 @@
                 <template x-for="fmt in ['png', 'webp', 'jpeg']" :key="fmt">
                     <button type="button" class="btn btn-secondary btn-sm"
                             :class="{ 'btn-primary': outputFormat === fmt }"
+                            :aria-pressed="(outputFormat === fmt).toString()"
                             @click="outputFormat = fmt"
                             x-text="fmt.toUpperCase()"></button>
                 </template>
@@ -122,11 +124,13 @@
                 <button type="button" class="btn btn-sm"
                         :class="randomSeed ? 'btn-primary' : 'btn-secondary'"
                         @click="toggleRandomSeed()"
-                        title="Random seed">🎲</button>
+                        title="Random seed"
+                        aria-label="Use random seed">🎲</button>
                 <input type="number" class="input input-sm text-mono"
                        :value="effectiveSeed"
                        :disabled="randomSeed"
                        @change="seed = parseInt($event.target.value) || 0"
+                       aria-label="Seed value"
                        style="flex: 1;">
             </div>
         </div>
@@ -134,14 +138,17 @@
             <label class="text-label">Styles</label>
             <button type="button" class="btn btn-secondary btn-sm"
                     @click="stylesOpen = !stylesOpen"
+                    :aria-expanded="stylesOpen.toString()"
+                    aria-controls="styles-dropdown"
                     style="width: 100%; justify-content: flex-start;">
                 <span x-text="selectedStyleCount > 0 ? selectedStyleCount + ' selected' : 'Browse styles...'"></span>
             </button>
-            <div class="styles-dropdown" x-show="stylesOpen" x-cloak
+            <div class="styles-dropdown" id="styles-dropdown" x-show="stylesOpen" x-cloak
                  @click.outside="stylesOpen = false"
                  @keydown.escape="stylesOpen = false">
                 <input type="search" class="input input-sm" placeholder="Search styles..."
-                       x-model="styleSearch" style="margin-bottom: var(--space-2);">
+                       x-model="styleSearch" aria-label="Search styles"
+                       style="margin-bottom: var(--space-2);">
                 <div class="styles-dropdown__list">
                     <template x-for="style in filteredStyles" :key="style">
                         <label class="styles-dropdown__item">

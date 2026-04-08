@@ -21,14 +21,46 @@ function quickSettings() {
         styleSearch: '',
 
         init() {
-            const cfg = Alpine.store('config');
-            this.performance = cfg.defaultPerformance || 'Speed';
-            this.aspectRatio = cfg.defaultAspectRatio || '';
-            this.imageNumber = cfg.defaultImageNumber || 2;
-            this.outputFormat = cfg.defaultOutputFormat || 'png';
-            this.selectedStyles = [...(cfg.defaultStyles || [])];
-            this.seed = -1;
-            this.randomSeed = true;
+            const applyDefaults = () => {
+                if (this._defaultsApplied) return;
+                this._defaultsApplied = true;
+                const cfg = Alpine.store('config');
+                this.performance = cfg.defaultPerformance || 'Speed';
+                this.aspectRatio = cfg.defaultAspectRatio || '';
+                this.imageNumber = cfg.defaultImageNumber || 2;
+                this.outputFormat = cfg.defaultOutputFormat || 'png';
+                this.selectedStyles = [...(cfg.defaultStyles || [])];
+                this.seed = -1;
+                this.randomSeed = true;
+                this._syncToStore();
+            };
+
+            if (Alpine.store('config').loaded) {
+                applyDefaults();
+            } else {
+                this.$watch('$store.config.loaded', (loaded) => {
+                    if (loaded) applyDefaults();
+                });
+            }
+
+            // Keep shared store in sync whenever any quick setting changes.
+            const watchedKeys = ['performance', 'aspectRatio', 'imageNumber',
+                                 'outputFormat', 'seed', 'randomSeed', 'selectedStyles'];
+            watchedKeys.forEach((key) => {
+                this.$watch(key, () => this._syncToStore());
+            });
+        },
+
+        /** Push current quick-settings values into $store.generation so
+         *  the Generate button (outside this component) can read them. */
+        _syncToStore() {
+            const gen = Alpine.store('generation');
+            gen.performance = this.performance;
+            gen.aspectRatio = this.aspectRatio;
+            gen.imageNumber = this.imageNumber;
+            gen.outputFormat = this.outputFormat;
+            gen.seed = this.effectiveSeed;
+            gen.selectedStyles = [...this.selectedStyles];
         },
 
         get effectiveSeed() {
