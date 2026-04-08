@@ -1,0 +1,145 @@
+/*
+ * Settings Drawer CSS
+ *
+ * 320px panel that slides between compose and gallery panes.
+ * Spec: screen-spec-generation.md Section 7, Tier 3
+ */
+
+.settings-drawer {
+    width: 320px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--surface-raised);
+    border-left: 1px solid var(--border-default);
+    border-right: 1px solid var(--border-default);
+    overflow: hidden;
+}
+
+/* -- Slide transitions ------------------------------------------ */
+
+.settings-drawer--enter {
+    transition: width var(--duration-normal) var(--ease-out),
+                opacity var(--duration-normal) var(--ease-out);
+}
+.settings-drawer--enter-start {
+    width: 0;
+    opacity: 0;
+}
+.settings-drawer--enter-end {
+    width: 320px;
+    opacity: 1;
+}
+
+.settings-drawer--leave {
+    transition: width var(--duration-normal) var(--ease-in),
+                opacity var(--duration-normal) var(--ease-in);
+}
+.settings-drawer--leave-start {
+    width: 320px;
+    opacity: 1;
+}
+.settings-drawer--leave-end {
+    width: 0;
+    opacity: 0;
+}
+
+
+/* -- Header ----------------------------------------------------- */
+
+.settings-drawer__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-4) var(--space-4) var(--space-2);
+    flex-shrink: 0;
+}
+
+
+/* -- Feature toggles -------------------------------------------- */
+
+.settings-drawer__toggles {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-4) var(--space-3);
+    border-bottom: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+}
+
+.settings-drawer__toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+}
+
+
+/* -- Scrollable body -------------------------------------------- */
+
+.settings-drawer__body {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--space-3) var(--space-4) var(--space-4);
+}
+
+
+/* -- Sections --------------------------------------------------- */
+
+.settings-drawer__section {
+    margin-bottom: var(--space-2);
+}
+
+.settings-drawer__section .collapsible-header {
+    padding: var(--space-2) 0;
+}
+
+.settings-drawer__controls {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-2) 0 var(--space-3);
+}
+
+.settings-drawer__field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+
+/* -- Inline toggle (label + switch on same row) ----------------- */
+
+.settings-drawer__toggle-inline {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+}
+
+
+/* -- Desktop narrow: overlay gallery instead -------------------- */
+
+@media (max-width: 1023px) {
+    .settings-drawer {
+        position: absolute;
+        right: 0;
+        top: 0;
+        bottom: 0;
+        z-index: 50;
+        box-shadow: var(--shadow-lg);
+    }
+}
+
+/* -- Tablet: full width ----------------------------------------- */
+
+@media (max-width: 767px) {
+    .settings-drawer {
+        width: 100%;
+        position: fixed;
+        top: 32px;
+        left: 0;
+        right: 0;
+        bottom: 0;
+    }
+}
