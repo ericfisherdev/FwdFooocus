@@ -71,24 +71,7 @@
         <!-- COMPOSE PANE (left) -->
         <section class="split-pane__compose" role="region" aria-label="Compose">
             {% block compose %}
-            <div class="compose-slot compose-slot--placeholder" data-slot="prompt-positive">
-                <span class="text-label">Prompt Editor</span>
-            </div>
-            <div class="compose-slot compose-slot--placeholder" data-slot="prompt-negative">
-                <span class="text-label">Negative Prompt</span>
-            </div>
-            <div class="compose-slot compose-slot--placeholder" data-slot="quick-settings">
-                <span class="text-label">Quick Settings</span>
-            </div>
-            <div class="compose-slot compose-slot--placeholder" data-slot="lora-slots">
-                <span class="text-label">LoRA Slots</span>
-            </div>
-            <div class="compose-slot compose-slot--placeholder" data-slot="generate-row">
-                <span class="text-label">Generate</span>
-            </div>
-            <div class="compose-slot compose-slot--placeholder" data-slot="queue-panel">
-                <span class="text-label">Queue</span>
-            </div>
+            {% include "partials/compose.html" %}
             {% endblock %}
         </section>
 
@@ -107,13 +90,7 @@
         <!-- GALLERY PANE (right) -->
         <section class="split-pane__gallery" role="complementary" aria-label="Image gallery">
             {% block gallery %}
-            <div class="gallery-header">
-                <span class="text-body-muted">0 images</span>
-            </div>
-            <div class="gallery-empty">
-                <p class="text-heading-lg">Generate an image to see it here.</p>
-                <p class="text-body-muted">Your results will appear in this panel.</p>
-            </div>
+            {% include "partials/gallery.html" %}
             {% endblock %}
         </section>
 
