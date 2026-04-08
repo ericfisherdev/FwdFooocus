@@ -147,6 +147,174 @@ async def get_styles():
     return {"styles": legal_style_names}
 
 
+@app.get("/api/samplers")
+async def get_samplers():
+    """Return available sampler and scheduler names."""
+    from modules.flags import sampler_list, scheduler_list
+    return {"samplers": sampler_list, "schedulers": scheduler_list}
+
+
+# ---------------------------------------------------------------------------
+# Generation — POST /api/generate
+# ---------------------------------------------------------------------------
+
+def _build_generate_args(body: dict) -> list:
+    """
+    Build the positional args list that AsyncTask.__init__ expects.
+
+    The args list is consumed via reverse() + pop() so we build it
+    in the same order that webui.py's generate_clicked() does.
+    Params not exposed by the new UI yet get sensible defaults.
+    """
+    from modules.config import (
+        default_max_lora_number, default_controlnet_image_count,
+        default_enhance_tabs,
+    )
+    from modules.flags import disabled
+
+    loras_input = body.get("loras", [])
+    # Pad to default_max_lora_number slots: (enabled, filename, weight)
+    lora_args = []
+    for i in range(default_max_lora_number):
+        if i < len(loras_input):
+            entry = loras_input[i]
+            lora_args.extend([True, entry.get("filename", "None"), float(entry.get("weight", 1.0))])
+        else:
+            lora_args.extend([False, "None", 1.0])
+
+    # ControlNet image slots (all empty for now)
+    cn_args = []
+    for _ in range(default_controlnet_image_count):
+        cn_args.extend([None, 0.5, 1.0, disabled])  # img, stop, weight, type
+
+    # Enhance tabs (all disabled for now)
+    enhance_args = []
+    for _ in range(default_enhance_tabs):
+        enhance_args.extend([
+            False,   # enhance_enabled
+            '',      # enhance_mask_dino_prompt_text
+            '',      # enhance_prompt
+            '',      # enhance_negative_prompt
+            'u2net', # enhance_mask_model
+            'full',  # enhance_mask_cloth_category
+            'sam_vit_b_01ec64', # enhance_mask_sam_model
+            0.25,    # enhance_mask_text_threshold
+            0.3,     # enhance_mask_box_threshold
+            0,       # enhance_mask_sam_max_detections
+            False,   # enhance_inpaint_disable_initial_latent
+            'None',  # enhance_inpaint_engine
+            1.0,     # enhance_inpaint_strength
+            0.618,   # enhance_inpaint_respective_field
+            0,       # enhance_inpaint_erode_or_dilate
+            False,   # enhance_mask_invert
+        ])
+
+    args = [
+        body.get("generate_image_grid", False),
+        body.get("prompt", ""),
+        body.get("negative_prompt", ""),
+        body.get("style_selections", []),
+        body.get("performance", "Speed"),
+        body.get("aspect_ratios_selection", config.default_aspect_ratio),
+        int(body.get("image_number", 2)),
+        body.get("output_format", "png"),
+        int(body.get("seed", -1)),
+        body.get("read_wildcards_in_order", False),
+        float(body.get("sharpness", config.default_sample_sharpness)),
+        float(body.get("cfg_scale", config.default_cfg_scale)),
+        body.get("base_model_name", config.default_base_model_name),
+        body.get("refiner_model_name", config.default_refiner_model_name),
+        float(body.get("refiner_switch", config.default_refiner_switch)),
+        *lora_args,
+        body.get("input_image_checkbox", False),
+        body.get("current_tab", "uov"),
+        body.get("uov_method", disabled),
+        None,  # uov_input_image
+        [],    # outpaint_selections
+        None,  # inpaint_input_image (dict with image+mask)
+        "",    # inpaint_additional_prompt
+        None,  # inpaint_mask_image_upload
+        # Developer/debug settings
+        body.get("disable_preview", False),
+        body.get("disable_intermediate_results", False),
+        body.get("disable_seed_increment", False),
+        body.get("black_out_nsfw", False),
+        float(body.get("adm_scaler_positive", 1.5)),
+        float(body.get("adm_scaler_negative", 0.8)),
+        float(body.get("adm_scaler_end", 0.3)),
+        float(body.get("adaptive_cfg", 7.0)),
+        int(body.get("clip_skip", 2)),
+        body.get("sampler_name", config.default_sampler),
+        body.get("scheduler_name", config.default_scheduler),
+        body.get("vae_name", "Default (model)"),
+        int(body.get("overwrite_step", -1)),
+        int(body.get("overwrite_switch", -1)),
+        int(body.get("overwrite_width", -1)),
+        int(body.get("overwrite_height", -1)),
+        float(body.get("overwrite_vary_strength", -1)),
+        float(body.get("overwrite_upscale_strength", -1)),
+        body.get("mixing_image_prompt_and_vary_upscale", False),
+        body.get("mixing_image_prompt_and_inpaint", False),
+        body.get("debugging_cn_preprocessor", False),
+        body.get("skipping_cn_preprocessor", False),
+        int(body.get("canny_low_threshold", 64)),
+        int(body.get("canny_high_threshold", 128)),
+        body.get("refiner_swap_method", "joint"),
+        float(body.get("controlnet_softness", 0.25)),
+        body.get("freeu_enabled", False),
+        float(body.get("freeu_b1", 1.01)),
+        float(body.get("freeu_b2", 1.02)),
+        float(body.get("freeu_s1", 0.99)),
+        float(body.get("freeu_s2", 0.95)),
+        body.get("debugging_inpaint_preprocessor", False),
+        body.get("inpaint_disable_initial_latent", False),
+        body.get("inpaint_engine", "None"),
+        float(body.get("inpaint_strength", 1.0)),
+        float(body.get("inpaint_respective_field", 0.618)),
+        body.get("inpaint_advanced_masking_checkbox", False),
+        body.get("invert_mask_checkbox", False),
+        int(body.get("inpaint_erode_or_dilate", 0)),
+        body.get("save_final_enhanced_image_only", False),
+        body.get("save_metadata_to_images", True),
+        body.get("metadata_scheme", "fooocus"),
+        *cn_args,
+        # DINO / enhance
+        body.get("debugging_dino", False),
+        int(body.get("dino_erode_or_dilate", 0)),
+        body.get("debugging_enhance_masks_checkbox", False),
+        None,  # enhance_input_image
+        body.get("enhance_checkbox", False),
+        body.get("enhance_uov_method", disabled),
+        body.get("enhance_uov_processing_order", "Before First Enhancement"),
+        body.get("enhance_uov_prompt_type", "original"),
+        *enhance_args,
+    ]
+    return args
+
+
+@app.post("/api/generate")
+async def generate(request: Request):
+    """Submit a generation job to the async task queue."""
+    from modules.async_worker import AsyncTask, async_tasks
+
+    body = await request.json()
+    args = _build_generate_args(body)
+    task = AsyncTask(args)
+    async_tasks.append(task)
+    return {"queued": True}
+
+
+@app.post("/api/generate/stop")
+async def generate_stop():
+    """Stop the current generation."""
+    from modules.async_worker import async_tasks
+    for task in async_tasks:
+        if task.processing:
+            task.last_stop = True
+            return {"stopped": True}
+    return {"stopped": False}
+
+
 # ---------------------------------------------------------------------------
 # WebSocket — generation progress streaming
 # ---------------------------------------------------------------------------
