@@ -31,6 +31,27 @@
     </div>
 </div>
 
+<!-- Missing Trigger Detection Bar -->
+<div x-data="missingTriggers()" x-show="hasMissing" x-cloak>
+    <div class="missing-triggers" role="alert" aria-live="polite">
+        <template x-for="mt in missing" :key="mt.loraFilename + mt.triggerWord">
+            <div class="missing-triggers__item">
+                <span class="missing-triggers__icon text-caption">⚠</span>
+                <span class="missing-triggers__text text-caption">
+                    Missing trigger: "<span class="missing-triggers__word"
+                    :style="`color: ${mt.loraColor}`"
+                    x-text="mt.triggerWord"></span>"
+                    (<span x-text="displayName(mt.loraFilename)"></span>)
+                </span>
+                <button type="button"
+                        class="missing-triggers__insert"
+                        @click="insertTrigger(mt.triggerWord)"
+                        :aria-label="`Insert trigger word '${mt.triggerWord}' for ${displayName(mt.loraFilename)}`">+</button>
+            </div>
+        </template>
+    </div>
+</div>
+
 <!-- Negative Prompt (collapsible) -->
 <div class="compose__negative-prompt"
      x-data="{ negOpen: false }">
