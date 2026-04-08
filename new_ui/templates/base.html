@@ -42,7 +42,7 @@
             <span class="text-caption status-bar__sep">&middot;</span>
             <span class="text-caption status-bar__connection"
                   x-text="$store.generation.isGenerating ? ('Generating ' + $store.generation.currentImage + '/' + $store.generation.totalImages) : 'Connected'"
-                  :data-state="$store.generation.isGenerating ? 'connected' : 'connected'"></span>
+                  :data-state="$store.ui.connectionState"></span>
             {% endblock %}
         </div>
         <div class="status-bar__right">

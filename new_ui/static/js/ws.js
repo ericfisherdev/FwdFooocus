@@ -29,8 +29,7 @@ document.addEventListener('alpine:init', () => {
 
     function setConnectionState(state) {
         connectionState = state;
-        // Dispatch a custom event so the status bar can react
-        window.dispatchEvent(new CustomEvent('ws-state-changed', { detail: { state } }));
+        Alpine.store('ui').connectionState = state;
     }
 
     function connect() {
