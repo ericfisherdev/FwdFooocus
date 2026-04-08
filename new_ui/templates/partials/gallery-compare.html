@@ -1,0 +1,85 @@
+{#
+  Gallery Comparison Mode — included inside the gallery component.
+  Shows when exactly 2 images are selected.
+  Spec: component-spec-gallery.md (Comparison View)
+#}
+
+<div class="gallery-compare"
+     x-data="{
+         get imageA() { return $root.__x.$data.images[$root.__x.$data.selectedImages[0]]; },
+         get imageB() { return $root.__x.$data.images[$root.__x.$data.selectedImages[1]]; },
+         get diff() {
+             if (!this.imageA || !this.imageB) return [];
+             return GalleryCompare.computeDiff(
+                 this.imageA.metadata || {},
+                 this.imageB.metadata || {}
+             );
+         },
+         exitCompare() {
+             $root.__x.$data.selectedImages = [];
+         },
+         navNext() {
+             const imgs = $root.__x.$data.images;
+             const sel = $root.__x.$data.selectedImages;
+             if (sel[1] < imgs.length - 1) sel[1]++;
+         },
+         navPrev() {
+             const imgs = $root.__x.$data.images;
+             const sel = $root.__x.$data.selectedImages;
+             if (sel[1] > 0 && sel[1] !== sel[0]) sel[1]--;
+         },
+     }"
+     @keydown.escape="exitCompare()"
+     @keydown.left="navPrev()"
+     @keydown.right="navNext()">
+
+    <!-- Side-by-side images -->
+    <div class="gallery-compare__images">
+        <div class="gallery-compare__side">
+            <template x-if="imageA">
+                <img class="gallery-compare__img"
+                     :src="$root.__x.$data.imageUrl ? $root.__x.$data.imageUrl(imageA) : imageA.url"
+                     alt="Comparison image A">
+            </template>
+            <span class="text-caption gallery-compare__label">Image A</span>
+        </div>
+        <div class="gallery-compare__side">
+            <template x-if="imageB">
+                <img class="gallery-compare__img"
+                     :src="$root.__x.$data.imageUrl ? $root.__x.$data.imageUrl(imageB) : imageB.url"
+                     alt="Comparison image B">
+            </template>
+            <span class="text-caption gallery-compare__label">Image B</span>
+        </div>
+    </div>
+
+    <!-- Metadata diff (only differing values) -->
+    <template x-if="diff.length > 0">
+        <div class="gallery-compare__diff">
+            <template x-for="row in diff" :key="row.key">
+                <template x-fragment>
+                    <span class="text-label gallery-compare__diff-key"
+                          x-text="GalleryCompare.formatKey(row.key)"></span>
+                    <span class="text-body-sm gallery-compare__diff-val gallery-compare__diff-val--changed"
+                          x-text="GalleryCompare.formatValue(row.valueA)"></span>
+                    <span class="text-body-sm gallery-compare__diff-val gallery-compare__diff-val--changed"
+                          x-text="GalleryCompare.formatValue(row.valueB)"></span>
+                </template>
+            </template>
+        </div>
+    </template>
+
+    <!-- Footer -->
+    <div class="gallery-compare__footer">
+        <button type="button" class="btn btn-ghost btn-sm"
+                @click="navPrev()"
+                aria-label="Previous image">&#9664;</button>
+        <button type="button" class="btn btn-ghost btn-sm"
+                @click="navNext()"
+                aria-label="Next image">&#9654;</button>
+        <button type="button" class="btn btn-secondary btn-sm"
+                @click="exitCompare()">
+            Exit Compare
+        </button>
+    </div>
+</div>
