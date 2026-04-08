@@ -18,6 +18,8 @@
     <!-- HTMX -->
     <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.4/dist/htmx.min.js"></script>
 
+    <!-- App JS -->
+    <script src="/static/js/split-pane.js"></script>
 </head>
 <body class="fwd" x-data>
 
@@ -81,6 +83,9 @@
 
         <!-- DRAG HANDLE -->
         <div class="split-pane__handle"
+             x-data="splitPane()"
+             @mousedown="startDrag"
+             @keydown="onKeyDown"
              role="separator"
              aria-orientation="vertical"
              aria-label="Resize panels"
