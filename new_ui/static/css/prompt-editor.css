@@ -1,0 +1,45 @@
+/*
+ * Prompt Editor CSS
+ * Spec: component-spec-prompt-editor.md
+ */
+
+.prompt-editor__wrapper {
+    position: relative;
+    background: var(--surface-raised);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    transition: border-color var(--duration-fast) var(--ease-default);
+}
+
+.prompt-editor__wrapper--focused {
+    border-color: var(--border-focus);
+    box-shadow: var(--shadow-focus);
+}
+
+.prompt-editor__input {
+    min-height: 80px;
+    padding: var(--space-3) var(--space-4);
+    outline: none;
+    resize: vertical;
+    overflow: auto;
+    word-wrap: break-word;
+    white-space: pre-wrap;
+}
+
+.prompt-editor__input--negative {
+    min-height: 48px;
+}
+
+.prompt-editor__placeholder {
+    position: absolute;
+    top: var(--space-3);
+    left: var(--space-4);
+    pointer-events: none;
+    user-select: none;
+}
+
+/* Trigger word highlight marks (used by FWDF-104) */
+.prompt-editor__input mark {
+    border-radius: 2px;
+    padding: 0 1px;
+}
