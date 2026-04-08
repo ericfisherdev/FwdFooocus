@@ -1,7 +1,7 @@
 /*
  * FwdFooocus Named Text Styles
  *
- * 18 named styles covering every text element in the UI.
+ * 19 named styles covering every text element in the UI.
  * All line-heights snapped to 4px grid. No fluid/clamp sizing.
  * Spec: research/typography-system.md
  */
@@ -13,7 +13,7 @@
     font-family: var(--font-sans);
     font-size: var(--text-xl);           /* 20px */
     font-weight: var(--font-semibold);
-    line-height: 1.75rem;                /* 28px – snapped */
+    line-height: var(--lh-28);           /* 28px – snapped */
     letter-spacing: var(--tracking-tight);
     color: var(--text-default);
 }
@@ -22,7 +22,7 @@
     font-family: var(--font-sans);
     font-size: var(--text-lg);           /* 16px */
     font-weight: var(--font-semibold);
-    line-height: 1.25rem;                /* 20px – snapped */
+    line-height: var(--lh-20);           /* 20px – snapped */
     letter-spacing: var(--tracking-normal);
     color: var(--text-default);
 }
@@ -31,7 +31,7 @@
     font-family: var(--font-sans);
     font-size: var(--text-base);         /* 14px */
     font-weight: var(--font-semibold);
-    line-height: 1.25rem;                /* 20px – snapped */
+    line-height: var(--lh-20);           /* 20px – snapped */
     letter-spacing: var(--tracking-normal);
     color: var(--text-default);
 }
@@ -43,7 +43,7 @@
     font-family: var(--font-sans);
     font-size: var(--text-base);         /* 14px */
     font-weight: var(--font-normal);
-    line-height: 1.25rem;                /* 20px – snapped */
+    line-height: var(--lh-20);           /* 20px – snapped */
     letter-spacing: var(--tracking-normal);
     color: var(--text-default);
 }
@@ -52,7 +52,7 @@
     font-family: var(--font-sans);
     font-size: var(--text-sm);           /* 13px */
     font-weight: var(--font-normal);
-    line-height: 1.25rem;                /* 20px – snapped */
+    line-height: var(--lh-20);           /* 20px – snapped */
     letter-spacing: var(--tracking-normal);
     color: var(--text-default);
 }
@@ -61,7 +61,7 @@
     font-family: var(--font-sans);
     font-size: var(--text-sm);           /* 13px */
     font-weight: var(--font-normal);
-    line-height: 1.25rem;                /* 20px – snapped */
+    line-height: var(--lh-20);           /* 20px – snapped */
     letter-spacing: var(--tracking-normal);
     color: var(--text-muted);
 }
@@ -73,7 +73,7 @@
     font-family: var(--font-sans);
     font-size: var(--text-base);         /* 14px */
     font-weight: var(--font-normal);
-    line-height: 1.5rem;                 /* 24px – snapped */
+    line-height: var(--lh-24);           /* 24px – snapped */
     letter-spacing: var(--tracking-normal);
     color: var(--text-default);
 }
@@ -85,7 +85,7 @@
     font-family: var(--font-sans);
     font-size: var(--text-xs);           /* 12px */
     font-weight: var(--font-medium);
-    line-height: 1rem;                   /* 16px – snapped */
+    line-height: var(--lh-16);           /* 16px – snapped */
     letter-spacing: var(--tracking-wide);
     color: var(--text-muted);
 }
@@ -94,7 +94,7 @@
     font-family: var(--font-sans);
     font-size: var(--text-xs);           /* 12px */
     font-weight: var(--font-semibold);
-    line-height: 1rem;                   /* 16px – snapped */
+    line-height: var(--lh-16);           /* 16px – snapped */
     letter-spacing: var(--tracking-wide);
     color: var(--text-default);
 }
@@ -106,7 +106,7 @@
     font-family: var(--font-sans);
     font-size: var(--text-xs);           /* 12px */
     font-weight: var(--font-normal);
-    line-height: 1rem;                   /* 16px – snapped */
+    line-height: var(--lh-16);           /* 16px – snapped */
     letter-spacing: var(--tracking-normal);
     color: var(--text-muted);
 }
@@ -115,7 +115,7 @@
     font-family: var(--font-sans);
     font-size: var(--text-xs);           /* 12px */
     font-weight: var(--font-medium);
-    line-height: 0.75rem;               /* 12px – snapped */
+    line-height: var(--lh-12);           /* 12px – snapped */
     letter-spacing: var(--tracking-wide);
     color: var(--text-default);
 }
@@ -127,7 +127,7 @@
     font-family: var(--font-mono);
     font-size: var(--text-xs);           /* 12px */
     font-weight: var(--font-medium);
-    line-height: 1rem;                   /* 16px – snapped */
+    line-height: var(--lh-16);           /* 16px – snapped */
     letter-spacing: var(--tracking-normal);
     color: var(--text-default);
 }
@@ -136,7 +136,7 @@
     font-family: var(--font-mono);
     font-size: var(--text-2xs);          /* 11px */
     font-weight: var(--font-normal);
-    line-height: 1rem;                   /* 16px – snapped */
+    line-height: var(--lh-16);           /* 16px – snapped */
     letter-spacing: var(--tracking-normal);
     color: var(--text-muted);
 }
@@ -148,7 +148,7 @@
     font-family: var(--font-sans);
     font-size: var(--text-base);         /* 14px */
     font-weight: var(--font-normal);
-    line-height: 1.25rem;                /* 20px – snapped */
+    line-height: var(--lh-20);           /* 20px – snapped */
     letter-spacing: var(--tracking-normal);
     color: var(--text-default);
 }
@@ -157,7 +157,7 @@
     font-family: var(--font-sans);
     font-size: var(--text-sm);           /* 13px */
     font-weight: var(--font-normal);
-    line-height: 1.25rem;                /* 20px – snapped */
+    line-height: var(--lh-20);           /* 20px – snapped */
     letter-spacing: var(--tracking-normal);
     color: var(--text-default);
 }
@@ -166,7 +166,7 @@
     font-family: var(--font-sans);
     font-size: var(--text-base);         /* 14px */
     font-weight: var(--font-normal);
-    line-height: 1.25rem;                /* 20px – snapped */
+    line-height: var(--lh-20);           /* 20px – snapped */
     letter-spacing: var(--tracking-normal);
     color: var(--text-muted);
 }
@@ -178,7 +178,7 @@
     font-family: var(--font-sans);
     font-size: var(--text-base);         /* 14px */
     font-weight: var(--font-semibold);
-    line-height: 1rem;                   /* 16px – snapped */
+    line-height: var(--lh-16);           /* 16px – snapped */
     letter-spacing: var(--tracking-normal);
     color: var(--text-on-accent);
 }
@@ -187,7 +187,7 @@
     font-family: var(--font-sans);
     font-size: var(--text-xs);           /* 12px */
     font-weight: var(--font-medium);
-    line-height: 0.75rem;               /* 12px – snapped */
+    line-height: var(--lh-12);           /* 12px – snapped */
     letter-spacing: var(--tracking-wide);
     color: var(--text-default);
 }
@@ -199,7 +199,7 @@
     font-family: var(--font-sans);
     font-size: var(--text-xs);           /* 12px */
     font-weight: var(--font-semibold);
-    line-height: 1rem;                   /* 16px – snapped */
+    line-height: var(--lh-16);           /* 16px – snapped */
     letter-spacing: var(--tracking-wider);
     text-transform: uppercase;
     color: var(--text-muted);

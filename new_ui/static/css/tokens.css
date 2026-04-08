@@ -141,10 +141,17 @@
     --font-semibold: 600;
     --font-bold:     700;
 
-    /* Line heights (snapped to 4px grid) */
+    /* Line heights – ratio-based (for general use) */
     --leading-tight:   1.25;
     --leading-normal:  1.5;
     --leading-relaxed: 1.6;
+
+    /* Line heights – snapped to 4px grid (for named text styles) */
+    --lh-12: 0.75rem;    /* 12px */
+    --lh-16: 1rem;       /* 16px */
+    --lh-20: 1.25rem;    /* 20px */
+    --lh-24: 1.5rem;     /* 24px */
+    --lh-28: 1.75rem;    /* 28px */
 
     /* Letter spacing */
     --tracking-tight:  -0.01em;
