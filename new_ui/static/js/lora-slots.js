@@ -23,15 +23,24 @@ function loraSlots() {
         maxSlots: 5,
 
         init() {
-            this.maxSlots = Alpine.store('config').defaultMaxLoraNumber || 5;
-
-            // Initialize from config defaults
-            const defaults = Alpine.store('config').defaultLoras || [];
-            defaults.forEach(([filename, weight]) => {
-                if (filename && filename !== 'None') {
-                    this.addLora(filename, weight, true);
-                }
-            });
+            const applyDefaults = () => {
+                const config = Alpine.store('config');
+                this.maxSlots = config.defaultMaxLoraNumber ?? 5;
+                (config.defaultLoras || []).forEach(([filename, weight]) => {
+                    if (filename && filename !== 'None') {
+                        this.addLora(filename, weight, true);
+                    }
+                });
+            };
+            if (Alpine.store('config').loaded) {
+                applyDefaults();
+            } else {
+                this.$watch('$store.config.loaded', (loaded) => {
+                    if (loaded && this.slots.length === 0) {
+                        applyDefaults();
+                    }
+                });
+            }
         },
 
         get availableLoras() {
@@ -49,29 +58,29 @@ function loraSlots() {
             if (!this.canAdd) return;
             if (this.slots.some(s => s.filename === filename)) return;
 
-            const colorIndex = this.slots.length % LORA_COLORS.length;
             const slot = {
                 filename,
                 weight,
-                color: LORA_COLORS[colorIndex],
+                color: LORA_COLORS[this.slots.length % LORA_COLORS.length],
                 triggerWords: [],
                 slotIndex: this.slots.length,
             };
-
-            // Fetch trigger words
-            try {
-                const resp = await fetch(`/api/lora-trigger-words?filename=${encodeURIComponent(filename)}`);
-                if (resp.ok) {
-                    const data = await resp.json();
-                    slot.triggerWords = data.trigger_words || [];
-                }
-            } catch { /* non-critical */ }
-
             this.slots.push(slot);
 
             if (!skipEvent) {
                 this._dispatchChanged(slot);
             }
+
+            try {
+                const resp = await fetch(`/api/lora-trigger-words?filename=${encodeURIComponent(filename)}`);
+                if (resp.ok) {
+                    const data = await resp.json();
+                    slot.triggerWords = data.trigger_words || [];
+                    if (!skipEvent) {
+                        this._dispatchChanged(slot);
+                    }
+                }
+            } catch { /* non-critical */ }
         },
 
         removeLora(index) {
@@ -88,12 +97,20 @@ function loraSlots() {
                 // Re-dispatch all remaining so colors update
                 this.slots.forEach(s => this._dispatchChanged(s));
             }
+            // Always notify listeners that LoRA set changed (covers empty-list case)
+            window.dispatchEvent(new CustomEvent('lora-changed', {
+                detail: { slots: this.slots.map(s => ({ ...s })) },
+            }));
         },
 
         updateWeight(index, weight) {
             const slot = this.slots[index];
             if (!slot) return;
-            slot.weight = parseFloat(weight) || 0;
+            const config = Alpine.store('config');
+            const minWeight = config.defaultLorasMinWeight ?? -2;
+            const maxWeight = config.defaultLorasMaxWeight ?? 5;
+            const val = parseFloat(weight) || 0;
+            slot.weight = Math.min(Math.max(val, minWeight), maxWeight);
             this._dispatchChanged(slot);
         },
 
