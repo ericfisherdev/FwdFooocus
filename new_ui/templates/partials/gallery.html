@@ -1,0 +1,33 @@
+{#
+  Gallery pane content — right side of split-pane.
+  Shows image grid, live preview during generation, and empty state.
+  Will be replaced by real Gallery component in Generation Core phase.
+#}
+
+<!-- Gallery Header -->
+<div class="gallery-header">
+    <div class="gallery-header__left">
+        <select class="select" style="width: auto; min-width: 80px;" disabled>
+            <option>All</option>
+        </select>
+    </div>
+    <div class="gallery-header__right" style="display: flex; align-items: center; gap: var(--space-2);">
+        <div class="gallery-header__view-modes" style="display: flex; gap: var(--space-1);">
+            <button class="btn btn-ghost btn-sm" aria-pressed="true" aria-label="Grid view" disabled>Grid</button>
+            <button class="btn btn-ghost btn-sm" aria-pressed="false" aria-label="List view" disabled>List</button>
+        </div>
+        <span class="text-body-muted gallery-header__count"
+              x-text="'0 images'"></span>
+    </div>
+</div>
+
+<!-- Image Grid (empty state) -->
+<div class="gallery-grid" style="display: none;">
+    {# Thumbnails will be injected here by the Gallery component #}
+</div>
+
+<!-- Empty State -->
+<div class="gallery-empty">
+    <p class="text-heading-lg">Generate an image to see it here.</p>
+    <p class="text-body-muted">Your results will appear in this panel.</p>
+</div>
