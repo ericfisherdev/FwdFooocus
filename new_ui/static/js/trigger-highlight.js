@@ -44,16 +44,27 @@ const TriggerHighlight = (() => {
         );
         const regex = new RegExp(`\\b(${escaped.join('|')})\\b`, 'gi');
 
-        // Replace matches with <mark> spans
-        return escapeHTML(plainText).replace(regex, (match) => {
-            const entry = triggerMap.get(match.toLowerCase());
-            if (!entry) return match;
+        // Apply regex to plain text first, then escape non-matched segments
+        let result = '';
+        let lastIndex = 0;
+        let m;
+        while ((m = regex.exec(plainText)) !== null) {
+            const entry = triggerMap.get(m[0].toLowerCase());
+            if (!entry) {
+                result += escapeHTML(plainText.slice(lastIndex, m.index + m[0].length));
+                lastIndex = m.index + m[0].length;
+                continue;
+            }
             const bg = hexToRGBA(entry.color, 0.2);
             const border = resolveColor(entry.color);
             const safeWord = escapeAttribute(entry.word);
             const safeLoraName = escapeAttribute(entry.loraName);
-            return `<mark style="background:${bg};border-bottom:2px solid ${border};border-radius:2px;padding:0 1px;" title="${safeWord} — trigger for ${safeLoraName}">${match}</mark>`;
-        });
+            result += escapeHTML(plainText.slice(lastIndex, m.index));
+            result += `<mark style="background:${bg};border-bottom:2px solid ${border};border-radius:2px;padding:0 1px;" title="${safeWord} — trigger for ${safeLoraName}">${escapeHTML(m[0])}</mark>`;
+            lastIndex = m.index + m[0].length;
+        }
+        result += escapeHTML(plainText.slice(lastIndex));
+        return result;
     }
 
     /**
@@ -114,8 +125,11 @@ const TriggerHighlight = (() => {
      */
     function resolveColor(cssValue) {
         if (!cssValue.startsWith('var(')) return cssValue;
-        const prop = cssValue.slice(4, -1);
-        return getComputedStyle(document.documentElement).getPropertyValue(prop).trim() || cssValue;
+        const inner = cssValue.slice(4, -1);
+        const commaIdx = inner.indexOf(',');
+        const prop = commaIdx >= 0 ? inner.slice(0, commaIdx).trim() : inner.trim();
+        const fallback = commaIdx >= 0 ? inner.slice(commaIdx + 1).trim() : cssValue;
+        return getComputedStyle(document.documentElement).getPropertyValue(prop).trim() || fallback;
     }
 
     /**
