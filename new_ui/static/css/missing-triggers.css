@@ -56,3 +56,24 @@
     outline: none;
     box-shadow: var(--shadow-focus);
 }
+
+/* -- Slide + fade transition for the missing-trigger bar ---------- */
+
+.mt-enter-active,
+.mt-leave-active {
+    transition:
+        opacity var(--duration-normal) var(--ease-out),
+        transform var(--duration-normal) var(--ease-out);
+    overflow: hidden;
+}
+
+.mt-enter-from {
+    opacity: 0;
+    transform: translateY(-8px);
+}
+
+.mt-enter-to,
+.mt-leave-to {                 /* leave-start mirrors enter-end */
+    opacity: 1;
+    transform: translateY(0);
+}

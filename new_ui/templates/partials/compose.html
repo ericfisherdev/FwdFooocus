@@ -32,7 +32,13 @@
 </div>
 
 <!-- Missing Trigger Detection Bar -->
-<div x-data="missingTriggers()" x-show="hasMissing" x-cloak>
+<div x-data="missingTriggers()" x-show="hasMissing" x-cloak
+     x-transition:enter="mt-enter-active"
+     x-transition:enter-start="mt-enter-from"
+     x-transition:enter-end="mt-enter-to"
+     x-transition:leave="mt-leave-active"
+     x-transition:leave-start="mt-leave-to"
+     x-transition:leave-end="mt-enter-from">
     <div class="missing-triggers" role="alert" aria-live="polite">
         <template x-for="mt in missing" :key="mt.loraFilename + mt.triggerWord">
             <div class="missing-triggers__item">
@@ -45,7 +51,7 @@
                 </span>
                 <button type="button"
                         class="missing-triggers__insert"
-                        @click="insertTrigger(mt.triggerWord)"
+                        @click="insertTrigger(mt.triggerWord, mt.loraFilename)"
                         :aria-label="`Insert trigger word '${mt.triggerWord}' for ${displayName(mt.loraFilename)}`">+</button>
             </div>
         </template>
