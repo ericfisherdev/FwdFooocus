@@ -167,6 +167,7 @@ def _encode_preview_image(img) -> str | None:
         img.save(buf, format="JPEG", quality=70)
         return base64.b64encode(buf.getvalue()).decode("ascii")
     except Exception:
+        logger.debug("Failed to encode preview image", exc_info=True)
         return None
 
 
@@ -192,14 +193,15 @@ async def ws_generation(websocket: WebSocket):
             if active_task is None or not active_task.processing:
                 active_task = None
                 yield_index = 0
-                for task in async_tasks:
+                for task in list(async_tasks):
                     if task.processing:
                         active_task = task
                         break
 
-            if active_task is not None and yield_index < len(active_task.yields):
+            current_yields = active_task.yields if active_task is not None else []
+            if yield_index < len(current_yields):
                 idle_count = 0
-                flag, product = active_task.yields[yield_index]
+                flag, product = current_yields[yield_index]
                 yield_index += 1
 
                 if flag == "preview":
@@ -246,7 +248,7 @@ async def ws_generation(websocket: WebSocket):
     except WebSocketDisconnect:
         logger.debug("WebSocket client disconnected")
     except Exception as e:
-        logger.error(f"WebSocket error: {e}")
+        logger.exception("WebSocket error: %s", e)
 
 
 # ---------------------------------------------------------------------------
