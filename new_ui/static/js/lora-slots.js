@@ -21,9 +21,12 @@ function loraSlots() {
         slots: [],
         pickerOpen: false,
         maxSlots: 5,
+        defaultsApplied: false,
 
         init() {
             const applyDefaults = () => {
+                if (this.defaultsApplied) return;
+                this.defaultsApplied = true;
                 const config = Alpine.store('config');
                 this.maxSlots = config.defaultMaxLoraNumber ?? 5;
                 (config.defaultLoras || []).forEach(([filename, weight]) => {
@@ -36,7 +39,7 @@ function loraSlots() {
                 applyDefaults();
             } else {
                 this.$watch('$store.config.loaded', (loaded) => {
-                    if (loaded && this.slots.length === 0) {
+                    if (loaded) {
                         applyDefaults();
                     }
                 });
@@ -68,7 +71,7 @@ function loraSlots() {
             this.slots.push(slot);
 
             if (!skipEvent) {
-                this._dispatchChanged(slot);
+                this._dispatchChanged();
             }
 
             try {
@@ -78,7 +81,7 @@ function loraSlots() {
                     if (!this.slots.includes(slot)) return;
                     slot.triggerWords = data.trigger_words || [];
                     if (!skipEvent) {
-                        this._dispatchChanged(slot);
+                        this._dispatchChanged();
                     }
                 }
             } catch { /* non-critical */ }
@@ -95,13 +98,8 @@ function loraSlots() {
                 window.dispatchEvent(new CustomEvent('lora-removed', {
                     detail: { index, filename: removed.filename },
                 }));
-                // Re-dispatch all remaining so colors update
-                this.slots.forEach(s => this._dispatchChanged(s));
             }
-            // Always notify listeners that LoRA set changed (covers empty-list case)
-            window.dispatchEvent(new CustomEvent('lora-changed', {
-                detail: { slots: this.slots.map(s => ({ ...s })) },
-            }));
+            this._dispatchChanged();
         },
 
         updateWeight(index, weight) {
@@ -112,21 +110,23 @@ function loraSlots() {
             const maxWeight = config.defaultLorasMaxWeight ?? 5;
             const val = parseFloat(weight) || 0;
             slot.weight = Math.min(Math.max(val, minWeight), maxWeight);
-            this._dispatchChanged(slot);
+            this._dispatchChanged();
         },
 
         displayName(filename) {
             return filename.replace(/\.safetensors$/i, '').split('/').pop();
         },
 
-        _dispatchChanged(slot) {
+        _dispatchChanged() {
             window.dispatchEvent(new CustomEvent('lora-changed', {
                 detail: {
-                    index: slot.slotIndex,
-                    filename: slot.filename,
-                    weight: slot.weight,
-                    color: slot.color,
-                    triggerWords: slot.triggerWords,
+                    slots: this.slots.map(s => ({
+                        index: s.slotIndex,
+                        filename: s.filename,
+                        weight: s.weight,
+                        color: s.color,
+                        triggerWords: s.triggerWords,
+                    })),
                 },
             }));
         },
