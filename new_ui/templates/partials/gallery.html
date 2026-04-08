@@ -1,33 +1,108 @@
 {#
-  Gallery pane content — right side of split-pane.
-  Shows image grid, live preview during generation, and empty state.
-  Will be replaced by real Gallery component in Generation Core phase.
+  Gallery pane — right side of split-pane.
+  Responsive thumbnail grid with live preview during generation.
+  Spec: component-spec-gallery.md
 #}
 
-<!-- Gallery Header -->
-<div class="gallery-header">
-    <div class="gallery-header__left">
-        <select class="select" style="width: auto; min-width: 80px;" disabled>
-            <option>All</option>
-        </select>
-    </div>
-    <div class="gallery-header__right" style="display: flex; align-items: center; gap: var(--space-2);">
-        <div class="gallery-header__view-modes" style="display: flex; gap: var(--space-1);">
-            <button class="btn btn-ghost btn-sm" aria-pressed="true" aria-label="Grid view" disabled>Grid</button>
-            <button class="btn btn-ghost btn-sm" aria-pressed="false" aria-label="List view" disabled>List</button>
+<div x-data="gallery()">
+
+    <!-- Gallery Header -->
+    <div class="gallery-header">
+        <div class="gallery-header__left">
+            <div class="select-wrapper" style="width: auto; min-width: 80px;">
+                <select class="select" disabled>
+                    <option>All</option>
+                </select>
+            </div>
         </div>
-        <span class="text-body-muted gallery-header__count"
-              x-text="'0 images'"></span>
+        <div class="gallery-header__right" style="display: flex; align-items: center; gap: var(--space-2);">
+            <div style="display: flex; gap: var(--space-1);">
+                <button type="button" class="btn btn-ghost btn-sm"
+                        :class="{ 'btn-primary btn-sm': viewMode === 'grid' }"
+                        @click="viewMode = 'grid'"
+                        :aria-pressed="(viewMode === 'grid').toString()"
+                        aria-label="Grid view">Grid</button>
+                <button type="button" class="btn btn-ghost btn-sm"
+                        :class="{ 'btn-primary btn-sm': viewMode === 'list' }"
+                        @click="viewMode = 'list'"
+                        :aria-pressed="(viewMode === 'list').toString()"
+                        aria-label="List view">List</button>
+            </div>
+            <span class="text-body-muted" x-text="imageCount + ' images'" aria-live="polite"></span>
+        </div>
     </div>
-</div>
 
-<!-- Image Grid (empty state) -->
-<div class="gallery-grid" style="display: none;">
-    {# Thumbnails will be injected here by the Gallery component #}
-</div>
+    <!-- Live Preview (during generation) -->
+    <div class="gallery-preview" x-show="isGenerating && previewImage" x-cloak>
+        <img class="gallery-preview__img"
+             :src="previewImage"
+             alt="Generation preview"
+             x-show="previewImage">
+        <div class="gallery-preview__overlay">
+            <span class="text-body-sm" x-text="progressText" style="color: var(--text-default);"></span>
+        </div>
+    </div>
 
-<!-- Empty State -->
-<div class="gallery-empty">
-    <p class="text-heading-lg">Generate an image to see it here.</p>
-    <p class="text-body-muted">Your results will appear in this panel.</p>
+    <!-- Image Grid -->
+    <div class="gallery-grid"
+         x-ref="grid"
+         x-show="!isEmpty"
+         role="grid"
+         aria-label="Generated images">
+        <template x-for="(img, i) in images" :key="img.id">
+            <div class="gallery-thumb"
+                 :class="{ 'gallery-thumb--selected': isSelected(i) }"
+                 role="gridcell"
+                 tabindex="0"
+                 :aria-label="`Image ${i + 1}${img.seed ? ', seed ' + img.seed : ''}`"
+                 :aria-selected="isSelected(i).toString()"
+                 @click="selectImage(i)"
+                 @dblclick="openLightbox(i)"
+                 @keydown.enter="openLightbox(i)"
+                 @keydown.space.prevent="selectImage(i)">
+                <img class="gallery-thumb__img"
+                     :src="imageUrl(img)"
+                     :alt="`Generated image ${i + 1}`"
+                     loading="lazy"
+                     decoding="async">
+                <span class="gallery-thumb__seed text-mono" x-text="seedLabel(img)"></span>
+            </div>
+        </template>
+    </div>
+
+    <!-- Empty State -->
+    <div class="gallery-empty" x-show="isEmpty && !isGenerating">
+        <p class="text-heading-lg">Generate an image to see it here.</p>
+        <p class="text-body-muted">Your results will appear in this panel.</p>
+    </div>
+
+    <!-- Lightbox -->
+    <div class="gallery-lightbox"
+         x-show="lightboxOpen"
+         x-cloak
+         role="dialog"
+         aria-modal="true"
+         aria-label="Image viewer"
+         @keydown.escape="closeLightbox()"
+         @keydown.left="lightboxPrev()"
+         @keydown.right="lightboxNext()"
+         @click.self="closeLightbox()">
+        <template x-if="lightboxImage">
+            <img class="gallery-lightbox__img"
+                 :src="imageUrl(lightboxImage)"
+                 :alt="`Image ${lightboxIndex + 1} of ${images.length}`">
+        </template>
+        <button type="button" class="gallery-lightbox__nav gallery-lightbox__nav--prev"
+                @click="lightboxPrev()"
+                aria-label="Previous image"
+                x-show="lightboxIndex > 0">&#8249;</button>
+        <button type="button" class="gallery-lightbox__nav gallery-lightbox__nav--next"
+                @click="lightboxNext()"
+                aria-label="Next image"
+                x-show="lightboxIndex < images.length - 1">&#8250;</button>
+        <button type="button" class="gallery-lightbox__close"
+                @click="closeLightbox()"
+                aria-label="Close image viewer">&#10005;</button>
+    </div>
+
 </div>
