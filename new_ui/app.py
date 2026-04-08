@@ -6,11 +6,13 @@ Serves the Alpine.js/HTMX/GSAP frontend via Jinja2 templates.
 Shares the same backend modules (async_worker, config, lora_metadata).
 """
 
+import asyncio
+import base64
 import logging
 import os
 from pathlib import Path
 
-from fastapi import FastAPI, Query, Request
+from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -141,6 +143,110 @@ async def get_styles():
     """Return available style names."""
     from modules.sdxl_styles import legal_style_names
     return {"styles": legal_style_names}
+
+
+# ---------------------------------------------------------------------------
+# WebSocket — generation progress streaming
+# ---------------------------------------------------------------------------
+
+def _encode_preview_image(img) -> str | None:
+    """Encode a preview image (numpy array or PIL Image) to base64 JPEG."""
+    if img is None:
+        return None
+    try:
+        import io
+        from PIL import Image
+        import numpy as np
+
+        if isinstance(img, np.ndarray):
+            img = Image.fromarray(img)
+        if not isinstance(img, Image.Image):
+            return None
+
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=70)
+        return base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception:
+        return None
+
+
+@app.websocket("/ws/generation")
+async def ws_generation(websocket: WebSocket):
+    """
+    Stream generation progress to the client.
+
+    Polls the active task's yields list and forwards them as JSON messages.
+    Message types: preview, results, finish, heartbeat.
+    """
+    await websocket.accept()
+
+    from modules.async_worker import async_tasks
+
+    try:
+        yield_index = 0
+        active_task = None
+        idle_count = 0
+
+        while True:
+            # Find an active (processing) task
+            if active_task is None or not active_task.processing:
+                active_task = None
+                yield_index = 0
+                for task in async_tasks:
+                    if task.processing:
+                        active_task = task
+                        break
+
+            if active_task is not None and yield_index < len(active_task.yields):
+                idle_count = 0
+                flag, product = active_task.yields[yield_index]
+                yield_index += 1
+
+                if flag == "preview":
+                    percentage, text, img = product
+                    msg = {
+                        "type": "preview",
+                        "percentage": percentage,
+                        "text": text,
+                        "image": _encode_preview_image(img),
+                    }
+                    await websocket.send_json(msg)
+
+                elif flag == "results":
+                    msg = {
+                        "type": "results",
+                        "images": [
+                            str(p) if not isinstance(p, str) else p
+                            for p in product
+                        ],
+                    }
+                    await websocket.send_json(msg)
+
+                elif flag == "finish":
+                    msg = {
+                        "type": "finish",
+                        "images": [
+                            str(p) if not isinstance(p, str) else p
+                            for p in product
+                        ],
+                    }
+                    await websocket.send_json(msg)
+                    active_task = None
+                    yield_index = 0
+            else:
+                # No new yields — send heartbeat every ~5s of idle
+                idle_count += 1
+                if idle_count >= 50:  # 50 * 100ms = 5s
+                    await websocket.send_json({"type": "heartbeat"})
+                    update_heartbeat()
+                    idle_count = 0
+
+            await asyncio.sleep(0.1)
+
+    except WebSocketDisconnect:
+        logger.debug("WebSocket client disconnected")
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
 
 
 # ---------------------------------------------------------------------------
