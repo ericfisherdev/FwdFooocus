@@ -1,0 +1,84 @@
+name: Rebase Orphaned PRs
+
+on:
+  delete:
+
+jobs:
+  rebase-orphaned-prs:
+    if: github.event.ref_type == 'branch' && github.event.ref != 'main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Find PRs targeting deleted branch
+        id: find-prs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DELETED_BRANCH: ${{ github.event.ref }}
+        run: |
+          echo "Deleted branch: $DELETED_BRANCH"
+
+          prs=$(gh pr list \
+            --repo "${{ github.repository }}" \
+            --base "$DELETED_BRANCH" \
+            --state open \
+            --json number,headRefName \
+            --jq '.[] | "\(.number) \(.headRefName)"')
+
+          if [ -z "$prs" ]; then
+            echo "No open PRs targeting $DELETED_BRANCH"
+            echo "has_prs=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Found PRs:"
+          echo "$prs"
+          echo "has_prs=true" >> "$GITHUB_OUTPUT"
+          echo "$prs" > /tmp/orphaned_prs.txt
+
+      - name: Checkout repository
+        if: steps.find-prs.outputs.has_prs == 'true'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Rebase and retarget each PR
+        if: steps.find-prs.outputs.has_prs == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          while read -r pr_number head_branch; do
+            echo "::group::Processing PR #$pr_number ($head_branch)"
+
+            # Update PR base branch to main
+            gh pr edit "$pr_number" \
+              --repo "${{ github.repository }}" \
+              --base main
+            echo "Retargeted PR #$pr_number to main"
+
+            # Rebase the head branch onto main
+            git fetch origin "$head_branch"
+            git checkout -B "$head_branch" "origin/$head_branch"
+
+            if git rebase origin/main; then
+              git push --force-with-lease origin "$head_branch"
+              echo "Rebased $head_branch onto main"
+              gh pr comment "$pr_number" \
+                --repo "${{ github.repository }}" \
+                --body "This PR was automatically retargeted to \`main\` and rebased after its base branch was deleted."
+            else
+              git rebase --abort
+              echo "::warning::Rebase failed for $head_branch (PR #$pr_number) — conflicts need manual resolution"
+              gh pr comment "$pr_number" \
+                --repo "${{ github.repository }}" \
+                --body "This PR was retargeted to \`main\` after its base branch was deleted, but automatic rebase failed due to conflicts. Please rebase manually."
+            fi
+
+            echo "::endgroup::"
+          done < /tmp/orphaned_prs.txt
