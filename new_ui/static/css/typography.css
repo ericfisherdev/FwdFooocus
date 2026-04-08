@@ -1,0 +1,206 @@
+/*
+ * FwdFooocus Named Text Styles
+ *
+ * 18 named styles covering every text element in the UI.
+ * All line-heights snapped to 4px grid. No fluid/clamp sizing.
+ * Spec: research/typography-system.md
+ */
+
+
+/* ── Headings ─────────────────────────────────────────────── */
+
+.text-heading-xl {
+    font-family: var(--font-sans);
+    font-size: var(--text-xl);           /* 20px */
+    font-weight: var(--font-semibold);
+    line-height: 1.75rem;                /* 28px – snapped */
+    letter-spacing: var(--tracking-tight);
+    color: var(--text-default);
+}
+
+.text-heading-lg {
+    font-family: var(--font-sans);
+    font-size: var(--text-lg);           /* 16px */
+    font-weight: var(--font-semibold);
+    line-height: 1.25rem;                /* 20px – snapped */
+    letter-spacing: var(--tracking-normal);
+    color: var(--text-default);
+}
+
+.text-heading-base {
+    font-family: var(--font-sans);
+    font-size: var(--text-base);         /* 14px */
+    font-weight: var(--font-semibold);
+    line-height: 1.25rem;                /* 20px – snapped */
+    letter-spacing: var(--tracking-normal);
+    color: var(--text-default);
+}
+
+
+/* ── Body ─────────────────────────────────────────────────── */
+
+.text-body {
+    font-family: var(--font-sans);
+    font-size: var(--text-base);         /* 14px */
+    font-weight: var(--font-normal);
+    line-height: 1.25rem;                /* 20px – snapped */
+    letter-spacing: var(--tracking-normal);
+    color: var(--text-default);
+}
+
+.text-body-sm {
+    font-family: var(--font-sans);
+    font-size: var(--text-sm);           /* 13px */
+    font-weight: var(--font-normal);
+    line-height: 1.25rem;                /* 20px – snapped */
+    letter-spacing: var(--tracking-normal);
+    color: var(--text-default);
+}
+
+.text-body-muted {
+    font-family: var(--font-sans);
+    font-size: var(--text-sm);           /* 13px */
+    font-weight: var(--font-normal);
+    line-height: 1.25rem;                /* 20px – snapped */
+    letter-spacing: var(--tracking-normal);
+    color: var(--text-muted);
+}
+
+
+/* ── Prompt (relaxed line-height for multi-line editing) ──── */
+
+.text-prompt {
+    font-family: var(--font-sans);
+    font-size: var(--text-base);         /* 14px */
+    font-weight: var(--font-normal);
+    line-height: 1.5rem;                 /* 24px – snapped */
+    letter-spacing: var(--tracking-normal);
+    color: var(--text-default);
+}
+
+
+/* ── Labels ───────────────────────────────────────────────── */
+
+.text-label {
+    font-family: var(--font-sans);
+    font-size: var(--text-xs);           /* 12px */
+    font-weight: var(--font-medium);
+    line-height: 1rem;                   /* 16px – snapped */
+    letter-spacing: var(--tracking-wide);
+    color: var(--text-muted);
+}
+
+.text-label-emphasis {
+    font-family: var(--font-sans);
+    font-size: var(--text-xs);           /* 12px */
+    font-weight: var(--font-semibold);
+    line-height: 1rem;                   /* 16px – snapped */
+    letter-spacing: var(--tracking-wide);
+    color: var(--text-default);
+}
+
+
+/* ── Captions & Metadata ─────────────────────────────────── */
+
+.text-caption {
+    font-family: var(--font-sans);
+    font-size: var(--text-xs);           /* 12px */
+    font-weight: var(--font-normal);
+    line-height: 1rem;                   /* 16px – snapped */
+    letter-spacing: var(--tracking-normal);
+    color: var(--text-muted);
+}
+
+.text-badge {
+    font-family: var(--font-sans);
+    font-size: var(--text-xs);           /* 12px */
+    font-weight: var(--font-medium);
+    line-height: 1;
+    letter-spacing: var(--tracking-wide);
+    color: var(--text-default);
+}
+
+
+/* ── Code / Numeric ───────────────────────────────────────── */
+
+.text-mono {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);           /* 12px */
+    font-weight: var(--font-medium);
+    line-height: 1rem;                   /* 16px – snapped */
+    letter-spacing: var(--tracking-normal);
+    color: var(--text-default);
+}
+
+.text-mono-sm {
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;               /* 11px */
+    font-weight: var(--font-normal);
+    line-height: 1rem;                   /* 16px – snapped */
+    letter-spacing: var(--tracking-normal);
+    color: var(--text-muted);
+}
+
+
+/* ── Input ────────────────────────────────────────────────── */
+
+.text-input {
+    font-family: var(--font-sans);
+    font-size: var(--text-base);         /* 14px */
+    font-weight: var(--font-normal);
+    line-height: 1.25rem;                /* 20px – snapped */
+    letter-spacing: var(--tracking-normal);
+    color: var(--text-default);
+}
+
+.text-input-sm {
+    font-family: var(--font-sans);
+    font-size: var(--text-sm);           /* 13px */
+    font-weight: var(--font-normal);
+    line-height: 1.25rem;                /* 20px – snapped */
+    letter-spacing: var(--tracking-normal);
+    color: var(--text-default);
+}
+
+.text-placeholder {
+    font-family: var(--font-sans);
+    font-size: var(--text-base);         /* 14px */
+    font-weight: var(--font-normal);
+    line-height: 1.25rem;                /* 20px – snapped */
+    letter-spacing: var(--tracking-normal);
+    color: var(--text-muted);
+}
+
+
+/* ── Button ───────────────────────────────────────────────── */
+
+.text-button {
+    font-family: var(--font-sans);
+    font-size: var(--text-base);         /* 14px */
+    font-weight: var(--font-semibold);
+    line-height: 1;
+    letter-spacing: var(--tracking-normal);
+    color: var(--text-on-accent);
+}
+
+.text-button-sm {
+    font-family: var(--font-sans);
+    font-size: var(--text-xs);           /* 12px */
+    font-weight: var(--font-medium);
+    line-height: 1;
+    letter-spacing: var(--tracking-wide);
+    color: var(--text-default);
+}
+
+
+/* ── Section Divider (ALL-CAPS) ───────────────────────────── */
+
+.text-overline {
+    font-family: var(--font-sans);
+    font-size: var(--text-xs);           /* 12px */
+    font-weight: var(--font-semibold);
+    line-height: 1rem;                   /* 16px – snapped */
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
