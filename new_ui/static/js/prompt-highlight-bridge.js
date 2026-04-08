@@ -85,20 +85,13 @@ document.addEventListener('alpine:init', () => {
 
     // Listen for LoRA changes
     window.addEventListener('lora-changed', (e) => {
-        const detail = e.detail;
-        const existing = activeLoRAs.findIndex(l => l.slotIndex === detail.index);
-        const entry = {
-            slotIndex: detail.index,
-            filename: detail.filename,
-            color: detail.color,
-            triggerWords: detail.triggerWords || [],
-        };
-
-        if (existing >= 0) {
-            activeLoRAs[existing] = entry;
-        } else {
-            activeLoRAs.push(entry);
-        }
+        activeLoRAs = (e.detail.slots || []).map(s => ({
+            filename: s.filename,
+            color: s.color,
+            triggerWords: s.triggerWords || [],
+            slotIndex: s.index,
+            name: s.filename,
+        }));
 
         // Sort by slot index so first LoRA wins color conflicts
         activeLoRAs.sort((a, b) => a.slotIndex - b.slotIndex);
