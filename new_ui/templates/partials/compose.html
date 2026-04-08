@@ -213,10 +213,63 @@
 </div>
 
 <!-- Generate Row -->
-<div class="compose__generate-row">
-    <button class="btn btn-primary" disabled style="width: 100%; height: 44px;">
-        Generate
-    </button>
+<div class="compose__generate-row"
+     x-data="{
+         async generate() {
+             if ($store.generation.isGenerating) return;
+
+             // Collect prompt text from prompt-changed events stored on window
+             const prompt = document.getElementById('prompt-editor-positive')?.innerText || '';
+             const negPrompt = document.getElementById('prompt-editor-negative')?.innerText || '';
+
+             const body = {
+                 prompt: prompt,
+                 negative_prompt: negPrompt,
+                 // Quick settings read from sibling component — broadcast via DOM query
+                 // The quickSettings component stores state that we read here
+             };
+
+             try {
+                 const resp = await fetch('/api/generate', {
+                     method: 'POST',
+                     headers: { 'Content-Type': 'application/json' },
+                     body: JSON.stringify(body),
+                 });
+                 if (resp.ok) {
+                     $store.generation.isGenerating = true;
+                 }
+             } catch (e) {
+                 console.error('[generate] Failed:', e);
+             }
+         },
+         async stop() {
+             try {
+                 await fetch('/api/generate/stop', { method: 'POST' });
+             } catch {}
+         }
+     }">
+    <template x-if="!$store.generation.isGenerating">
+        <button type="button" class="btn btn-primary" style="width: 100%; height: 44px;"
+                @click="generate()"
+                @keydown.ctrl.enter.window="generate()">
+            Generate
+        </button>
+    </template>
+    <template x-if="$store.generation.isGenerating">
+        <div style="display: flex; flex-direction: column; gap: var(--space-2);">
+            <div style="display: flex; gap: var(--space-2);">
+                <button type="button" class="btn btn-danger" style="flex: 1; height: 36px;"
+                        @click="stop()">
+                    Stop
+                </button>
+            </div>
+            <div class="generate-progress">
+                <div class="generate-progress__bar"
+                     :style="`width: ${$store.generation.percentage}%`"></div>
+            </div>
+            <span class="text-caption" x-text="$store.generation.progressText"></span>
+        </div>
+    </template>
 </div>
 
 <!-- Queue Panel (collapsible) -->
