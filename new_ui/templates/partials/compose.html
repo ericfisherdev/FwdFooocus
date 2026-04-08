@@ -129,12 +129,49 @@
 </div>
 
 <!-- LoRA Slots -->
-<div class="compose__lora-slots">
+<div class="compose__lora-slots" x-data="loraSlots()">
     <label class="text-label">LoRAs</label>
-    <div class="compose__lora-list">
-        <p class="text-body-muted" style="margin: 0;">No LoRAs active.</p>
+    <div class="lora-slots__list">
+        <template x-for="(slot, i) in slots" :key="slot.filename">
+            <div class="lora-slot" role="group"
+                 :aria-label="`LoRA slot ${i + 1}: ${displayName(slot.filename)}`">
+                <div class="lora-slot__color" :style="`background: ${slot.color}`"></div>
+                <span class="text-heading-base lora-slot__name" x-text="displayName(slot.filename)"></span>
+                <input type="number" class="input input-sm text-mono lora-slot__weight"
+                       :value="slot.weight.toFixed(2)"
+                       step="0.05"
+                       :min="$store.config.defaultLorasMinWeight"
+                       :max="$store.config.defaultLorasMaxWeight"
+                       @change="updateWeight(i, $event.target.value)"
+                       :aria-label="`Weight for ${displayName(slot.filename)}`">
+                <span class="text-caption lora-slot__triggers" x-show="slot.triggerWords.length > 0"
+                      x-text="slot.triggerWords.slice(0, 3).join(', ') + (slot.triggerWords.length > 3 ? '...' : '')"></span>
+                <button type="button" class="lora-slot__remove"
+                        @click="removeLora(i)"
+                        :aria-label="`Remove ${displayName(slot.filename)}`">✕</button>
+            </div>
+        </template>
+        <p class="text-body-muted" x-show="slots.length === 0" style="margin: 0;">No LoRAs active.</p>
     </div>
-    <button class="btn btn-secondary btn-sm" disabled>+ Add LoRA</button>
+    <div style="position: relative;">
+        <button type="button" class="btn btn-secondary btn-sm"
+                @click="pickerOpen = !pickerOpen"
+                :disabled="!canAdd">
+            + Add LoRA
+        </button>
+        <div class="lora-picker-mini" x-show="pickerOpen" x-cloak
+             @click.outside="pickerOpen = false"
+             @keydown.escape="pickerOpen = false">
+            <template x-if="availableLoras.length === 0">
+                <p class="lora-picker-mini__empty text-body-muted">No LoRAs available.</p>
+            </template>
+            <template x-for="filename in availableLoras" :key="filename">
+                <button type="button" class="lora-picker-mini__item"
+                        @click="addLora(filename); pickerOpen = false"
+                        x-text="filename.replace(/\.safetensors$/i, '')"></button>
+            </template>
+        </div>
+    </div>
 </div>
 
 <!-- Generate Row -->
