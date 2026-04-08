@@ -115,7 +115,7 @@
     font-family: var(--font-sans);
     font-size: var(--text-xs);           /* 12px */
     font-weight: var(--font-medium);
-    line-height: 1;
+    line-height: 0.75rem;               /* 12px – snapped */
     letter-spacing: var(--tracking-wide);
     color: var(--text-default);
 }
@@ -187,7 +187,7 @@
     font-family: var(--font-sans);
     font-size: var(--text-xs);           /* 12px */
     font-weight: var(--font-medium);
-    line-height: 1;
+    line-height: 0.75rem;               /* 12px – snapped */
     letter-spacing: var(--tracking-wide);
     color: var(--text-default);
 }
