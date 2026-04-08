@@ -18,13 +18,13 @@ function missingTriggers() {
 
         init() {
             window.addEventListener('active-loras-updated', (e) => {
-                this.activeLoRAs = e.detail.activeLoRAs || [];
+                this.activeLoRAs = e?.detail?.activeLoRAs || [];
                 this._recalculate();
             });
 
             window.addEventListener('prompt-changed', (e) => {
-                if (e.detail.mode === 'positive') {
-                    this.promptText = e.detail.text || '';
+                if (e?.detail?.mode === 'positive') {
+                    this.promptText = e?.detail?.text || '';
                     this._recalculate();
                 }
             });
