@@ -251,6 +251,33 @@
     cursor: pointer;
 }
 
+/* Firefox active-fill (left of thumb) */
+.slider::-moz-range-progress {
+    background: var(--interactive-default);
+    border-radius: var(--radius-full);
+    height: 4px;
+}
+
+.slider::-moz-range-track {
+    background: var(--surface-overlay);
+    border-radius: var(--radius-full);
+    height: 4px;
+}
+
+/*
+ * WebKit lacks ::-webkit-slider-progress; active fill requires a
+ * JS-driven linear-gradient on the track background. The .slider
+ * element exposes --slider-fill (0-100) for JS to set, e.g.:
+ *   el.style.setProperty('--slider-fill', percent);
+ * then CSS applies:
+ *   background: linear-gradient(
+ *     to right,
+ *     var(--interactive-default) var(--slider-fill, 0%),
+ *     var(--surface-overlay) var(--slider-fill, 0%)
+ *   );
+ * This is wired up during component initialisation in JS.
+ */
+
 .slider:focus-visible {
     box-shadow: var(--shadow-focus);
     border-radius: var(--radius-full);
