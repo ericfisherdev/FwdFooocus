@@ -91,9 +91,9 @@ function promptEditor({ mode = 'positive', value = '' } = {}) {
 
             el.focus();
             const sel = window.getSelection();
-            if (sel.rangeCount > 0) {
+            if (sel && sel.rangeCount > 0) {
                 const range = sel.getRangeAt(0);
-                // Add space before if not at start and previous char isn't space
+                // Add comma separator if not inserting at the start
                 const before = range.startOffset > 0 ? ', ' : '';
                 const node = document.createTextNode(before + text);
                 range.deleteContents();
