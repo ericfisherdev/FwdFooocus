@@ -254,6 +254,11 @@
     border-radius: 50%;
     border: 2px solid var(--surface-base);
     cursor: pointer;
+    transition: transform var(--duration-fast) var(--ease-default);
+}
+
+.slider::-moz-range-thumb:hover {
+    transform: scale(1.2);
 }
 
 /* Firefox active-fill (left of thumb) */
@@ -318,6 +323,7 @@
     line-height: 1;
     letter-spacing: var(--tracking-wide);
     white-space: nowrap;
+    color: var(--text-default);
 }
 
 .badge-success {
