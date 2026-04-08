@@ -156,10 +156,12 @@
     <div style="position: relative;">
         <button type="button" class="btn btn-secondary btn-sm"
                 @click="pickerOpen = !pickerOpen; $nextTick(() => { if (pickerOpen) $refs.loraPicker.querySelector('button')?.focus() })"
-                :disabled="!canAdd">
+                :disabled="!canAdd"
+                :aria-expanded="pickerOpen.toString()"
+                aria-controls="lora-picker-mini">
             + Add LoRA
         </button>
-        <div class="lora-picker-mini" x-show="pickerOpen" x-cloak x-ref="loraPicker"
+        <div class="lora-picker-mini" id="lora-picker-mini" x-show="pickerOpen" x-cloak x-ref="loraPicker"
              @click.outside="pickerOpen = false"
              @keydown.escape.window="if (pickerOpen) { pickerOpen = false; $event.stopPropagation() }">
             <template x-if="availableLoras.length === 0">
