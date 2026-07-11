@@ -9,6 +9,8 @@ import ldm_patched.modules.ops
 
 import ldm_patched.controlnet.cldm
 import ldm_patched.t2ia.adapter
+import ldm_patched.modules.latent_formats
+import ldm_patched.ldm.lumina.controlnet
 
 
 def broadcast_image_to(tensor, target_batch_size, batched_number):
@@ -519,3 +521,248 @@ def load_t2i_adapter(t2i_data):
         print("t2i unexpected", unexpected)
 
     return T2IAdapter(model_ad, model_ad.input_channels)
+
+
+def _z_image_controlnet_convert(sd):
+    """Rename HF/diffusers-style attention keys (separate to_q/to_k/to_v
+    projections, norm_q/norm_k, to_out.0) in a Z-Image-Turbo-Fun-Controlnet
+    checkpoint to this vendored NextDiT's fused qkv/out/q_norm/k_norm
+    naming (ldm_patched.ldm.lumina.model.JointAttention). Ported from
+    ComfyUI's comfy_extras/nodes_model_patch.py:z_image_convert -- the
+    to_q/to_k/to_v concatenation order (Q, K, V) matches JointAttention.qkv's
+    output layout exactly because dict iteration is alphabetical
+    ("to_k" < "to_q" < "to_v").
+    """
+    replace_keys = {
+        ".attention.to_out.0.bias": ".attention.out.bias",
+        ".attention.norm_k.weight": ".attention.k_norm.weight",
+        ".attention.norm_q.weight": ".attention.q_norm.weight",
+        ".attention.to_out.0.weight": ".attention.out.weight",
+    }
+
+    out_sd = {}
+    cc = []
+    for k in sorted(sd.keys()):
+        w = sd[k]
+        k_out = k
+        if k_out.endswith(".attention.to_k.weight"):
+            cc = [w]
+            continue
+        if k_out.endswith(".attention.to_q.weight"):
+            cc = [w] + cc
+            continue
+        if k_out.endswith(".attention.to_v.weight"):
+            cc = cc + [w]
+            w = torch.cat(cc, dim=0)
+            k_out = k_out.replace(".attention.to_v.weight", ".attention.qkv.weight")
+
+        for r, rr in replace_keys.items():
+            k_out = k_out.replace(r, rr)
+        out_sd[k_out] = w
+
+    return out_sd
+
+
+def _detect_zimage_controlnet_config(sd):
+    """Infer ZImage_Control's `n_control_layers`/`additional_in_dim`/
+    `refiner_control` constructor kwargs from a (already qkv-converted)
+    checkpoint's own key layout -- verified against the real published
+    safetensors headers of both the "lite" (3-control-layer) and "-2.1"
+    Union (15-control-layer) checkpoints, not guessed. Ported from
+    ComfyUI's comfy_extras/nodes_model_patch.py:ModelPatchLoader's Z-Image
+    branch. Returns {} (ZImage_Control's own defaults) for an unrecognized
+    layout -- load_controlnet_zimage's strict state-dict load is what
+    actually rejects an incompatible checkpoint, not this function.
+    """
+    config = {}
+    if 'control_layers.4.adaLN_modulation.0.weight' not in sd:
+        config['n_control_layers'] = 3
+        config['additional_in_dim'] = 17
+        config['refiner_control'] = True
+    if 'control_layers.14.adaLN_modulation.0.weight' in sd:
+        config['n_control_layers'] = 15
+        config['additional_in_dim'] = 17
+        config['refiner_control'] = True
+    return config
+
+
+def load_controlnet_zimage(ckpt_path):
+    """Load an Alibaba/Tongyi-MAI Z-Image-Turbo-Fun-Controlnet checkpoint
+    (e.g. `alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1`) into a
+    ldm_patched.ldm.lumina.controlnet.ZImage_Control and return it, ready to
+    be wrapped by ZImageControlNetPatch and applied via
+    ModelPatcher.set_model_double_block_patch/set_model_noise_refiner_patch.
+
+    Only control-only extractions of this checkpoint family are supported
+    (no base-model weights bundled in); a checkpoint that does not match
+    the expected key layout raises RuntimeError rather than silently
+    loading a partial/incorrect model.
+    """
+    sd = ldm_patched.modules.utils.load_torch_file(ckpt_path, safe_load=True)
+    sd = _z_image_controlnet_convert(sd)
+    config = _detect_zimage_controlnet_config(sd)
+
+    load_device = ldm_patched.modules.model_management.get_torch_device()
+    dtype = ldm_patched.modules.model_management.unet_dtype()
+    manual_cast_dtype = ldm_patched.modules.model_management.unet_manual_cast(dtype, load_device)
+    if manual_cast_dtype is not None:
+        operations = ldm_patched.modules.ops.manual_cast
+        dtype = manual_cast_dtype
+    else:
+        operations = ldm_patched.modules.ops.disable_weight_init
+
+    control_model = ldm_patched.ldm.lumina.controlnet.ZImage_Control(
+        dtype=dtype, device=load_device, operations=operations, **config
+    )
+    missing, unexpected = control_model.load_state_dict(sd, strict=False)
+    if len(missing) > 0 or len(unexpected) > 0:
+        raise RuntimeError(
+            "Z-Image ControlNet checkpoint at '{}' does not match the expected "
+            "control-only key layout ({} missing key(s), {} unexpected key(s)). "
+            "Only control-only extractions of the Z-Image-Turbo-Fun-Controlnet-Union "
+            "family (e.g. the '-2.1' Union checkpoint) are supported.".format(
+                ckpt_path, len(missing), len(unexpected)
+            )
+        )
+    control_model.eval()
+    return control_model
+
+
+def _encode_zimage_control_hint(vae, image, additional_in_dim):
+    """VAE-encode a pixel-space hint image into the Flux-format, Fun-style
+    latent layout the Z-Image-Turbo-Fun-Controlnet checkpoint was trained
+    on: `[control_latent(16ch), mask(1ch), inpaint_latent(16ch)]` when the
+    checkpoint has an inpaint/mask branch (`additional_in_dim > 0`, true for
+    the "-2.1" Union checkpoint this ticket targets), or just the plain
+    control latent otherwise. No inpaint image/mask is supported yet (Canny
+    text-to-image only per this ticket's scope), so the inpaint branch is
+    filled with a neutral all-gray image and an all-zero ("nothing masked")
+    mask -- matching ComfyUI's own no-inpaint-input fallback
+    (comfy_extras/nodes_model_patch.py:ZImageControlPatch.encode_latent_cond).
+    """
+    latent_format = ldm_patched.modules.latent_formats.Flux()
+    latent_image = latent_format.process_in(vae.encode(image[:, :, :, :3]))
+    if additional_in_dim <= 0:
+        return latent_image
+
+    blank = torch.ones_like(image) * 0.5
+    inpaint_latent = latent_format.process_in(vae.encode(blank[:, :, :, :3]))
+    mask = torch.zeros_like(inpaint_latent)[:, :1]
+    return torch.cat([latent_image, mask, inpaint_latent], dim=1)
+
+
+class ZImageControlNetPatch:
+    """Drives a ldm_patched.ldm.lumina.controlnet.ZImage_Control model one
+    main NextDiT block at a time, from NextDiT.forward()'s "double_block"/
+    "noise_refiner" hooks (ldm_patched/ldm/lumina/model.py, wired via
+    ModelPatcher.set_model_double_block_patch/set_model_noise_refiner_patch).
+    Ported from ComfyUI's comfy_extras/nodes_model_patch.py:ZImageControlPatch.
+
+    The main model's forward loop calls this once per noise_refiner/main
+    layer block; this class lazily advances the control stack (far shorter
+    than the main model's 30 layers) in lockstep and adds its
+    zero-initialized residual ("hint") onto the main model's running image
+    tokens at the matching block index, spaced evenly across the main
+    model's block count (`div = round(total_blocks / n_control_layers)`).
+
+    Unlike the SDXL/UNet ControlNet path (`ControlNet.get_control()`,
+    conditioning-based), this class patches the unet ModelPatcher directly
+    -- the same "clone, then set_model_*_patch" shape as
+    `modules/inpaint_worker.py:InpaintWorker.patch()` and
+    `extras/ip_adapter.py:patch_model()` in this codebase.
+    """
+
+    # Sentinel `_state[0]` values used the first time each phase touches a
+    # freshly (re-)embedded control context, before any real block has run --
+    # distinct so a mid-noise_refiner-phase state is never mistaken for a
+    # mid-double_block-phase one (see the reset condition below).
+    _NOISE_REFINER_START = -3
+    _DOUBLE_BLOCK_START = -1
+
+    def __init__(self, control_model, vae, image, strength):
+        self.control_model = control_model
+        self.strength = strength
+        self._encoded_hint = _encode_zimage_control_hint(vae, image, control_model.additional_in_dim)
+        self._state = None
+
+    def __call__(self, kwargs):
+        img = kwargs["img"]
+        img_input = kwargs["img_input"]
+        pe = kwargs["pe"]
+        vec = kwargs["vec"]
+        block_index = kwargs["block_index"]
+        block_type = kwargs.get("block_type", "double")
+
+        n_control_layers = self.control_model.n_control_layers
+        total_blocks = kwargs.get("transformer_options", {}).get("total_blocks")
+        if not total_blocks:
+            return kwargs
+        div = max(1, round(total_blocks / n_control_layers))
+        cnet_index = block_index // div
+        cnet_index_float = block_index / div
+
+        # For the double_block (main layer) phase this guards trailing main
+        # blocks past the last control layer's mapped position (e.g. when
+        # `n_control_layers` does not evenly divide `total_blocks`), which
+        # otherwise would never hit the exact-index match below and would
+        # leave `_state` stuck non-None into the next forward pass. During
+        # the noise_refiner phase `block_index` is always tiny (0/1) so this
+        # is a no-op there; kept unconditional to match the reference.
+        if cnet_index_float > (n_control_layers - 1):
+            self._state = None
+            return kwargs
+
+        # A fresh embed is needed at the start of every forward pass (a new
+        # denoising step restarts NextDiT.forward from noise_refiner block 0)
+        # and, defensively, if `_state` ever overshoots the block this call
+        # is asking for -- e.g. the noise_refiner -> double_block phase
+        # transition within one forward pass, where `_state[0]` still holds
+        # the noise_refiner phase's own (unrelated) counter value. Mirrors
+        # ComfyUI's `temp_data is None or temp_data[0] > cnet_index` guard.
+        if self._state is None or self._state[0] > cnet_index:
+            start = self._NOISE_REFINER_START if block_type == "noise_refiner" else self._DOUBLE_BLOCK_START
+            hint = self._encoded_hint.to(device=img.device, dtype=img.dtype)
+            embedded = self.control_model.embed_hint(hint, freqs_cis=pe, adaln_input=vec)
+            self._state = (start, (None, embedded))
+
+        if block_type == "noise_refiner":
+            # control_noise_refiner has exactly as many blocks as the main
+            # model's own noise_refiner (always 2) -- a direct 1:1 mapping,
+            # no div/ratio needed, so block_index is used as the layer id.
+            control_context = self._state[1][1]
+            next_state = self._state[0] + 1
+            hint_out, control_context = self.control_model.forward_noise_refiner_block(
+                block_index, control_context, img_input[:, :control_context.shape[1]], pe, vec,
+            )
+            self._state = (next_state, (hint_out, control_context))
+            if hint_out is not None:
+                n = hint_out.shape[1]
+                img = img.clone()
+                img[:, :n] = img[:, :n] + hint_out * self.strength
+                kwargs["img"] = img
+            return kwargs
+
+        while self._state[0] < cnet_index and (self._state[0] + 1) < n_control_layers:
+            control_context = self._state[1][1]
+            next_layer = self._state[0] + 1
+            hint_out, control_context = self.control_model.forward_control_block(
+                next_layer, control_context, img_input[:, :control_context.shape[1]], pe, vec,
+            )
+            self._state = (next_layer, (hint_out, control_context))
+
+        if cnet_index_float == self._state[0]:
+            hint_out = self._state[1][0]
+            n = hint_out.shape[1]
+            img = img.clone()
+            img[:, :n] = img[:, :n] + hint_out * self.strength
+            kwargs["img"] = img
+            if n_control_layers == self._state[0] + 1:
+                self._state = None
+
+        return kwargs
+
+    def to(self, device_or_dtype):
+        if isinstance(device_or_dtype, torch.device):
+            self._encoded_hint = self._encoded_hint.to(device_or_dtype)
+            self._state = None
+        return self

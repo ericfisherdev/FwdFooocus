@@ -923,6 +923,27 @@ def downloading_controlnet_cpds():
     return os.path.join(path_controlnet, 'fooocus_xl_cpds_128.safetensors')
 
 
+def downloading_controlnet_zimage_canny():
+    """Alibaba/Tongyi-MAI's official Z-Image-Turbo-Fun-Controlnet-Union-2.1
+    (Apache 2.0, alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1). This is
+    the Canny/Depth/Pose/MLSD/HED-capable DiT ControlNet FWDF-156 wires up
+    for Z-Image's PyraCanny-equivalent path; only Canny is exercised in this
+    codebase today (FWDF-156's Canny-only rollout). The hash/size below were
+    read directly off the checkpoint's Hugging Face git-lfs pointer (`GET
+    .../raw/main/Z-Image-Turbo-Fun-Controlnet-Union-2.1.safetensors`), not
+    guessed.
+    """
+    file_name = 'Z-Image-Turbo-Fun-Controlnet-Union-2.1.safetensors'
+    load_file_from_url(
+        url='https://huggingface.co/alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1/resolve/main/{}'.format(file_name),
+        model_dir=path_controlnet,
+        file_name=file_name,
+        expected_sha256='7f611e6d52b133f64b84bef2549fcb84589a766b8255954f96ea34684f52b633',
+        expected_size=6712485600,
+    )
+    return os.path.join(path_controlnet, file_name)
+
+
 def downloading_ip_adapters(v):
     assert v in ['ip', 'face']
 

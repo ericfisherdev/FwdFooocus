@@ -116,10 +116,14 @@ class TestZImageEntry(unittest.TestCase):
         self.assertFalse(self.z_image.supports_adaptive_cfg)
         self.assertFalse(self.z_image.supports_sharpness)
 
-    def test_controlnet_ip_adapter_inpaint_engine_unsupported(self):
-        self.assertFalse(self.z_image.supports_controlnet)
+    def test_ip_adapter_inpaint_engine_unsupported(self):
         self.assertFalse(self.z_image.supports_ip_adapter)
         self.assertFalse(self.z_image.supports_inpaint_engine)
+
+    def test_controlnet_supported_as_of_fwdf_156(self):
+        # Scoped to PyraCanny only -- see modules/model_family.py's
+        # _build_z_image_capabilities docstring (FWDF-156).
+        self.assertTrue(self.z_image.supports_controlnet)
 
     def test_negative_prompt_supported_and_cfg_non_zero(self):
         # cfg=0 would silently make the negative-prompt field a no-op.
