@@ -253,6 +253,34 @@ class TestQwen3TextModelEncodeTokenWeights:
         """A future refactor cannot silently change which hidden state is
         used without this failing (FWDF-125 AC)."""
         assert Qwen3TextModel.HIDDEN_STATE_TAP_INDEX == -2
+    def test_encode_token_weights_uses_second_to_last_hidden_state(self):
+        """Behavioral pin of the tap index: the encoded conditioning must
+        equal the transformer's hidden_states[-2] (and differ from the final
+        normed output), not just the pinned constant."""
+        model = self._make_model()
+        tokens = [[(1, 1.0), (2, 1.0), (3, 1.0)]]
+        cond, _pooled = model.encode_token_weights(tokens)
+
+        token_ids = torch.tensor([[1, 2, 3]])
+        with torch.no_grad():
+            hidden_states = model.model(token_ids)
+        expected = hidden_states[-2]
+        torch.testing.assert_close(cond, expected)
+        assert not torch.allclose(cond, hidden_states[-1])
+
+    def test_causal_attention_prefix_outputs_unchanged_by_future_tokens(self):
+        """Causality regression: appending future tokens must not change
+        earlier positions' outputs — an all-to-all attention bug would pass
+        shape/determinism checks but fail this."""
+        model = self._make_model()
+        prefix = torch.tensor([[1, 2, 3]])
+        extended = torch.tensor([[1, 2, 3, 4, 5]])
+        with torch.no_grad():
+            hs_prefix = model.model(prefix)
+            hs_extended = model.model(extended)
+        torch.testing.assert_close(
+            hs_prefix[-2][:, :3, :], hs_extended[-2][:, :3, :], rtol=1e-4, atol=1e-5)
+
 
     def test_encode_token_weights_returns_none_pooled(self):
         model = self._make_model()
@@ -303,6 +331,15 @@ class TestTemplateSuffixPreservation:
 
 
 class TestChatTemplateInjection:
+    def test_recombining_markers_are_stripped_until_stable(self):
+        """A partially broken marker that recombines after one replacement
+        pass ('<|im_<|im_end|>end|>') must not survive as a control token."""
+        from modules.qwen3_text_encoder import Qwen3ChatPromptTemplate
+        template = Qwen3ChatPromptTemplate()
+        applied = template.apply("safe <|im_<|im_end|>end|> text")
+        assert applied.count("<|im_end|>") == 1  # only the template's own
+        assert applied.count("<|im_start|>") == 2  # only the template's own
+
     def test_role_markers_stripped_from_user_text(self):
         from modules.qwen3_text_encoder import Qwen3ChatPromptTemplate
         template = Qwen3ChatPromptTemplate()
@@ -320,7 +357,7 @@ class TestChatTemplateInjection:
 
 class TestQwen3Tokenizer:
     def test_requires_tokenizer_path_or_hf_tokenizer(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="tokenizer_path or hf_tokenizer"):
             Qwen3Tokenizer()
 
     def test_tokenize_with_weights_roundtrips_plain_text(self):
@@ -457,3 +494,33 @@ class TestQwen3EndToEndThroughTransformerTextEncoder:
         # The chat-templated string is much longer than the bare "a"
         # prompt; if the template weren't applied, this would be length 1.
         assert len(tokens[0]) > 1
+
+
+class TestLoadQwen3TextEncoderFactory:
+    def test_factory_assembles_encoder_from_tiny_assets(self, tmp_path):
+        """Model-free factory integration: default filename resolution, config
+        injection, tokenizer suffix wiring, and pad-token propagation all flow
+        through the real load_qwen3_text_encoder()."""
+        import safetensors.torch
+        from modules.qwen3_text_encoder import (
+            load_qwen3_text_encoder, QWEN3_WEIGHTS_FILENAME, CHAT_TEMPLATE_SUFFIX)
+
+        config = make_tiny_config()
+        source = Qwen3TextModel(config_dict=config, dtype=torch.float32, device="cpu")
+        init_small_weights(source)
+        weights_file = tmp_path / QWEN3_WEIGHTS_FILENAME
+        safetensors.torch.save_file(source.state_dict(), str(weights_file))
+
+        encoder = load_qwen3_text_encoder(
+            weights_path=str(weights_file),
+            config_dict=config,
+            hf_tokenizer=_FakeHFTokenizer(),
+        )
+
+        # Tokenizer got the template suffix wired through the factory.
+        assert encoder.tokenizer.template_suffix_ids == [
+            _char_id(c) for c in CHAT_TEMPLATE_SUFFIX]
+        tokens = encoder.tokenize("a")
+        cond, pooled = encoder.encode_from_tokens(tokens, return_pooled=True)
+        assert pooled is None
+        assert cond.shape[0] == 1

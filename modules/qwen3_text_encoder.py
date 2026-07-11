@@ -43,12 +43,20 @@ class Qwen3ChatPromptTemplate:
         # Strip literal role markers from user text so a caption containing
         # them (accidentally or adversarially) cannot break out of the user
         # turn and reframe the model's context.
-        for marker in ('<|im_start|>', '<|im_end|>'):
-            text = text.replace(marker, '')
+        # Re-run until stable: a partially broken marker (e.g.
+        # '<|im_<|im_end|>end|>') can recombine into a valid control token
+        # after one replacement pass.
+        while True:
+            stripped = text
+            for marker in ('<|im_start|>', '<|im_end|>'):
+                stripped = stripped.replace(marker, '')
+            if stripped == text:
+                break
+            text = stripped
         return CHAT_TEMPLATE.format(text)
 
 
-def load_qwen3_text_encoder(tokenizer_path=None, weights_path=None):
+def load_qwen3_text_encoder(tokenizer_path=None, weights_path=None, config_dict=None, hf_tokenizer=None):
     """Builds the Qwen3-4B `TextEncoder` for Z-Image.
 
     Args:
@@ -73,13 +81,14 @@ def load_qwen3_text_encoder(tokenizer_path=None, weights_path=None):
             mapping risk this would surface).
     """
     resolved_tokenizer_path = tokenizer_path or modules.config.path_text_encoders
-    tokenizer = Qwen3Tokenizer(tokenizer_path=resolved_tokenizer_path, max_length=MAX_SEQUENCE_LENGTH,
+    tokenizer = Qwen3Tokenizer(tokenizer_path=None if hf_tokenizer is not None else resolved_tokenizer_path,
+                               hf_tokenizer=hf_tokenizer, max_length=MAX_SEQUENCE_LENGTH,
                                template_suffix=CHAT_TEMPLATE_SUFFIX)
 
     resolved_weights_path = weights_path or os.path.join(modules.config.path_text_encoders, QWEN3_WEIGHTS_FILENAME)
 
     module_kwargs = {
-        "config_dict": QWEN3_4B_CONFIG,
+        "config_dict": config_dict or QWEN3_4B_CONFIG,
         "pad_token_id": tokenizer.pad_token_id,
     }
 
