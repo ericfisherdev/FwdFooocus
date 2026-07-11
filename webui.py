@@ -7,6 +7,7 @@ import logging
 from flask import request
 import shared
 import modules.config
+import modules.model_family_detection
 import fooocus_version
 import modules.html
 import modules.async_worker as worker
@@ -157,13 +158,22 @@ title = f'FwdFooocus {fooocus_version.version}'
 if isinstance(args_manager.args.preset, str):
     title += ' ' + args_manager.args.preset
 
-# Load saved session state for resume-on-close
+# Load saved session state for resume-on-close, keyed on the detected
+# model family of the configured default checkpoint (falls back to the
+# hand-authored modules.config.default_base_model string for checkpoints
+# whose family cannot be detected).
 _saved_session_state = None
-if modules.config.default_base_model is not None:
-    from modules.session_state import load_state
+_session_state_key = modules.model_family_detection.session_state_key(modules.config.default_base_model_name)
+from modules.session_state import load_state
+_saved_session_state = load_state(_session_state_key)
+if not _saved_session_state and modules.config.default_base_model is not None \
+        and modules.config.default_base_model != _session_state_key:
+    # Rows written before family-keyed persistence live under the
+    # hand-authored config label; read them once so existing users don't
+    # lose their saved state (the save site writes the new key forward).
     _saved_session_state = load_state(modules.config.default_base_model)
-    if _saved_session_state:
-        print(f'[Session] Restored state for base model: {modules.config.default_base_model}')
+if _saved_session_state:
+    print(f'[Session] Restored state for base model: {_session_state_key}')
 
 
 def _session_default(key, fallback):

@@ -5,6 +5,7 @@ from modules.heartbeat import is_browser_connected
 from modules.patch import PatchSettings, patch_settings, patch_all
 from modules.session_state import save_state as save_session_state
 import modules.config
+import modules.model_family_detection
 
 patch_all()
 
@@ -1515,15 +1516,17 @@ def worker():
                 if task.generate_image_grid:
                     build_image_wall(task)
                 task.yields.append(['finish', task.results])
-                # Save session state for resume-on-close
-                if modules.config.default_base_model is not None:
-                    try:
-                        save_session_state(
-                            modules.config.default_base_model,
-                            _build_session_state(task)
-                        )
-                    except Exception as e:
-                        print(f'[Session] Failed to save state: {type(e).__name__}: {e}')
+                # Save session state for resume-on-close, keyed on the
+                # detected model family of the checkpoint this task used
+                # (falls back to modules.config.default_base_model for
+                # checkpoints whose family cannot be detected).
+                try:
+                    save_session_state(
+                        modules.model_family_detection.session_state_key(task.base_model_name),
+                        _build_session_state(task)
+                    )
+                except Exception as e:
+                    print(f'[Session] Failed to save state: {type(e).__name__}: {e}')
                 pipeline.prepare_text_encoder(async_call=True)
             except:
                 traceback.print_exc()
