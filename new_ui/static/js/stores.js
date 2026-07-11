@@ -9,6 +9,7 @@
  *   $store.data     — LoRA/model/style lists, refreshed every 60s
  *   $store.ui       — panel open/closed state, persisted to localStorage
  *   $store.generation — generation progress, updated from WebSocket
+ *   $store.model    — selected base model + its FamilyCapabilities descriptor
  *
  * Must be loaded before Alpine.js initializes (use alpine:init event).
  */
@@ -217,9 +218,49 @@ document.addEventListener('alpine:init', () => {
 
 
     /* ==============================================================
+     * $store.model — selected base model + its capability descriptor
+     *
+     * The cross-component bridge for family-aware UI gating: baseModel
+     * (bound from the settings drawer's Base Model select) and the
+     * capabilities it resolves to are read by sibling components
+     * (compose.html's quick settings, the settings drawer's sampling
+     * fields) that cannot see each other's local x-data.
+     * ============================================================== */
+
+    Alpine.store('model', {
+        baseModel: '',
+        family: null,
+        capabilities: null,
+
+        /** Fetch the FamilyCapabilities descriptor for a checkpoint.
+         *  Leaves the previously loaded family/capabilities in place on
+         *  a failed or non-OK fetch rather than throwing or clearing
+         *  them, so gated controls keep their last-known-good state. */
+        async loadCapabilities(checkpointName) {
+            try {
+                const resp = await fetch(`/api/capabilities?checkpoint=${encodeURIComponent(checkpointName)}`);
+                if (!resp.ok) return;
+                const data = await resp.json();
+                this.family = data.family;
+                this.capabilities = data;
+            } catch (e) {
+                console.error('[store.model] Failed to load capabilities:', e);
+            }
+        },
+    });
+
+
+    /* ==============================================================
      * Init: load config, start data refresh
      * ============================================================== */
 
-    Alpine.store('config').load();
+    Alpine.store('config').load().then(() => {
+        // Resolve the default checkpoint's family before compose.html's
+        // performance radio / aspect-ratio select settle into their final
+        // state, so there is no flash of the wrong control set.
+        const defaultModel = Alpine.store('config').defaultModel;
+        Alpine.store('model').baseModel = defaultModel;
+        Alpine.store('model').loadCapabilities(defaultModel);
+    });
     Alpine.store('data').startAutoRefresh();
 });

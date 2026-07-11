@@ -70,6 +70,47 @@ class TestIndexPage:
         assert "FwdFooocus" in r.text
 
 
+class TestFamilyAwareUIBindings:
+    """Renders '/' and asserts the FWDF-130 capability-driven Alpine
+    bindings are present -- there is no JS test runner in this repo, so
+    this is the template-level check that the $store.model wiring and
+    gates actually made it into the served markup."""
+
+    def test_base_model_select_binds_to_shared_model_store(self):
+        r = client.get("/")
+        assert r.status_code == 200
+        assert 'x-model="$store.model.baseModel"' in r.text
+
+    def test_refiner_fields_gated_on_supports_refiner(self):
+        r = client.get("/")
+        assert r.text.count('x-show="$store.model.capabilities?.supports_refiner ?? true"') == 2
+
+    def test_sharpness_gated_on_supports_sharpness(self):
+        r = client.get("/")
+        assert 'x-show="$store.model.capabilities?.supports_sharpness ?? true"' in r.text
+
+    def test_clip_skip_gated_on_supports_clip_skip(self):
+        r = client.get("/")
+        assert 'x-show="$store.model.capabilities?.supports_clip_skip ?? true"' in r.text
+
+    def test_vae_field_gated_on_family(self):
+        r = client.get("/")
+        assert 'supports_vae_override ?? true' in r.text
+
+    def test_negative_prompt_gated_on_supports_negative_prompt(self):
+        r = client.get("/")
+        assert 'x-show="$store.model.capabilities?.supports_negative_prompt ?? true"' in r.text
+
+    def test_performance_radio_driven_by_capabilities(self):
+        r = client.get("/")
+        assert 'x-for="mode in performanceModes"' in r.text
+        assert "setPerformance(mode.label)" in r.text
+
+    def test_aspect_ratio_select_driven_by_capabilities(self):
+        r = client.get("/")
+        assert 'x-for="ar in aspectRatioOptions"' in r.text
+
+
 class TestConfigAPI:
     def test_returns_config(self):
         r = client.get("/api/config")
@@ -240,14 +281,14 @@ class TestBuildGenerateArgsFamilyAware:
     IDX_OVERWRITE_STEP = 35
     IDX_FREEU_ENABLED = 49
 
-    def _zero_length_padding_patches(self):
+    def _zero_length_padding_patches(self) -> list:
         return [
             patch.object(config, "default_max_lora_number", 0),
             patch.object(config, "default_controlnet_image_count", 0),
             patch.object(config, "default_enhance_tabs", 0),
         ]
 
-    def _build(self, body, family=ModelFamily.SDXL, capabilities=None):
+    def _build(self, body, family=ModelFamily.SDXL, capabilities=None) -> list:
         patches = self._zero_length_padding_patches()
         patches.append(patch("modules.model_family_detection.get_family", return_value=family))
         if capabilities is not None:

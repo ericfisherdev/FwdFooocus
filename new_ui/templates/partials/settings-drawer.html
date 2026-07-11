@@ -66,14 +66,14 @@
                     <div class="settings-drawer__field">
                         <label class="text-label">Base Model</label>
                         <div class="select-wrapper">
-                            <select class="select" x-model="baseModel">
+                            <select class="select" x-model="$store.model.baseModel">
                                 <template x-for="m in $store.data.modelList" :key="m">
                                     <option :value="m" x-text="m.replace('.safetensors', '')"></option>
                                 </template>
                             </select>
                         </div>
                     </div>
-                    <div class="settings-drawer__field">
+                    <div class="settings-drawer__field" x-show="$store.model.capabilities?.supports_refiner ?? true">
                         <label class="text-label">Refiner</label>
                         <div class="select-wrapper">
                             <select class="select" x-model="refinerModel">
@@ -84,7 +84,7 @@
                             </select>
                         </div>
                     </div>
-                    <div class="settings-drawer__field">
+                    <div class="settings-drawer__field" x-show="$store.model.capabilities?.supports_refiner ?? true">
                         <label class="text-label" for="refiner-switch">Refiner Switch</label>
                         <div style="display: flex; align-items: center; gap: var(--space-2);">
                             <input id="refiner-switch" type="range" class="slider" min="0" max="1" step="0.05"
@@ -116,7 +116,7 @@
                             <span class="text-mono" x-text="guidanceScale.toFixed(2)"></span>
                         </div>
                     </div>
-                    <div class="settings-drawer__field">
+                    <div class="settings-drawer__field" x-show="$store.model.capabilities?.supports_sharpness ?? true">
                         <label class="text-label" for="sharpness">Sharpness</label>
                         <div style="display: flex; align-items: center; gap: var(--space-2);">
                             <input id="sharpness" type="range" class="slider" min="0" max="30" step="0.01"
@@ -144,7 +144,7 @@
                             </select>
                         </div>
                     </div>
-                    <div class="settings-drawer__field">
+                    <div class="settings-drawer__field" x-show="$store.model.capabilities?.supports_clip_skip ?? true">
                         <label class="text-label" for="clip-skip">CLIP Skip</label>
                         <div style="display: flex; align-items: center; gap: var(--space-2);">
                             <input id="clip-skip" type="range" class="slider" min="1" max="12" step="1"
@@ -152,7 +152,8 @@
                             <span class="text-mono" x-text="clipSkip"></span>
                         </div>
                     </div>
-                    <div class="settings-drawer__field">
+                    <div class="settings-drawer__field"
+                         x-show="$store.model.capabilities?.supports_vae_override ?? true">
                         <label class="text-label">VAE</label>
                         <div class="select-wrapper">
                             <select class="select" x-model="vae">
