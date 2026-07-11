@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 import modules.config
-from modules.flags import Performance, Steps, sampler_list, scheduler_list, sdxl_aspect_ratios
+from modules.flags import Performance, Steps, guidance_scale_range, sampler_list, scheduler_list, sdxl_aspect_ratios
 
 
 class ModelFamily(Enum):
@@ -133,7 +133,7 @@ def _build_sdxl_capabilities() -> FamilyCapabilities:
         scheduler_names=tuple(scheduler_list),
         aspect_ratios=tuple(sdxl_aspect_ratios),
         default_cfg=modules.config.default_cfg_scale,
-        cfg_range=(1.0, 30.0),
+        cfg_range=guidance_scale_range,
         default_steps=Steps.SPEED.value,
         latent_channels=4,
     )

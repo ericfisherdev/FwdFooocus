@@ -760,7 +760,9 @@ with shared.gradio_root:
                 with gr.Row():
                     refresh_files = gr.Button(label='Refresh', value='\U0001f504 Refresh All Files', variant='secondary', elem_classes='refresh_button')
             with gr.Tab(label='Advanced'):
-                guidance_scale = gr.Slider(label='Guidance Scale', minimum=1.0, maximum=30.0, step=0.01,
+                guidance_scale = gr.Slider(label='Guidance Scale',
+                                           minimum=modules.flags.guidance_scale_range[0],
+                                           maximum=modules.flags.guidance_scale_range[1], step=0.01,
                                            value=_session_default('cfg_scale', modules.config.default_cfg_scale),
                                            info='Higher value means style is cleaner, vivider, and more artistic.')
                 sharpness = gr.Slider(label='Image Sharpness', minimum=0.0, maximum=30.0, step=0.001,

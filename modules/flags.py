@@ -61,6 +61,10 @@ SAMPLER_NAMES = KSAMPLER_NAMES + list(SAMPLER_EXTRA.keys())
 sampler_list = SAMPLER_NAMES
 scheduler_list = SCHEDULER_NAMES
 
+# Single source of truth for the guidance-scale (CFG) slider bounds, shared by
+# the Gradio UI slider and the model-family capability registry.
+guidance_scale_range = (1.0, 30.0)
+
 clip_skip_max = 12
 
 default_vae = 'Default (model)'
