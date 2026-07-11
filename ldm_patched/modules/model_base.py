@@ -12,9 +12,10 @@ class ModelType(Enum):
     EPS = 1
     V_PREDICTION = 2
     V_PREDICTION_EDM = 3
+    FLOW = 4
 
 
-from ldm_patched.modules.model_sampling import EPS, V_PREDICTION, ModelSamplingDiscrete, ModelSamplingContinuousEDM
+from ldm_patched.modules.model_sampling import EPS, V_PREDICTION, ModelSamplingDiscrete, ModelSamplingContinuousEDM, ModelSamplingDiscreteFlow
 
 
 def model_sampling(model_config, model_type):
@@ -27,6 +28,12 @@ def model_sampling(model_config, model_type):
     elif model_type == ModelType.V_PREDICTION_EDM:
         c = V_PREDICTION
         s = ModelSamplingContinuousEDM
+    elif model_type == ModelType.FLOW:
+        # Flow-matching sampling is not a (schedule, prediction) mixin
+        # combination like the branches above: ModelSamplingDiscreteFlow
+        # owns its own schedule and prediction formulas, so return it
+        # directly instead of building it into the ModelSampling mixin.
+        return ModelSamplingDiscreteFlow(model_config)
 
     class ModelSampling(s, c):
         pass

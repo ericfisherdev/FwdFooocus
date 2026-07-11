@@ -155,6 +155,73 @@ class ModelSamplingContinuousEDM(torch.nn.Module):
         log_sigma_min = math.log(self.sigma_min)
         return math.exp((math.log(self.sigma_max) - log_sigma_min) * percent + log_sigma_min)
 
+def time_snr_shift(shift, t):
+    if shift == 1.0:
+        return t
+    return shift * t / (1 + (shift - 1) * t)
+
+
+class ModelSamplingDiscreteFlow(torch.nn.Module):
+    """Flow-matching (CONST prediction) schedule for DiT families such as
+    Z-Image and Krea 2. Flow models are conditioned on the noisy sample
+    directly and predict the velocity between signal and noise, so the
+    schedule and the prediction formulas live in a single class here
+    instead of the (schedule, prediction) mixin pairing used for
+    EPS/V_PREDICTION above.
+    """
+    def __init__(self, model_config=None):
+        super().__init__()
+
+        if model_config is not None:
+            sampling_settings = model_config.sampling_settings
+        else:
+            sampling_settings = {}
+
+        self.set_parameters(shift=sampling_settings.get("shift", 1.0), multiplier=sampling_settings.get("multiplier", 1000))
+        self.sigma_data = 1.0
+
+    def set_parameters(self, shift=1.0, timesteps=1000, multiplier=1000):
+        self.shift = shift
+        self.multiplier = multiplier
+        ts = self.sigma(torch.arange(1, timesteps + 1, 1))
+        self.register_buffer('sigmas', ts)
+
+    @property
+    def sigma_min(self):
+        return self.sigmas[0]
+
+    @property
+    def sigma_max(self):
+        return self.sigmas[-1]
+
+    def timestep(self, sigma):
+        return sigma * self.multiplier
+
+    def sigma(self, timestep):
+        return time_snr_shift(self.shift, timestep / self.multiplier)
+
+    def percent_to_sigma(self, percent):
+        if percent <= 0.0:
+            return 999999999.9
+        if percent >= 1.0:
+            return 0.0
+        percent = 1.0 - percent
+        return self.sigma(torch.tensor(percent * self.multiplier)).item()
+
+    def calculate_input(self, sigma, noise):
+        return noise
+
+    def calculate_denoised(self, sigma, model_output, model_input):
+        sigma = sigma.view(sigma.shape[:1] + (1,) * (model_output.ndim - 1))
+        return model_input - model_output * sigma
+
+    def noise_scaling(self, sigma, noise, latent_image, max_denoise=False):
+        return sigma * noise + (1.0 - sigma) * latent_image
+
+    def inverse_noise_scaling(self, sigma, latent):
+        return latent / (1.0 - sigma)
+
+
 class StableCascadeSampling(ModelSamplingDiscrete):
     def __init__(self, model_config=None):
         super().__init__()
