@@ -159,5 +159,55 @@ class TestMissingVAEGuard(unittest.TestCase):
         self.assertIn(core.path_vae, message)
 
 
+class TestLoadCheckpointGuessConfigVAEBranches(unittest.TestCase):
+    """Production-path coverage for load_checkpoint_guess_config()'s two VAE
+    branches: the embedded-VAE guard fires for a checkpoint with no
+    first_stage_model keys, and vae_filename_param bypasses the guard by
+    loading the standalone file instead."""
+
+    def _sd15_shaped_checkpoint_without_vae(self):
+        prefix = 'model.diffusion_model.'
+        return {
+            prefix + 'input_blocks.0.0.weight': torch.zeros(320, 4, 3, 3),
+            prefix + 'input_blocks.1.0.in_layers.0.weight': torch.zeros(1),
+            prefix + 'input_blocks.1.0.out_layers.3.weight': torch.zeros(320),
+            prefix + 'input_blocks.1.1.proj_in.weight': torch.zeros(320, 320, 1, 1),
+            prefix + 'input_blocks.1.1.transformer_blocks.0.attn2.to_k.weight': torch.zeros(320, 768),
+        }
+
+    def test_checkpoint_without_embedded_vae_raises_missing_vae_error(self):
+        from ldm_patched.modules import sd as sd_module
+
+        with patch('ldm_patched.modules.utils.load_torch_file',
+                   return_value=self._sd15_shaped_checkpoint_without_vae()):
+            with self.assertRaises(MissingVAEError):
+                sd_module.load_checkpoint_guess_config(
+                    'dit-only-checkpoint.safetensors',
+                    output_vae=True, output_clip=False, output_model=False,
+                )
+
+    def test_vae_filename_param_bypasses_guard_and_builds_standalone_vae(self):
+        from ldm_patched.modules import sd as sd_module
+
+        checkpoint_sd = self._sd15_shaped_checkpoint_without_vae()
+        standalone_vae_sd = _build_autoencoder_state_dict(z_channels=16)
+
+        def fake_load_torch_file(path, *args, **kwargs):
+            if path == 'standalone-vae.safetensors':
+                return standalone_vae_sd
+            return checkpoint_sd
+
+        with patch('ldm_patched.modules.utils.load_torch_file', side_effect=fake_load_torch_file):
+            result = sd_module.load_checkpoint_guess_config(
+                'dit-only-checkpoint.safetensors',
+                output_vae=True, output_clip=False, output_model=False,
+                vae_filename_param='standalone-vae.safetensors',
+            )
+
+        vae = result[2]
+        self.assertIsNotNone(vae)
+        self.assertEqual(vae.first_stage_model.decoder.conv_in.weight.shape[1], 16)
+
+
 if __name__ == '__main__':
     unittest.main()
