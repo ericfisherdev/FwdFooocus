@@ -156,6 +156,19 @@ class TestModelSamplingDiscreteFlowConfigDriven(unittest.TestCase):
         self.assertEqual(ModelSamplingDiscreteFlow(krea2_config).shift, 1.15)
 
 
+    def test_sigma_max_is_one_for_any_multiplier(self):
+        """The schedule buffer must span (0, 1] regardless of the configured
+        multiplier: normalization is by timesteps, scaling by multiplier, and
+        sigma() divides the multiplier back out."""
+        from ldm_patched.modules.model_sampling import ModelSamplingDiscreteFlow
+        for multiplier in (250, 1000, 10000):
+            sampling = ModelSamplingDiscreteFlow(
+                FakeModelConfig({"shift": 3.0, "multiplier": multiplier}))
+            self.assertAlmostEqual(float(sampling.sigma_max), 1.0, places=6)
+            self.assertGreater(float(sampling.sigma_min), 0.0)
+
+
+
 class TestModelTypeFlowDispatch(unittest.TestCase):
     """`model_sampling(model_config, ModelType.FLOW)` must return the flow
     sampling class directly, and the existing EPS/V_PREDICTION/EDM branches
