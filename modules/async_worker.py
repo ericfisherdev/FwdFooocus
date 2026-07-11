@@ -11,6 +11,20 @@ import modules.model_family_detection
 patch_all()
 
 
+def _base_model_supports_ip_adapter(base_model_name):
+    """Whether base_model_name's detected model family supports ip-adapter
+    conditioning (ImagePrompt/FaceSwap).
+
+    False for DiT families such as Z-Image: extras/ip_adapter.py's
+    patch_model() hooks a UNet's attn2 cross-attention layers via literal
+    (input/output/middle, block_id, index) triples with no DiT equivalent.
+    See modules/model_family.py's Z_IMAGE capability entry and FWDF-157
+    (parked -- no official Z-Image ip-adapter exists as of this writing).
+    """
+    base_family = modules.model_family_detection.get_family(base_model_name)
+    return modules.model_family.get_capabilities(base_family).supports_ip_adapter
+
+
 class AsyncTask:
     def __init__(self, args):
         from modules.flags import Performance, MetadataScheme, ip_list, disabled
@@ -550,6 +564,13 @@ def worker():
                 task[0] = core.numpy_to_pytorch(cn_img)
                 if async_task.debugging_cn_preprocessor:
                     yield_result(async_task, cn_img, current_progress, async_task.black_out_nsfw, do_not_show_finished_images=True)
+
+        if not _base_model_supports_ip_adapter(async_task.base_model_name):
+            # e.g. Z-Image: ip_adapter.patch_model() below hooks UNet-specific
+            # attn2 block indices that have no DiT equivalent. Parked per
+            # FWDF-157; revisit if an official Z-Image ip-adapter ships.
+            return
+
         for task in async_task.cn_tasks[flags.cn_ip]:
             cn_img, cn_stop, cn_weight = task
             cn_img = HWC3(cn_img)
@@ -1080,11 +1101,14 @@ def worker():
             if len(async_task.cn_tasks[flags.cn_cpds]) > 0 and _controlnet_type_supported(
                     async_task.base_model_name, 'cpds'):
                 controlnet_cpds_path = modules.config.downloading_controlnet_cpds()
-            if len(async_task.cn_tasks[flags.cn_ip]) > 0:
-                clip_vision_path, ip_negative_path, ip_adapter_path = modules.config.downloading_ip_adapters('ip')
-            if len(async_task.cn_tasks[flags.cn_ip_face]) > 0:
-                clip_vision_path, ip_negative_path, ip_adapter_face_path = modules.config.downloading_ip_adapters(
-                    'face')
+            if _base_model_supports_ip_adapter(async_task.base_model_name):
+                if len(async_task.cn_tasks[flags.cn_ip]) > 0:
+                    clip_vision_path, ip_negative_path, ip_adapter_path = modules.config.downloading_ip_adapters('ip')
+                if len(async_task.cn_tasks[flags.cn_ip_face]) > 0:
+                    clip_vision_path, ip_negative_path, ip_adapter_face_path = modules.config.downloading_ip_adapters(
+                        'face')
+            elif len(async_task.cn_tasks[flags.cn_ip]) > 0 or len(async_task.cn_tasks[flags.cn_ip_face]) > 0:
+                print(f'[ImagePrompt] ip-adapter is not supported for this model family; skipping ip-adapter tasks.')
         if async_task.current_tab == 'enhance' and async_task.enhance_input_image is not None:
             goals.append('enhance')
             skip_prompt_processing = True

@@ -253,6 +253,15 @@ def _build_z_image_capabilities() -> FamilyCapabilities:
         supports_negative_prompt=True,
         supports_controlnet=True,
         controlnet_types=('canny',),
+        # FWDF-157 (parked, investigated 2026-07-11): no official IP-Adapter
+        # exists for Z-Image-Turbo. extras/ip_adapter.py's patch_model()
+        # (extras/ip_adapter.py:202-284) hooks a UNet's attn2 cross-attention
+        # layers via literal (input/output/middle, block_id, index) triples
+        # -- a convention with no DiT equivalent. Revisit when either
+        # Tongyi-MAI/Alibaba PAI ships an official ip-adapter-style
+        # checkpoint, or a community adapter reaches the same maturity bar
+        # used for FWDF-156's ControlNet "implement" decision (first-party
+        # framework documentation, not a discussion-thread workaround).
         supports_ip_adapter=False,
         supports_inpaint_engine=False,
         supports_vae_override=False,
