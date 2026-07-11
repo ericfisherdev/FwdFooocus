@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -14,11 +15,48 @@ _original_argv = sys.argv
 sys.argv = [sys.argv[0]]
 
 from fastapi.testclient import TestClient  # noqa: E402
-from new_ui.app import app  # noqa: E402
+from new_ui.app import app, _build_generate_args  # noqa: E402
+import modules.config as config  # noqa: E402
+from modules.model_family import FamilyCapabilities, ModelFamily, PerformanceMode  # noqa: E402
 
 sys.argv = _original_argv
 
 client = TestClient(app)
+
+
+def _make_z_image_like_capabilities() -> FamilyCapabilities:
+    """A synthetic capabilities descriptor with every SDXL-only flag off.
+
+    Stands in for a real Z-Image registry entry (which does not exist yet --
+    `ModelFamily.Z_IMAGE` currently falls back to the SDXL descriptor, see
+    `tests/test_model_family.py::TestUnknownFallback`). Used to exercise
+    `_build_generate_args`'s family-aware gating without depending on
+    FWDF-123..127 landing first.
+    """
+    return FamilyCapabilities(
+        supports_refiner=False,
+        supports_adm_guidance=False,
+        supports_freeu=False,
+        supports_clip_skip=False,
+        supports_adaptive_cfg=False,
+        supports_sharpness=False,
+        supports_negative_prompt=False,
+        supports_controlnet=False,
+        supports_ip_adapter=False,
+        supports_inpaint_engine=False,
+        supports_vae_override=False,
+        vae_names=None,
+        performance_modes=(
+            PerformanceMode(label="Fast", steps=20, steps_uov=10, cfg=None, lora_filename=None, restricted=False),
+        ),
+        sampler_names=("euler",),
+        scheduler_names=("simple",),
+        aspect_ratios=("512*512",),
+        default_cfg=4.0,
+        cfg_range=(1.0, 10.0),
+        default_steps=20,
+        latent_channels=16,
+    )
 
 
 class TestIndexPage:
@@ -59,6 +97,69 @@ class TestModelsAPI:
         assert "loras" in data
         assert isinstance(data["checkpoints"], list)
         assert isinstance(data["loras"], list)
+
+    def test_checkpoints_field_stays_a_flat_string_list(self):
+        # checkpoint_families must be purely additive -- checkpoints itself
+        # must not be reshaped into {name, family} objects (stores.js and
+        # settings-drawer.html both treat each entry as a plain string).
+        r = client.get("/api/models")
+        data = r.json()
+        for entry in data["checkpoints"]:
+            assert isinstance(entry, str)
+
+    def test_checkpoint_families_covers_every_checkpoint(self):
+        with patch.object(config, "model_filenames", ["sdxl.safetensors", "z_image.safetensors"]), \
+             patch(
+                 "modules.model_family_detection.get_family",
+                 side_effect=lambda filename: {
+                     "sdxl.safetensors": ModelFamily.SDXL,
+                     "z_image.safetensors": ModelFamily.Z_IMAGE,
+                 }[filename],
+             ):
+            r = client.get("/api/models")
+        data = r.json()
+        assert data["checkpoint_families"] == {
+            "sdxl.safetensors": "sdxl",
+            "z_image.safetensors": "z_image",
+        }
+
+
+class TestCapabilitiesAPI:
+    def test_defaults_to_configured_base_model(self):
+        with patch("modules.model_family_detection.get_family", return_value=ModelFamily.SDXL) as mock_get_family:
+            r = client.get("/api/capabilities")
+        assert r.status_code == 200
+        mock_get_family.assert_called_once_with(config.default_base_model_name)
+
+    def test_returns_capabilities_for_explicit_sdxl_checkpoint(self):
+        with patch("modules.model_family_detection.get_family", return_value=ModelFamily.SDXL):
+            r = client.get("/api/capabilities", params={"checkpoint": "sdxl_base.safetensors"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["family"] == "sdxl"
+        assert data["supports_refiner"] is True
+        assert data["supports_adm_guidance"] is True
+        assert "dpmpp_2m_sde_gpu" in data["sampler_names"]
+        assert isinstance(data["performance_modes"], list)
+        assert data["performance_modes"][0]["label"]
+
+    def test_returns_capabilities_for_z_image_checkpoint(self):
+        synthetic = _make_z_image_like_capabilities()
+        with patch("modules.model_family_detection.get_family", return_value=ModelFamily.Z_IMAGE), \
+             patch("modules.model_family.get_capabilities", return_value=synthetic):
+            r = client.get("/api/capabilities", params={"checkpoint": "z_image.safetensors"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["family"] == "z_image"
+        assert data["supports_refiner"] is False
+        assert data["supports_adm_guidance"] is False
+        assert data["sampler_names"] == ["euler"]
+
+    def test_family_is_a_plain_string_not_an_enum_repr(self):
+        with patch("modules.model_family_detection.get_family", return_value=ModelFamily.UNKNOWN):
+            r = client.get("/api/capabilities", params={"checkpoint": "unknown.safetensors"})
+        data = r.json()
+        assert data["family"] == "unknown"
 
 
 class TestStylesAPI:
@@ -105,3 +206,149 @@ class TestHeartbeatAPI:
     def test_heartbeat_rejects_get(self):
         r = client.get("/api/heartbeat")
         assert r.status_code == 405
+
+
+class TestBuildGenerateArgsFamilyAware:
+    """Exercises `_build_generate_args`'s family-conditional gating directly.
+
+    Zeroes out the three variable-length padding sections (LoRA/ControlNet/
+    enhance-tab slots) so every fixed field lands at a stable, hand-countable
+    index -- the indices below assume `default_max_lora_number ==
+    default_controlnet_image_count == default_enhance_tabs == 0` and must be
+    recounted from `_build_generate_args`'s `args = [...]` literal (new_ui/
+    app.py) if a field is inserted, removed, or reordered there.
+    """
+
+    IDX_NEGATIVE_PROMPT = 2
+    IDX_PERFORMANCE_SELECTION = 4
+    IDX_ASPECT_RATIOS_SELECTION = 5
+    IDX_SHARPNESS = 10
+    IDX_CFG_SCALE = 11
+    IDX_REFINER_MODEL_NAME = 13
+    IDX_REFINER_SWITCH = 14
+    IDX_ADM_SCALER_POSITIVE = 27
+    IDX_ADM_SCALER_NEGATIVE = 28
+    IDX_ADM_SCALER_END = 29
+    IDX_ADAPTIVE_CFG = 30
+    IDX_CLIP_SKIP = 31
+    IDX_SAMPLER_NAME = 32
+    IDX_SCHEDULER_NAME = 33
+    IDX_VAE_NAME = 34
+    IDX_FREEU_ENABLED = 49
+
+    def _zero_length_padding_patches(self):
+        return [
+            patch.object(config, "default_max_lora_number", 0),
+            patch.object(config, "default_controlnet_image_count", 0),
+            patch.object(config, "default_enhance_tabs", 0),
+        ]
+
+    def _build(self, body, family=ModelFamily.SDXL, capabilities=None):
+        patches = self._zero_length_padding_patches()
+        patches.append(patch("modules.model_family_detection.get_family", return_value=family))
+        if capabilities is not None:
+            patches.append(patch("modules.model_family.get_capabilities", return_value=capabilities))
+        for p in patches:
+            p.start()
+        try:
+            return _build_generate_args(body)
+        finally:
+            for p in patches:
+                p.stop()
+
+    def test_sdxl_family_matches_historic_hardcoded_defaults(self):
+        # Regression fixture: an empty body's resolved values for an SDXL
+        # checkpoint must equal today's pre-FWDF-128 hardcoded defaults.
+        args = self._build({}, family=ModelFamily.SDXL)
+
+        assert args[self.IDX_NEGATIVE_PROMPT] == ""
+        assert args[self.IDX_PERFORMANCE_SELECTION] == config.default_performance
+        assert args[self.IDX_ASPECT_RATIOS_SELECTION] == config.default_aspect_ratio
+        assert args[self.IDX_SHARPNESS] == config.default_sample_sharpness
+        assert args[self.IDX_CFG_SCALE] == config.default_cfg_scale
+        assert args[self.IDX_REFINER_MODEL_NAME] == config.default_refiner_model_name
+        assert args[self.IDX_REFINER_SWITCH] == config.default_refiner_switch
+        assert args[self.IDX_ADM_SCALER_POSITIVE] == 1.5
+        assert args[self.IDX_ADM_SCALER_NEGATIVE] == 0.8
+        assert args[self.IDX_ADM_SCALER_END] == 0.3
+        assert args[self.IDX_ADAPTIVE_CFG] == 7.0
+        assert args[self.IDX_CLIP_SKIP] == 2
+        assert args[self.IDX_SAMPLER_NAME] == config.default_sampler
+        assert args[self.IDX_SCHEDULER_NAME] == config.default_scheduler
+        assert args[self.IDX_VAE_NAME] == "Default (model)"
+        assert args[self.IDX_FREEU_ENABLED] is False
+
+    def test_unknown_family_behaves_identically_to_sdxl(self):
+        # UNKNOWN's FamilyCapabilities is the exact same object as SDXL's
+        # (modules/model_family.py), so an unrecognized checkpoint must
+        # produce byte-for-byte identical args to an explicit SDXL family.
+        body = {"cfg_scale": 5.5, "sharpness": 3.3, "refiner_switch": 0.4}
+        sdxl_args = self._build(body, family=ModelFamily.SDXL)
+        unknown_args = self._build(body, family=ModelFamily.UNKNOWN)
+        assert sdxl_args == unknown_args
+
+    def test_sdxl_family_honors_explicit_request_values(self):
+        body = {
+            "negative_prompt": "blurry",
+            "refiner_model_name": "refiner.safetensors",
+            "refiner_switch": 0.4,
+            "adm_scaler_positive": 2.0,
+            "clip_skip": 4,
+            "freeu_enabled": True,
+            "vae_name": "custom.vae.safetensors",
+        }
+        args = self._build(body, family=ModelFamily.SDXL)
+
+        assert args[self.IDX_NEGATIVE_PROMPT] == "blurry"
+        assert args[self.IDX_REFINER_MODEL_NAME] == "refiner.safetensors"
+        assert args[self.IDX_REFINER_SWITCH] == 0.4
+        assert args[self.IDX_ADM_SCALER_POSITIVE] == 2.0
+        assert args[self.IDX_CLIP_SKIP] == 4
+        assert args[self.IDX_FREEU_ENABLED] is True
+        assert args[self.IDX_VAE_NAME] == "custom.vae.safetensors"
+
+    def test_z_image_family_forces_sdxl_only_fields_to_disable_values(self):
+        synthetic = _make_z_image_like_capabilities()
+        body = {
+            "negative_prompt": "ignored",
+            "refiner_model_name": "some_refiner.safetensors",
+            "refiner_switch": 0.5,
+            "adm_scaler_positive": 2.0,
+            "adm_scaler_negative": 1.5,
+            "adm_scaler_end": 0.9,
+            "adaptive_cfg": 3.3,
+            "clip_skip": 5,
+            "sharpness": 9.9,
+            "freeu_enabled": True,
+            "vae_name": "custom_vae.safetensors",
+            "cfg_scale": 6.0,
+        }
+        args = self._build(body, family=ModelFamily.Z_IMAGE, capabilities=synthetic)
+
+        assert args[self.IDX_NEGATIVE_PROMPT] == ""
+        assert args[self.IDX_REFINER_MODEL_NAME] == "None"
+        assert args[self.IDX_REFINER_SWITCH] == 0.0
+        assert args[self.IDX_ADM_SCALER_POSITIVE] == 1.0
+        assert args[self.IDX_ADM_SCALER_NEGATIVE] == 1.0
+        assert args[self.IDX_ADM_SCALER_END] == 0.0
+        assert args[self.IDX_CFG_SCALE] == 6.0
+        assert args[self.IDX_ADAPTIVE_CFG] == 6.0  # forced equal to the resolved cfg_scale
+        assert args[self.IDX_CLIP_SKIP] == 1
+        assert args[self.IDX_SHARPNESS] == 0.0
+        assert args[self.IDX_FREEU_ENABLED] is False
+        assert args[self.IDX_VAE_NAME] == "Default (model)"
+
+    def test_z_image_family_falls_back_to_its_own_choice_lists(self):
+        synthetic = _make_z_image_like_capabilities()
+        body = {
+            "sampler_name": "dpmpp_2m_sde_gpu",  # SDXL-only, not in the synthetic family's list
+            "scheduler_name": "karras",          # SDXL-only, not in the synthetic family's list
+            "performance_selection": "Quality",  # not in the synthetic family's performance modes
+            "aspect_ratios_selection": "1024*1024",  # not in the synthetic family's aspect ratios
+        }
+        args = self._build(body, family=ModelFamily.Z_IMAGE, capabilities=synthetic)
+
+        assert args[self.IDX_SAMPLER_NAME] == "euler"
+        assert args[self.IDX_SCHEDULER_NAME] == "simple"
+        assert args[self.IDX_PERFORMANCE_SELECTION] == "Fast"
+        assert args[self.IDX_ASPECT_RATIOS_SELECTION] == "512*512"
