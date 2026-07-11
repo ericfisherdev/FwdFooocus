@@ -446,11 +446,15 @@ def load_checkpoint_guess_config(ckpt_path, output_vae=True, output_clip=True, o
     class WeightsLoader(torch.nn.Module):
         pass
 
-    model_config = model_detection.model_config_from_unet(sd, "model.diffusion_model.", unet_dtype)
-    model_config.set_manual_cast(manual_cast_dtype)
+    try:
+        model_config = model_detection.model_config_from_unet(sd, "model.diffusion_model.", unet_dtype)
+    except model_detection.UnsupportedArchitectureError as e:
+        raise RuntimeError(f"ERROR: Detected architecture '{e.architecture_name}' for {ckpt_path} but no model config is registered for it yet.") from e
 
     if model_config is None:
-        raise RuntimeError("ERROR: Could not detect model type of: {}".format(ckpt_path))
+        raise RuntimeError(f"ERROR: Could not detect model type of: {ckpt_path}")
+
+    model_config.set_manual_cast(manual_cast_dtype)
 
     if model_config.clip_vision_prefix is not None:
         if output_clipvision:

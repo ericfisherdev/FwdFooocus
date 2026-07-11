@@ -321,6 +321,8 @@ def load_controlnet(ckpt_path, model=None):
     if "controlnet_cond_embedding.conv_in.weight" in controlnet_data: #diffusers format
         unet_dtype = ldm_patched.modules.model_management.unet_dtype()
         controlnet_config = ldm_patched.modules.model_detection.unet_config_from_diffusers_unet(controlnet_data, unet_dtype)
+        if controlnet_config is None:
+            raise RuntimeError(f"ERROR: Could not detect controlnet model type of: {ckpt_path}")
         diffusers_keys = ldm_patched.modules.utils.unet_to_diffusers(controlnet_config)
         diffusers_keys["controlnet_mid_block.weight"] = "middle_block_out.0.weight"
         diffusers_keys["controlnet_mid_block.bias"] = "middle_block_out.0.bias"
@@ -381,7 +383,10 @@ def load_controlnet(ckpt_path, model=None):
 
     if controlnet_config is None:
         unet_dtype = ldm_patched.modules.model_management.unet_dtype()
-        controlnet_config = ldm_patched.modules.model_detection.model_config_from_unet(controlnet_data, prefix, unet_dtype, True).unet_config
+        model_config = ldm_patched.modules.model_detection.model_config_from_unet(controlnet_data, prefix, unet_dtype, use_base_if_no_match=True)
+        if model_config is None:
+            raise RuntimeError(f"ERROR: Could not detect controlnet model type of: {ckpt_path}")
+        controlnet_config = model_config.unet_config
     load_device = ldm_patched.modules.model_management.get_torch_device()
     manual_cast_dtype = ldm_patched.modules.model_management.unet_manual_cast(unet_dtype, load_device)
     if manual_cast_dtype is not None:
