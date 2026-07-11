@@ -364,9 +364,12 @@ def process_diffusion(positive_cond, negative_cond, steps, switch, width, height
     print(f'[Sampler] refiner_swap_method = {refiner_swap_method}')
 
     if latent is None:
+        # target_unet is what actually consumes this latent (it may be the
+        # refiner on partial-denoise paths), so its latent format decides
+        # the channel count.
         initial_latent = core.generate_empty_latent(
             width=width, height=height, batch_size=1,
-            latent_channels=final_unet.model.latent_format.latent_channels)
+            latent_channels=target_unet.model.latent_format.latent_channels)
     else:
         initial_latent = latent
 
