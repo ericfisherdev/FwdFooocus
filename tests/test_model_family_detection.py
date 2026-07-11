@@ -323,3 +323,39 @@ class TestCacheBoundedness(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestReadErrorsNeverEscape(unittest.TestCase):
+    def setUp(self):
+        model_family_detection._family_cache.clear()
+
+    def tearDown(self):
+        model_family_detection._family_cache.clear()
+
+    def test_file_vanishing_between_stat_and_open_returns_unknown(self):
+        """get_family()'s never-raises contract must hold even when the file
+        disappears after os.stat() succeeds (TOCTOU) — safe_open()'s OSError
+        is converted, not propagated."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = os.path.join(tmp_dir, 'model.safetensors')
+            safetensors.torch.save_file({'input_blocks.0.0.weight': torch.zeros(2)}, path)
+            real_stat = os.stat
+
+            def stat_then_delete(p, *a, **k):
+                result = real_stat(p, *a, **k)
+                if p == os.path.abspath(path) or p == path:
+                    try:
+                        os.remove(path)
+                    except FileNotFoundError:
+                        pass
+                return result
+
+            with mock.patch.object(
+                model_family_detection.modules.config, 'paths_checkpoints', [tmp_dir]
+            ), mock.patch.object(
+                model_family_detection.modules.config, 'path_fast_checkpoints', None
+            ), mock.patch('modules.model_family_detection.os.stat', side_effect=stat_then_delete):
+                family = model_family_detection.get_family('model.safetensors')
+
+        self.assertIs(family, ModelFamily.UNKNOWN)
