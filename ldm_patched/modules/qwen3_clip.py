@@ -111,7 +111,7 @@ class Qwen3Tokenizer:
     disk via `tokenizer_path`.
     """
 
-    def __init__(self, tokenizer_path=None, max_length=512, hf_tokenizer=None, tokenizer_class=None):
+    def __init__(self, tokenizer_path=None, max_length=512, hf_tokenizer=None, tokenizer_class=None, template_suffix=None):
         if hf_tokenizer is not None:
             self.tokenizer = hf_tokenizer
         else:
@@ -129,6 +129,14 @@ class Qwen3Tokenizer:
             pad_token_id = self.tokenizer.eos_token_id
         self.pad_token_id = pad_token_id
         self.special_tokens = {"pad": self.pad_token_id}
+        # Token ids of the prompt template's trailing role markers (e.g.
+        # '<|im_end|>\n<|im_start|>assistant\n'). When set, truncation
+        # preserves this suffix so a long prompt cannot clip the assistant
+        # turn off the conditioning context.
+        if template_suffix:
+            self.template_suffix_ids = list(self.tokenizer(template_suffix, add_special_tokens=False)["input_ids"])
+        else:
+            self.template_suffix_ids = []
 
     def tokenize_with_weights(self, text, return_word_ids=False):
         """Returns a single-section `[[(token_id, weight[, word_id]), ...]]`
@@ -149,7 +157,13 @@ class Qwen3Tokenizer:
             tokens.extend((token_id, weight) for token_id in ids)
 
         if len(tokens) > self.max_length:
-            tokens = tokens[:self.max_length]
+            suffix_ids = self.template_suffix_ids
+            token_ids = [token_id for token_id, _ in tokens]
+            if suffix_ids and token_ids[-len(suffix_ids):] == suffix_ids:
+                head = tokens[:self.max_length - len(suffix_ids)]
+                tokens = head + tokens[-len(suffix_ids):]
+            else:
+                tokens = tokens[:self.max_length]
 
         if return_word_ids:
             batch = [(token_id, weight, i + 1) for i, (token_id, weight) in enumerate(tokens)]

@@ -27,6 +27,7 @@ MAX_SEQUENCE_LENGTH = 512
 # inference code -- verify against the official Z-Image repo's pipeline
 # source before this ships to production.
 CHAT_TEMPLATE = "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n"
+CHAT_TEMPLATE_SUFFIX = "<|im_end|>\n<|im_start|>assistant\n"
 
 QWEN3_WEIGHTS_FILENAME = "qwen_3_4b.safetensors"
 
@@ -39,6 +40,11 @@ class Qwen3ChatPromptTemplate:
     verification status."""
 
     def apply(self, text: str) -> str:
+        # Strip literal role markers from user text so a caption containing
+        # them (accidentally or adversarially) cannot break out of the user
+        # turn and reframe the model's context.
+        for marker in ('<|im_start|>', '<|im_end|>'):
+            text = text.replace(marker, '')
         return CHAT_TEMPLATE.format(text)
 
 
@@ -67,7 +73,8 @@ def load_qwen3_text_encoder(tokenizer_path=None, weights_path=None):
             mapping risk this would surface).
     """
     resolved_tokenizer_path = tokenizer_path or modules.config.path_text_encoders
-    tokenizer = Qwen3Tokenizer(tokenizer_path=resolved_tokenizer_path, max_length=MAX_SEQUENCE_LENGTH)
+    tokenizer = Qwen3Tokenizer(tokenizer_path=resolved_tokenizer_path, max_length=MAX_SEQUENCE_LENGTH,
+                               template_suffix=CHAT_TEMPLATE_SUFFIX)
 
     resolved_weights_path = weights_path or os.path.join(modules.config.path_text_encoders, QWEN3_WEIGHTS_FILENAME)
 
