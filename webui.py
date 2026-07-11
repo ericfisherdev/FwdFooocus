@@ -7,7 +7,9 @@ import logging
 from flask import request
 import shared
 import modules.config
+import modules.model_family
 import modules.model_family_detection
+import modules.family_ui_gates as family_ui_gates
 import fooocus_version
 import modules.html
 import modules.async_worker as worker
@@ -1229,6 +1231,176 @@ with shared.gradio_root:
 
         state_is_generating = gr.State(False)
 
+        def _capabilities_for_base_model(base_model_filename):
+            """Resolve the FamilyCapabilities for a base-model checkpoint filename."""
+            family = modules.model_family_detection.get_family(base_model_filename)
+            return modules.model_family.get_capabilities(family)
+
+        def _family_gated_updates(base_model_filename, performance, refiner_model_value, sampler_name_value,
+                                   scheduler_name_value, aspect_ratio_value, vae_name_value, guidance_scale_value):
+            """Recompute every family-gated gr.update() driven by `base_model`.
+
+            Shared by base_model.change, the startup shared.gradio_root.load
+            (so a restored session resuming on a non-SDXL checkpoint shows the
+            right view immediately instead of flashing the SDXL layout), and
+            preset_selection.change's .then() chain (loading a preset can also
+            change the selected checkpoint).
+            """
+            caps = _capabilities_for_base_model(base_model_filename)
+
+            # Resolve performance_selection's own new value FIRST: if the
+            # incoming `performance` isn't valid for the new family,
+            # performance_choices_and_value resolves it to the family's own
+            # default. Every downstream restricted/interactive decision below
+            # gates on that resolved value, not the stale incoming one, or
+            # controls could disagree with the radio's actual on-screen value
+            # until the user manually re-touches it.
+            performance_choices, performance_value = family_ui_gates.performance_choices_and_value(
+                caps, performance)
+
+            restricted = family_ui_gates.performance_restricted(performance_value)
+            refiner_state = family_ui_gates.restricted_interactive(
+                supported=caps.supports_refiner, performance=performance_value)
+            adm_state = family_ui_gates.restricted_interactive(
+                supported=caps.supports_adm_guidance, performance=performance_value)
+            adaptive_cfg_state = family_ui_gates.restricted_interactive(
+                supported=caps.supports_adaptive_cfg, performance=performance_value)
+            sharpness_state = family_ui_gates.restricted_interactive(
+                supported=caps.supports_sharpness, performance=performance_value)
+            # No family term applies to guidance_scale/sampler_name/scheduler_name
+            # (every family supports CFG and some sampler/scheduler); their
+            # interactivity is performance-restriction-only.
+            performance_only_interactive = family_ui_gates.restricted_interactive(
+                supported=True, performance=performance_value)
+
+            sampler_choices, sampler_value = family_ui_gates.sampler_choices_and_value(
+                caps, sampler_name_value, modules.config.default_sampler)
+            scheduler_choices, scheduler_value = family_ui_gates.scheduler_choices_and_value(
+                caps, scheduler_name_value, modules.config.default_scheduler)
+            aspect_choices, aspect_value = family_ui_gates.aspect_ratio_choices_and_value(
+                caps, aspect_ratio_value, modules.config.add_ratio,
+                modules.flags.sdxl_aspect_ratios, modules.config.available_aspect_ratios)
+            vae_visible, vae_interactive, vae_choices, vae_value = family_ui_gates.vae_state(
+                caps, vae_name_value, modules.config.vae_filenames, modules.flags.default_vae)
+            cfg_minimum, cfg_maximum, cfg_value = family_ui_gates.guidance_scale_range_and_value(
+                caps, guidance_scale_value)
+
+            # None means "family doesn't restrict VAE choices differently right
+            # now" -- omit the keys entirely rather than passing choices=None/
+            # value=None, which would clear them instead of leaving them as-is.
+            vae_update_kwargs = {'visible': vae_visible, 'interactive': vae_interactive}
+            if vae_choices is not None:
+                vae_update_kwargs['choices'] = list(vae_choices)
+                vae_update_kwargs['value'] = vae_value
+
+            controlnet_state = caps.supports_controlnet
+            ip_state = caps.supports_controlnet or caps.supports_ip_adapter
+
+            return [
+                gr.update(visible=caps.supports_refiner, interactive=refiner_state),  # refiner_model
+                gr.update(visible=family_ui_gates.refiner_switch_visible(caps, refiner_model_value),
+                          interactive=refiner_state),  # refiner_switch
+                gr.update(visible=caps.supports_refiner, interactive=refiner_state),  # refiner_swap_method
+                gr.update(visible=caps.supports_refiner, interactive=caps.supports_refiner),  # overwrite_switch
+
+                gr.update(visible=caps.supports_adm_guidance, interactive=adm_state),  # adm_scaler_positive
+                gr.update(visible=caps.supports_adm_guidance, interactive=adm_state),  # adm_scaler_negative
+                gr.update(visible=caps.supports_adm_guidance, interactive=adm_state),  # adm_scaler_end
+
+                gr.update(visible=caps.supports_adaptive_cfg, interactive=adaptive_cfg_state),  # adaptive_cfg
+                gr.update(visible=caps.supports_clip_skip, interactive=caps.supports_clip_skip),  # clip_skip
+                gr.update(visible=caps.supports_sharpness, interactive=sharpness_state),  # sharpness
+
+                gr.update(choices=list(sampler_choices), value=sampler_value,
+                          interactive=performance_only_interactive),  # sampler_name
+                gr.update(choices=list(scheduler_choices), value=scheduler_value,
+                          interactive=performance_only_interactive),  # scheduler_name
+                gr.update(**vae_update_kwargs),  # vae_name
+
+                gr.update(visible=family_ui_gates.negative_prompt_visible(caps, performance_value)),  # negative_prompt
+
+                gr.update(visible=caps.supports_freeu, interactive=caps.supports_freeu),  # freeu_enabled
+                gr.update(visible=caps.supports_freeu, interactive=caps.supports_freeu),  # freeu_b1
+                gr.update(visible=caps.supports_freeu, interactive=caps.supports_freeu),  # freeu_b2
+                gr.update(visible=caps.supports_freeu, interactive=caps.supports_freeu),  # freeu_s1
+                gr.update(visible=caps.supports_freeu, interactive=caps.supports_freeu),  # freeu_s2
+
+                gr.update(visible=caps.supports_inpaint_engine,
+                          interactive=caps.supports_inpaint_engine),  # inpaint_engine
+
+                gr.update(choices=list(performance_choices), value=performance_value),  # performance_selection
+                gr.update(choices=list(aspect_choices), value=aspect_value),  # aspect_ratios_selection
+                gr.update(minimum=cfg_minimum, maximum=cfg_maximum, value=cfg_value,
+                          interactive=performance_only_interactive),  # guidance_scale
+
+                gr.update(visible=controlnet_state, interactive=controlnet_state),  # debugging_cn_preprocessor
+                gr.update(visible=controlnet_state, interactive=controlnet_state),  # skipping_cn_preprocessor
+                gr.update(visible=controlnet_state,
+                          interactive=controlnet_state),  # mixing_image_prompt_and_vary_upscale
+                gr.update(visible=controlnet_state, interactive=controlnet_state),  # mixing_image_prompt_and_inpaint
+                gr.update(visible=controlnet_state, interactive=controlnet_state),  # controlnet_softness
+                gr.update(visible=controlnet_state, interactive=controlnet_state),  # canny_low_threshold
+                gr.update(visible=controlnet_state, interactive=controlnet_state),  # canny_high_threshold
+
+                gr.update(interactive=ip_state),  # ip_advanced
+                # disable_intermediate_results: kept in sync here too, since a
+                # family switch can itself resolve performance away from a
+                # stale value (see performance_value above).
+                gr.update(value=restricted),  # disable_intermediate_results
+            ]
+
+        def _performance_and_family_changed(performance, base_model_filename):
+            """Recompute the controls performance_selection.change already drove,
+            now also folding in family support so this handler and
+            base_model.change compute the same union from the same two
+            inputs -- whichever fires last cannot clobber the other's
+            decision because the result is identical either way.
+            """
+            caps = _capabilities_for_base_model(base_model_filename)
+            restricted = family_ui_gates.performance_restricted(performance)
+
+            return [
+                gr.update(interactive=not restricted),  # guidance_scale
+                gr.update(interactive=family_ui_gates.restricted_interactive(
+                    supported=caps.supports_sharpness, performance=performance)),  # sharpness
+                gr.update(interactive=family_ui_gates.restricted_interactive(
+                    supported=caps.supports_adm_guidance, performance=performance)),  # adm_scaler_end
+                gr.update(interactive=family_ui_gates.restricted_interactive(
+                    supported=caps.supports_adm_guidance, performance=performance)),  # adm_scaler_positive
+                gr.update(interactive=family_ui_gates.restricted_interactive(
+                    supported=caps.supports_adm_guidance, performance=performance)),  # adm_scaler_negative
+                gr.update(interactive=family_ui_gates.restricted_interactive(
+                    supported=caps.supports_refiner, performance=performance)),  # refiner_switch
+                gr.update(interactive=family_ui_gates.restricted_interactive(
+                    supported=caps.supports_refiner, performance=performance)),  # refiner_model
+                gr.update(interactive=not restricted),  # sampler_name
+                gr.update(interactive=not restricted),  # scheduler_name
+                gr.update(interactive=family_ui_gates.restricted_interactive(
+                    supported=caps.supports_adaptive_cfg, performance=performance)),  # adaptive_cfg
+                gr.update(interactive=family_ui_gates.restricted_interactive(
+                    supported=caps.supports_refiner, performance=performance)),  # refiner_swap_method
+                gr.update(visible=family_ui_gates.negative_prompt_visible(caps, performance)),  # negative_prompt
+                gr.update(value=restricted),  # disable_intermediate_results
+            ]
+
+        family_gated_inputs = [base_model, performance_selection, refiner_model, sampler_name,
+                               scheduler_name, aspect_ratios_selection, vae_name, guidance_scale]
+        family_gated_outputs = [
+            refiner_model, refiner_switch, refiner_swap_method, overwrite_switch,
+            adm_scaler_positive, adm_scaler_negative, adm_scaler_end,
+            adaptive_cfg, clip_skip, sharpness,
+            sampler_name, scheduler_name, vae_name,
+            negative_prompt,
+            freeu_enabled, freeu_b1, freeu_b2, freeu_s1, freeu_s2,
+            inpaint_engine,
+            performance_selection, aspect_ratios_selection, guidance_scale,
+            debugging_cn_preprocessor, skipping_cn_preprocessor,
+            mixing_image_prompt_and_vary_upscale, mixing_image_prompt_and_inpaint,
+            controlnet_softness, canny_low_threshold, canny_high_threshold,
+            ip_advanced,
+            disable_intermediate_results,
+        ]
+
         load_data_outputs = [advanced_checkbox, image_number, prompt, negative_prompt, style_selections,
                              performance_selection, overwrite_step, overwrite_switch, aspect_ratios_selection,
                              overwrite_width, overwrite_height, guidance_scale, sharpness, adm_scaler_positive,
@@ -1276,17 +1448,21 @@ with shared.gradio_root:
             preset_selection.change(preset_selection_change, inputs=[preset_selection, state_is_generating, inpaint_mode], outputs=load_data_outputs, queue=False, show_progress=True) \
                 .then(fn=style_sorter.sort_styles, inputs=style_selections, outputs=style_selections, queue=False, show_progress=False) \
                 .then(inpaint_engine_state_change, inputs=[inpaint_engine_state] + enhance_inpaint_mode_ctrls, outputs=enhance_inpaint_engine_ctrls, queue=False, show_progress=False) \
+                .then(_family_gated_updates, inputs=family_gated_inputs, outputs=family_gated_outputs, queue=False, show_progress=False) \
                 .then(lambda: None, _js='()=>{refresh_style_localization();}')
 
-        performance_selection.change(lambda x: [gr.update(interactive=not flags.Performance.has_restricted_features(x))] * 11 +
-                                               [gr.update(visible=not flags.Performance.has_restricted_features(x))] * 1 +
-                                               [gr.update(value=flags.Performance.has_restricted_features(x))] * 1,
-                                     inputs=performance_selection,
+        performance_selection.change(_performance_and_family_changed,
+                                     inputs=[performance_selection, base_model],
                                      outputs=[
                                          guidance_scale, sharpness, adm_scaler_end, adm_scaler_positive,
                                          adm_scaler_negative, refiner_switch, refiner_model, sampler_name,
                                          scheduler_name, adaptive_cfg, refiner_swap_method, negative_prompt, disable_intermediate_results
                                      ], queue=False, show_progress=False)
+
+        base_model.change(_family_gated_updates, inputs=family_gated_inputs, outputs=family_gated_outputs,
+                          queue=False, show_progress=False)
+        shared.gradio_root.load(_family_gated_updates, inputs=family_gated_inputs, outputs=family_gated_outputs,
+                                queue=False, show_progress=False)
 
         output_format.input(lambda x: gr.update(output_format=x), inputs=output_format)
 
