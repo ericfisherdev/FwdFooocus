@@ -132,11 +132,26 @@ async def get_config():
 
 
 @app.get("/api/models")
-async def get_models():
-    """Return available checkpoints, refiners, and VAEs."""
+def get_models():
+    # Plain def (not async): FastAPI runs sync routes in a threadpool, so the
+    # blocking os.stat/safetensors header reads in get_family() cannot stall
+    # the event loop on a cache-cold call.
+    """Return available checkpoints, refiners, and VAEs.
+
+    `checkpoint_families` is an additive sibling map (filename -> ModelFamily
+    value) alongside `checkpoints`; the `checkpoints` list itself stays a
+    flat list of filename strings since the new-UI frontend (stores.js,
+    settings-drawer.html) already treats each entry as a plain string.
+    """
+    from modules.model_family_detection import get_family
+
+    checkpoint_families = {
+        filename: get_family(filename).value for filename in config.model_filenames
+    }
     return {
         "checkpoints": config.model_filenames,
         "loras": config.lora_filenames,
+        "checkpoint_families": checkpoint_families,
     }
 
 
@@ -149,14 +164,100 @@ async def get_styles():
 
 @app.get("/api/samplers")
 async def get_samplers():
-    """Return available sampler and scheduler names."""
+    """Return available sampler and scheduler names.
+
+    Predates the model-family capability registry and reflects only the
+    global SDXL/default list. `GET /api/capabilities` is the per-checkpoint
+    source of truth for sampler/scheduler/aspect-ratio/performance-mode
+    choices going forward; this endpoint is kept for backward compatibility.
+    """
     from modules.flags import sampler_list, scheduler_list
     return {"samplers": sampler_list, "schedulers": scheduler_list}
+
+
+@app.get("/api/capabilities")
+def get_capabilities_endpoint(
+    checkpoint: str | None = Query(
+        default=None,
+        description="Checkpoint filename; defaults to the configured base model",
+    )
+):
+    """Return the FamilyCapabilities registry entry for a checkpoint's model family.
+
+    Serializes the frozen `FamilyCapabilities` dataclass verbatim (no field
+    re-declaration here -- the registry in `modules.model_family` is the
+    single source of truth) plus a `family` key with the resolved
+    `ModelFamily`'s string value.
+    """
+    import dataclasses
+
+    from modules.model_family import get_capabilities
+    from modules.model_family_detection import get_family
+
+    resolved_checkpoint = checkpoint or config.default_base_model_name
+    family = get_family(resolved_checkpoint)
+    capabilities = get_capabilities(family)
+    return {"family": family.value, **dataclasses.asdict(capabilities)}
 
 
 # ---------------------------------------------------------------------------
 # Generation — POST /api/generate
 # ---------------------------------------------------------------------------
+
+def _validated_choice(value, allowed: tuple, fallback) -> object:
+    """Resolve a request value against a family's allowed-choices tuple.
+
+    Falls back to `fallback` (the global `config.default_*` value) when
+    `value` isn't in `allowed`; falls back further to the family's own
+    first allowed entry when even `fallback` isn't valid for this family
+    (only reachable for a family whose registry entry restricts a list
+    below the global default -- none do yet, but this keeps the resolver
+    correct once one does).
+    """
+    if value in allowed:
+        return value
+    if fallback in allowed:
+        return fallback
+    return allowed[0] if allowed else fallback
+
+
+def _validated_or_default(value, allowed: tuple, default) -> object:
+    """Resolve a request value, honoring an absent value's `default` verbatim.
+
+    Unlike `_validated_choice`, this never re-validates `default` against
+    `allowed`: `config.default_aspect_ratio` is reassigned to a decorated
+    display label by `modules.config.add_ratio()` at config-load time (e.g.
+    `'1152×896 <span ...> 9:7</span>'`), which never literally appears
+    in `FamilyCapabilities.aspect_ratios` (the plain `'WIDTH*HEIGHT'` list
+    from `modules/flags.py`). Re-validating it would silently replace a
+    correctly configured default with the family's first list entry on
+    every request that omits the field. An explicitly *requested* value
+    that fails family validation still falls back to the family's own
+    first allowed entry.
+    """
+    if value is None:
+        return default
+    return value if value in allowed else (allowed[0] if allowed else default)
+
+
+def _resolve_performance_selection(value, caps, fallback) -> str:
+    """Resolve `performance_selection` against a family's performance modes.
+
+    Same precedence as `_validated_choice`, but the final fallback (when
+    neither the request nor the global default is valid for this family)
+    is the mode whose `steps` matches `caps.default_steps` -- the family's
+    own documented default -- rather than an arbitrary first entry.
+    """
+    labels = tuple(mode.label for mode in caps.performance_modes)
+    if value in labels:
+        return value
+    if fallback in labels:
+        return fallback
+    for mode in caps.performance_modes:
+        if mode.steps == caps.default_steps:
+            return mode.label
+    return labels[0] if labels else fallback
+
 
 def _build_generate_args(body: dict) -> list:
     """
@@ -165,12 +266,51 @@ def _build_generate_args(body: dict) -> list:
     The args list is consumed via reverse() + pop() so we build it
     in the same order that webui.py's generate_clicked() does.
     Params not exposed by the new UI yet get sensible defaults.
+
+    Resolves the checkpoint's `ModelFamily` once and gates every SDXL-only
+    field through `FamilyCapabilities` (`modules.model_family`) so families
+    lacking a capability (refiner, ADM guidance, CLIP skip, adaptive CFG,
+    sharpness, FreeU, negative prompt, VAE override) get that field's
+    documented disable value instead of the request body's value. An
+    unrecognized checkpoint resolves to `ModelFamily.UNKNOWN`, whose
+    capabilities are identical (by object identity) to SDXL's, so behavior
+    is unchanged for both SDXL and UNKNOWN checkpoints.
     """
     from modules.config import (
         default_max_lora_number, default_controlnet_image_count,
         default_enhance_tabs,
     )
     from modules.flags import disabled
+    from modules.model_family import get_capabilities
+    from modules.model_family_detection import get_family
+
+    family = get_family(body.get("base_model_name", config.default_base_model_name))
+    caps = get_capabilities(family)
+
+    negative_prompt = body.get("negative_prompt", "") if caps.supports_negative_prompt else ""
+    performance_selection = _resolve_performance_selection(
+        body.get("performance_selection", body.get("performance")), caps, config.default_performance
+    )
+    aspect_ratios_selection = _validated_or_default(
+        body.get("aspect_ratios_selection"), caps.aspect_ratios, config.default_aspect_ratio
+    )
+    sharpness = float(body.get("sharpness", config.default_sample_sharpness)) if caps.supports_sharpness else 0.0
+    cfg_scale = float(body.get("cfg_scale", caps.default_cfg))
+    refiner_model_name = (
+        body.get("refiner_model_name", config.default_refiner_model_name) if caps.supports_refiner else "None"
+    )
+    refiner_switch = (
+        float(body.get("refiner_switch", config.default_refiner_switch)) if caps.supports_refiner else 0.0
+    )
+    adm_scaler_positive = float(body.get("adm_scaler_positive", 1.5)) if caps.supports_adm_guidance else 1.0
+    adm_scaler_negative = float(body.get("adm_scaler_negative", 0.8)) if caps.supports_adm_guidance else 1.0
+    adm_scaler_end = float(body.get("adm_scaler_end", 0.3)) if caps.supports_adm_guidance else 0.0
+    adaptive_cfg = float(body.get("adaptive_cfg", 7.0)) if caps.supports_adaptive_cfg else cfg_scale
+    clip_skip = int(body.get("clip_skip", 2)) if caps.supports_clip_skip else 1
+    sampler_name = _validated_choice(body.get("sampler_name"), caps.sampler_names, config.default_sampler)
+    scheduler_name = _validated_choice(body.get("scheduler_name"), caps.scheduler_names, config.default_scheduler)
+    vae_name = body.get("vae_name", "Default (model)") if caps.supports_vae_override else "Default (model)"
+    freeu_enabled = body.get("freeu_enabled", False) if caps.supports_freeu else False
 
     loras_input = body.get("loras", [])
     # Pad to default_max_lora_number slots: (enabled, filename, weight)
@@ -212,19 +352,19 @@ def _build_generate_args(body: dict) -> list:
     args = [
         body.get("generate_image_grid", False),
         body.get("prompt", ""),
-        body.get("negative_prompt", ""),
+        negative_prompt,
         body.get("style_selections", []),
-        body.get("performance_selection", body.get("performance", config.default_performance)),
-        body.get("aspect_ratios_selection", config.default_aspect_ratio),
+        performance_selection,
+        aspect_ratios_selection,
         max(1, min(int(body.get("image_number", config.default_image_number)), config.default_max_image_number)),
         body.get("output_format", "png"),
         int(body.get("seed", -1)),
         body.get("read_wildcards_in_order", False),
-        float(body.get("sharpness", config.default_sample_sharpness)),
-        float(body.get("cfg_scale", config.default_cfg_scale)),
+        sharpness,
+        cfg_scale,
         body.get("base_model_name", config.default_base_model_name),
-        body.get("refiner_model_name", config.default_refiner_model_name),
-        float(body.get("refiner_switch", config.default_refiner_switch)),
+        refiner_model_name,
+        refiner_switch,
         *lora_args,
         body.get("input_image_checkbox", False),
         body.get("current_tab", "uov"),
@@ -239,14 +379,14 @@ def _build_generate_args(body: dict) -> list:
         body.get("disable_intermediate_results", False),
         body.get("disable_seed_increment", False),
         body.get("black_out_nsfw", False),
-        float(body.get("adm_scaler_positive", 1.5)),
-        float(body.get("adm_scaler_negative", 0.8)),
-        float(body.get("adm_scaler_end", 0.3)),
-        float(body.get("adaptive_cfg", 7.0)),
-        int(body.get("clip_skip", 2)),
-        body.get("sampler_name", config.default_sampler),
-        body.get("scheduler_name", config.default_scheduler),
-        body.get("vae_name", "Default (model)"),
+        adm_scaler_positive,
+        adm_scaler_negative,
+        adm_scaler_end,
+        adaptive_cfg,
+        clip_skip,
+        sampler_name,
+        scheduler_name,
+        vae_name,
         int(body.get("overwrite_step", -1)),
         int(body.get("overwrite_switch", -1)),
         int(body.get("overwrite_width", -1)),
@@ -261,7 +401,7 @@ def _build_generate_args(body: dict) -> list:
         int(body.get("canny_high_threshold", 128)),
         body.get("refiner_swap_method", "joint"),
         float(body.get("controlnet_softness", 0.25)),
-        body.get("freeu_enabled", False),
+        freeu_enabled,
         float(body.get("freeu_b1", 1.01)),
         float(body.get("freeu_b2", 1.02)),
         float(body.get("freeu_s1", 0.99)),
@@ -298,7 +438,10 @@ async def generate(request: Request):
     from modules.async_worker import AsyncTask, async_tasks
 
     body = await request.json()
-    args = _build_generate_args(body)
+    # _build_generate_args reads a safetensors header via get_family(); keep
+    # that blocking I/O off the event loop.
+    from fastapi.concurrency import run_in_threadpool
+    args = await run_in_threadpool(_build_generate_args, body)
     task = AsyncTask(args)
     async_tasks.append(task)
     return {"queued": True, "task_id": id(task)}
