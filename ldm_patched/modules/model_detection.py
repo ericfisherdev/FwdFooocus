@@ -206,11 +206,18 @@ def matches_z_image(state_dict_keys, key_prefix):
     """Z-Image / Lumina2-NextDiT (FWDF-123, FWDF-124) discriminant: the DiT's
     patchify projection plus its caption embedder, neither of which any UNet
     or other currently-registered architecture has.
+
+    Per the ArchitectureDetector contract, this must return True only when
+    every key detect_z_image_config() reads unconditionally is present, so a
+    partial or unrelated DiT checkpoint fails detection gracefully instead of
+    crashing with KeyError inside the config builder.
     """
-    if '{}x_embedder.weight'.format(key_prefix) not in state_dict_keys:
-        return False
-    cap_embedder_prefix = '{}cap_embedder.'.format(key_prefix)
-    return any(k.startswith(cap_embedder_prefix) for k in state_dict_keys)
+    required = (
+        '{}x_embedder.weight'.format(key_prefix),
+        '{}cap_embedder.1.weight'.format(key_prefix),
+        '{}layers.0.attention.q_norm.weight'.format(key_prefix),
+    )
+    return all(key in state_dict_keys for key in required)
 
 
 def detect_z_image_config(state_dict, key_prefix, dtype):

@@ -77,6 +77,34 @@ class TestMatchesZImage(unittest.TestCase):
         self.assertTrue(model_detection.matches_z_image(keys, "other."))
 
 
+class TestPartialCheckpointsFailDetectionGracefully(unittest.TestCase):
+    """A partial or unrelated DiT checkpoint must not match the z-image
+    detector: matches() guarantees every key detect_z_image_config() indexes
+    unconditionally, per the ArchitectureDetector contract."""
+
+    def _base_keys(self, prefix='model.diffusion_model.'):
+        return {
+            prefix + 'x_embedder.weight': torch.zeros(64, 16),
+            prefix + 'cap_embedder.1.weight': torch.zeros(64, 32),
+            prefix + 'layers.0.attention.q_norm.weight': torch.zeros(8),
+        }
+
+    def test_missing_cap_embedder_weight_does_not_match(self):
+        prefix = 'model.diffusion_model.'
+        sd = self._base_keys()
+        del sd[prefix + 'cap_embedder.1.weight']
+        sd[prefix + 'cap_embedder.0.bias'] = torch.zeros(1)
+        self.assertFalse(model_detection.matches_z_image(list(sd.keys()), prefix))
+        self.assertIsNone(model_detection.model_config_from_unet(sd, prefix, torch.float32))
+
+    def test_missing_q_norm_weight_does_not_match(self):
+        prefix = 'model.diffusion_model.'
+        sd = self._base_keys()
+        del sd[prefix + 'layers.0.attention.q_norm.weight']
+        self.assertFalse(model_detection.matches_z_image(list(sd.keys()), prefix))
+        self.assertIsNone(model_detection.model_config_from_unet(sd, prefix, torch.float32))
+
+
 class TestDetectZImageConfig(unittest.TestCase):
     """detect_z_image_config() must infer shape-derived keys from tensor
     shapes and fill fixed architectural constants for the rest.
