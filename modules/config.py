@@ -1015,3 +1015,35 @@ def downloading_sam_vit_h():
         file_name='sam_vit_h_4b8939.pth'
     )
     return os.path.join(path_sam, 'sam_vit_h_4b8939.pth')
+
+
+# Z-Image is a DiT-only checkpoint: its text encoder and VAE ship as separate
+# files from the diffusion weights selected as the "checkpoint". Pinned to a
+# specific commit (rather than `main`) so the verified SHA256/size below can
+# never silently drift out from under the download URL.
+_Z_IMAGE_COMPANIONS_COMMIT = 'd24c4cf2a0cd98a42f23467e27e3d76ee9438b8e'
+_Z_IMAGE_COMPANIONS_BASE_URL = f'https://huggingface.co/Comfy-Org/z_image_turbo/resolve/{_Z_IMAGE_COMPANIONS_COMMIT}'
+
+
+def downloading_z_image_text_encoder():
+    file_name = 'qwen_3_4b.safetensors'
+    load_file_from_url(
+        url=f'{_Z_IMAGE_COMPANIONS_BASE_URL}/split_files/text_encoders/{file_name}',
+        model_dir=path_text_encoders,
+        file_name=file_name,
+        expected_sha256='6c671498573ac2f7a5501502ccce8d2b08ea6ca2f661c458e708f36b36edfc5a',
+        expected_size=8044982048,
+    )
+    return os.path.join(path_text_encoders, file_name)
+
+
+def downloading_z_image_vae():
+    file_name = 'ae.safetensors'
+    load_file_from_url(
+        url=f'{_Z_IMAGE_COMPANIONS_BASE_URL}/split_files/vae/{file_name}',
+        model_dir=path_vae,
+        file_name=file_name,
+        expected_sha256='afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38',
+        expected_size=335304388,
+    )
+    return os.path.join(path_vae, file_name)
