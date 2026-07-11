@@ -192,6 +192,27 @@ def _build_session_state(task: AsyncTask) -> dict:
     return state
 
 
+def _inpaint_family_lacks_engine_head(base_model_name: str) -> bool:
+    """Whether this checkpoint's family has no learned inpaint-engine head
+    and must skip the SDXL-specific InpaintHead patch (modules/inpaint_worker.py's
+    InpaintWorker.patch()) entirely.
+
+    InpaintHead (modules/inpaint_worker.py:13-20) is a conv sized for the
+    SDXL UNet's first input-block channel count and is injected via a
+    UNet-block-indexed patch hook -- neither has a DiT analogue. Families
+    whose capability registry entry (modules.model_family) declares
+    supports_inpaint_engine=False must skip that patch entirely.
+
+    This does not disable masking for those families: modules/patch.py's
+    patched_KSamplerX0Inpaint_forward already enforces the mask
+    unconditionally for every family, straight off
+    inpaint_worker.current_task.latent/.latent_mask, independent of this
+    patch() call.
+    """
+    family = modules.model_family_detection.get_family(base_model_name)
+    return not modules.model_family.get_capabilities(family).supports_inpaint_engine
+
+
 class EarlyReturnException(BaseException):
     pass
 
@@ -568,7 +589,18 @@ def worker():
             pixels=inpaint_pixel_fill)['samples']
         inpaint_worker.current_task.load_latent(
             latent_fill=latent_fill, latent_mask=latent_mask, latent_swap=latent_swap)
-        if inpaint_parameterized:
+
+        # InpaintHead (modules/inpaint_worker.py:13-20) is a conv sized for
+        # the SDXL UNet's first input-block channel count and is injected
+        # via a UNet-block-indexed patch hook (InpaintWorker.patch()) --
+        # neither has a DiT analogue, so families without a learned
+        # inpaint-engine head must skip this call entirely. This is not a
+        # loss of masking: modules/patch.py's patched_KSamplerX0Inpaint_forward
+        # already enforces the mask unconditionally for every family, straight
+        # off inpaint_worker.current_task.latent/.latent_mask (set by
+        # load_latent() above) via plain tensor broadcasting -- channel-count-
+        # and architecture-agnostic, and independent of this patch() call.
+        if inpaint_parameterized and not _inpaint_family_lacks_engine_head(async_task.base_model_name):
             pipeline.final_unet = inpaint_worker.current_task.patch(
                 inpaint_head_model_path=inpaint_head_model_path,
                 inpaint_latent=latent_inpaint,
