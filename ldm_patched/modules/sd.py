@@ -147,6 +147,10 @@ class CLIP:
     def get_key_patches(self):
         return self.patcher.get_key_patches()
 
+class MissingVAEError(RuntimeError):
+    """Raised when a checkpoint has no embedded VAE weights and no external VAE file was provided."""
+    pass
+
 class VAE:
     def __init__(self, sd=None, device=None, config=None, dtype=None):
         if 'decoder.up_blocks.0.resnets.0.norm1.weight' in sd.keys(): #diffusers format
@@ -169,14 +173,21 @@ class VAE:
             elif "taesd_decoder.1.weight" in sd:
                 self.first_stage_model = ldm_patched.taesd.taesd.TAESD()
             else:
-                #default SD1.x/SD2.x VAE parameters
+                #default SD1.x/SD2.x VAE parameters; z_channels/embed_dim are derived from the
+                #decoder's first conv layer when present so standalone 16-channel VAEs that share
+                #this same AutoencoderKL architecture (Flux's ae.safetensors, the Qwen Image VAE)
+                #decode correctly instead of being forced into the SDXL default of 4 channels.
                 ddconfig = {'double_z': True, 'z_channels': 4, 'resolution': 256, 'in_channels': 3, 'out_ch': 3, 'ch': 128, 'ch_mult': [1, 2, 4, 4], 'num_res_blocks': 2, 'attn_resolutions': [], 'dropout': 0.0}
 
                 if 'encoder.down.2.downsample.conv.weight' not in sd: #Stable diffusion x4 upscaler VAE
                     ddconfig['ch_mult'] = [1, 2, 4]
                     self.downscale_ratio = 4
 
-                self.first_stage_model = AutoencoderKL(ddconfig=ddconfig, embed_dim=4)
+                if 'decoder.conv_in.weight' in sd:
+                    ddconfig['z_channels'] = sd['decoder.conv_in.weight'].shape[1]
+
+                self.latent_channels = ddconfig['z_channels']
+                self.first_stage_model = AutoencoderKL(ddconfig=ddconfig, embed_dim=ddconfig['z_channels'])
         else:
             self.first_stage_model = AutoencoderKL(**(config['params']))
         self.first_stage_model = self.first_stage_model.eval()
@@ -427,6 +438,17 @@ def load_checkpoint(config_path=None, ckpt_path=None, output_vae=True, output_cl
 
     return (ldm_patched.modules.model_patcher.ModelPatcher(model, load_device=model_management.get_torch_device(), offload_device=offload_device), clip, vae)
 
+def require_embedded_vae_state_dict(vae_sd, ckpt_path):
+    #A DiT-only checkpoint with no "first_stage_model.*" keys produces an empty vae_sd here;
+    #without this guard VAE(sd={}) would silently build a randomly-initialized, non-functional
+    #decoder instead of failing loudly.
+    if len(vae_sd) == 0:
+        raise MissingVAEError(
+            "Checkpoint '{}' has no embedded VAE weights (no 'first_stage_model.*' keys) and no "
+            "external VAE file was selected. Provide vae_filename_param pointing to a standalone "
+            "VAE file, or select one via the VAE dropdown.".format(ckpt_path)
+        )
+
 def load_checkpoint_guess_config(ckpt_path, output_vae=True, output_clip=True, output_clipvision=False, embedding_directory=None, output_model=True, vae_filename_param=None):
     sd = ldm_patched.modules.utils.load_torch_file(ckpt_path)
     sd_keys = sd.keys()
@@ -470,6 +492,7 @@ def load_checkpoint_guess_config(ckpt_path, output_vae=True, output_clip=True, o
         if vae_filename_param is None:
             vae_sd = ldm_patched.modules.utils.state_dict_prefix_replace(sd, {"first_stage_model.": ""}, filter_keys=True)
             vae_sd = model_config.process_vae_state_dict(vae_sd)
+            require_embedded_vae_state_dict(vae_sd, ckpt_path)
         else:
             vae_sd = ldm_patched.modules.utils.load_torch_file(vae_filename_param)
             vae_filename = vae_filename_param
