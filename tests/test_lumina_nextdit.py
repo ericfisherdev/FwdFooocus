@@ -335,5 +335,41 @@ class TestStateDictKeyLayout(unittest.TestCase):
         self.assertNotIn(prefix + "attention.out.bias", self.keys)
 
 
+class TestRopeFreqsCache(unittest.TestCase):
+    """The RoPE tables are cached per (cap_len, grid, batch, device) so a
+    sampling loop with constant shapes does not redo the float64 CPU einsum
+    and host-to-device upload on every diffusion step."""
+
+    def _model(self):
+        config = make_tiny_config()
+        model = NextDiT(**config)
+        init_small_weights(model)
+        return model, config
+
+    def test_second_forward_with_same_shapes_reuses_cached_tables(self):
+        model, config = self._model()
+        x = torch.randn(1, config["in_channels"], 8, 8)
+        timesteps = torch.full((1,), 0.5)
+        context = torch.randn(1, 6, config["cap_feat_dim"])
+        with torch.no_grad():
+            model(x, timesteps, context)
+            with unittest.mock.patch(
+                "ldm_patched.ldm.lumina.model.rope_freqs",
+                side_effect=AssertionError("rope_freqs must not be recomputed"),
+            ):
+                out = model(x, timesteps, context)
+        self.assertEqual(out.shape, x.shape)
+
+    def test_shape_change_invalidates_cache(self):
+        model, config = self._model()
+        timesteps = torch.full((1,), 0.5)
+        context = torch.randn(1, 6, config["cap_feat_dim"])
+        with torch.no_grad():
+            out_small = model(torch.randn(1, config["in_channels"], 8, 8), timesteps, context)
+            out_large = model(torch.randn(1, config["in_channels"], 12, 12), timesteps, context)
+        self.assertEqual(out_small.shape[-2:], (8, 8))
+        self.assertEqual(out_large.shape[-2:], (12, 12))
+
+
 if __name__ == "__main__":
     unittest.main()
