@@ -356,6 +356,7 @@ class NextDiT(nn.Module):
         self.axes_dims = list(axes_dims)
         self.axes_lens = list(axes_lens)
         self.rope_embedder = EmbedND(dim // n_heads, theta=rope_theta, axes_dim=list(axes_dims))
+        self._freqs_cache = None
 
     def forward(self, x, timesteps, context, **kwargs):
         """
@@ -379,9 +380,18 @@ class NextDiT(nn.Module):
         img_tokens, h_tokens, w_tokens = patchify(x, self.patch_size)
         img = self.x_embedder(img_tokens)
 
-        cap_pos_ids, img_pos_ids = build_position_ids(cap_len, h_tokens, w_tokens, bsz, x.device)
-        cap_freqs_cis = self.rope_embedder(cap_pos_ids).movedim(1, 2).to(img.device)
-        img_freqs_cis = self.rope_embedder(img_pos_ids).movedim(1, 2).to(img.device)
+        # The RoPE tables are deterministic given (cap_len, grid, batch,
+        # device) but cost a float64 CPU einsum per call; a sampling loop
+        # re-enters this forward with identical shapes every step, so a
+        # one-slot cache avoids recomputing and re-uploading them per step.
+        freqs_key = (cap_len, h_tokens, w_tokens, bsz, str(img.device))
+        if self._freqs_cache is not None and self._freqs_cache[0] == freqs_key:
+            cap_freqs_cis, img_freqs_cis = self._freqs_cache[1]
+        else:
+            cap_pos_ids, img_pos_ids = build_position_ids(cap_len, h_tokens, w_tokens, bsz, x.device)
+            cap_freqs_cis = self.rope_embedder(cap_pos_ids).movedim(1, 2).to(img.device)
+            img_freqs_cis = self.rope_embedder(img_pos_ids).movedim(1, 2).to(img.device)
+            self._freqs_cache = (freqs_key, (cap_freqs_cis, img_freqs_cis))
 
         for layer in self.context_refiner:
             cap_feats = layer(cap_feats, cap_freqs_cis)
