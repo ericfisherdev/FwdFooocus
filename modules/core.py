@@ -157,6 +157,32 @@ def apply_controlnet(positive, negative, control_net, image, strength, start_per
 
 @torch.no_grad()
 @torch.inference_mode()
+def load_controlnet_zimage(ckpt_filename):
+    return ldm_patched.modules.controlnet.load_controlnet_zimage(ckpt_filename)
+
+
+@torch.no_grad()
+@torch.inference_mode()
+def apply_controlnet_zimage(unet, control_net_zimage_model, vae, image, strength):
+    """Clone `unet` and patch in a Z-Image DiT ControlNet (FWDF-156) -- the
+    same "clone, then set_model_*_patch" shape as
+    modules/inpaint_worker.py:InpaintWorker.patch() and
+    extras/ip_adapter.py:patch_model(), rather than the SDXL/UNet
+    ControlNet's conditioning-based apply_controlnet() above. Z-Image's DiT
+    ControlNet injects into the model's own forward pass (see
+    ldm_patched/modules/controlnet.py:ZImageControlNetPatch), not into
+    positive/negative conditioning, so there is no equivalent of
+    apply_controlnet()'s (positive, negative) return here.
+    """
+    patch = ldm_patched.modules.controlnet.ZImageControlNetPatch(control_net_zimage_model, vae, image, strength)
+    patched_unet = unet.clone()
+    patched_unet.set_model_double_block_patch(patch)
+    patched_unet.set_model_noise_refiner_patch(patch)
+    return patched_unet
+
+
+@torch.no_grad()
+@torch.inference_mode()
 def load_model(ckpt_filename, vae_filename=None):
     try:
         unet, clip, vae, vae_filename, clip_vision = load_checkpoint_guess_config(ckpt_filename, embedding_directory=path_embeddings,

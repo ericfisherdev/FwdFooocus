@@ -360,11 +360,21 @@ class NextDiT(nn.Module):
         self.rope_embedder = EmbedND(dim // n_heads, theta=rope_theta, axes_dim=list(axes_dims))
         self._freqs_cache = None
 
-    def forward(self, x, timesteps, context, **kwargs):
+    def forward(self, x, timesteps, context, transformer_options={}, **kwargs):
         """
         x: (B, in_channels, H, W) noised latent
         timesteps: (B,) flow-matching timestep in [0, 1]
         context: (B, cap_len, cap_feat_dim) caption hidden states (e.g. Qwen3-4B)
+        transformer_options: optional {"patches": {"noise_refiner": [...], "double_block": [...]}}
+            hook dict (FWDF-156), set via
+            `ldm_patched.modules.model_patcher.ModelPatcher.set_model_noise_refiner_patch`/
+            `set_model_double_block_patch`. Each patch is called once per
+            noise_refiner/main-layer block with a kwargs dict of
+            {img, img_input, txt, pe, vec, x, block_index, block_type,
+            transformer_options}; a returned dict's "img"/"txt" entries (if
+            present) replace the corresponding slice before the next block
+            runs. Absent/empty patches are a strict no-op -- this is the only
+            way this backbone's output can differ from before FWDF-156.
         """
         B, _, H, W = x.shape
         x = pad_to_patch_size(x, self.patch_size)
@@ -398,14 +408,41 @@ class NextDiT(nn.Module):
         for layer in self.context_refiner:
             cap_feats = layer(cap_feats, cap_freqs_cis)
 
-        for layer in self.noise_refiner:
+        patches = transformer_options.get("patches", {})
+        noise_refiner_patches = patches.get("noise_refiner", [])
+        double_block_patches = patches.get("double_block", [])
+        transformer_options["total_blocks"] = len(self.layers)
+
+        img_input = img
+        for i, layer in enumerate(self.noise_refiner):
             img = layer(img, img_freqs_cis, adaln_input=adaln_input)
+            for p in noise_refiner_patches:
+                out = p({
+                    "img": img, "img_input": img_input, "txt": cap_feats,
+                    "pe": img_freqs_cis, "vec": adaln_input, "x": x,
+                    "block_index": i, "block_type": "noise_refiner",
+                    "transformer_options": transformer_options,
+                })
+                if "img" in out:
+                    img = out["img"]
 
         combined = torch.cat([cap_feats, img], dim=1)
         combined_freqs_cis = torch.cat([cap_freqs_cis, img_freqs_cis], dim=1)
 
-        for layer in self.layers:
+        combined_input = combined
+        for i, layer in enumerate(self.layers):
             combined = layer(combined, combined_freqs_cis, adaln_input=adaln_input)
+            for p in double_block_patches:
+                out = p({
+                    "img": combined[:, cap_len:], "img_input": combined_input[:, cap_len:],
+                    "txt": combined[:, :cap_len], "pe": img_freqs_cis, "vec": adaln_input, "x": x,
+                    "block_index": i, "block_type": "double",
+                    "transformer_options": transformer_options,
+                })
+                if "img" in out:
+                    combined[:, cap_len:] = out["img"]
+                if "txt" in out:
+                    combined[:, :cap_len] = out["txt"]
 
         img_out = self.final_layer(combined[:, cap_len:], adaln_input)
         img_out = unpatchify(img_out, h_tokens, w_tokens, self.patch_size, self.out_channels)

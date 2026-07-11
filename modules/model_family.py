@@ -201,6 +201,18 @@ def _build_z_image_capabilities() -> FamilyCapabilities:
     own pipeline" caveat. cfg deliberately stays non-zero (unlike some
     community workflows that use cfg=0) so supports_negative_prompt=True
     remains meaningful.
+
+    supports_controlnet=True as of FWDF-156, scoped to PyraCanny only: the
+    DiT ControlNet backport (`ldm_patched/ldm/lumina/controlnet.py`,
+    `ldm_patched/modules/controlnet.py:ZImageControlNetPatch`) only covers
+    Alibaba/Tongyi-MAI's Z-Image-Turbo-Fun-Controlnet-Union-2.1 Canny path;
+    CPDS has no published DiT equivalent and stays unsupported for this
+    family. This boolean has no dedicated UI consumer yet (FWDF-128/129/130,
+    still open as of this ticket) -- whichever of those wires the ControlNet
+    type list into the new-UI/Gradio ImagePrompt tab must gate on a
+    per-control-type list (not just this single flag) so CPDS/ImagePrompt/
+    FaceSwap stay hidden for Z_IMAGE until they have their own DiT-native
+    implementations.
     """
     turbo = PerformanceMode(
         label='Turbo',
@@ -218,7 +230,7 @@ def _build_z_image_capabilities() -> FamilyCapabilities:
         supports_adaptive_cfg=False,
         supports_sharpness=False,
         supports_negative_prompt=True,
-        supports_controlnet=False,
+        supports_controlnet=True,
         supports_ip_adapter=False,
         supports_inpaint_engine=False,
         supports_vae_override=False,

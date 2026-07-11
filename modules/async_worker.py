@@ -248,6 +248,7 @@ def worker():
     import modules.default_pipeline as pipeline
     import modules.core as core
     import modules.flags as flags
+    import modules.model_family
     import modules.patch
     import ldm_patched.modules.model_management
     import extras.preprocessors as preprocessors
@@ -352,7 +353,13 @@ def worker():
                      total_count, show_intermediate_results, persist_image=True):
         if async_task.last_stop is not False:
             ldm_patched.modules.model_management.interrupt_current_processing()
-        if 'cn' in goals:
+        family = getattr(pipeline.model_base, 'family', modules.model_family.ModelFamily.UNKNOWN)
+        # Z-Image's PyraCanny-equivalent (FWDF-156) is applied once, directly
+        # to pipeline.final_unet, in apply_control_nets() above -- it has no
+        # conditioning-based apply_controlnet() path (CPDS has no DiT
+        # equivalent and is capability-gated out of the UI for this family),
+        # so this per-task conditioning loop is SDXL/UNet-only.
+        if 'cn' in goals and family != modules.model_family.ModelFamily.Z_IMAGE:
             for cn_flag, cn_path in [
                 (flags.cn_canny, controlnet_canny_path),
                 (flags.cn_cpds, controlnet_cpds_path)
@@ -462,7 +469,8 @@ def worker():
 
         return img_paths
 
-    def apply_control_nets(async_task, height, ip_adapter_face_path, ip_adapter_path, width, current_progress):
+    def apply_control_nets(async_task, height, ip_adapter_face_path, ip_adapter_path, width, current_progress,
+                          controlnet_canny_path=None):
         for task in async_task.cn_tasks[flags.cn_canny]:
             cn_img, cn_stop, cn_weight = task
             cn_img = resize_image(HWC3(cn_img), width=width, height=height)
@@ -475,6 +483,21 @@ def worker():
             task[0] = core.numpy_to_pytorch(cn_img)
             if async_task.debugging_cn_preprocessor:
                 yield_result(async_task, cn_img, current_progress, async_task.black_out_nsfw, do_not_show_finished_images=True)
+
+        canny_tasks = async_task.cn_tasks[flags.cn_canny]
+        family = getattr(pipeline.model_base, 'family', modules.model_family.ModelFamily.UNKNOWN)
+        if family == modules.model_family.ModelFamily.Z_IMAGE and len(canny_tasks) > 0:
+            # Z-Image's DiT ControlNet (FWDF-156) patches the unet model
+            # directly -- like the ip_adapter tasks just below -- instead of
+            # mutating positive/negative conditioning the way the SDXL/UNet
+            # path's core.apply_controlnet() does in process_task(), which
+            # skips PyraCanny for this family since it was already applied
+            # here.
+            for cn_img_tensor, cn_stop, cn_weight in canny_tasks:
+                pipeline.final_unet = core.apply_controlnet_zimage(
+                    pipeline.final_unet, pipeline.loaded_ControlNets[controlnet_canny_path],
+                    pipeline.final_vae, cn_img_tensor, cn_weight)
+
         for task in async_task.cn_tasks[flags.cn_cpds]:
             cn_img, cn_stop, cn_weight = task
             cn_img = resize_image(HWC3(cn_img), width=width, height=height)
@@ -1004,7 +1027,11 @@ def worker():
             goals.append('cn')
             progressbar(async_task, 1, 'Downloading control models ...')
             if len(async_task.cn_tasks[flags.cn_canny]) > 0:
-                controlnet_canny_path = modules.config.downloading_controlnet_canny()
+                family = getattr(pipeline.model_base, 'family', modules.model_family.ModelFamily.UNKNOWN)
+                if family == modules.model_family.ModelFamily.Z_IMAGE:
+                    controlnet_canny_path = modules.config.downloading_controlnet_zimage_canny()
+                else:
+                    controlnet_canny_path = modules.config.downloading_controlnet_canny()
             if len(async_task.cn_tasks[flags.cn_cpds]) > 0:
                 controlnet_cpds_path = modules.config.downloading_controlnet_cpds()
             if len(async_task.cn_tasks[flags.cn_ip]) > 0:
@@ -1295,7 +1322,8 @@ def worker():
                 return
 
         if 'cn' in goals:
-            apply_control_nets(async_task, height, ip_adapter_face_path, ip_adapter_path, width, current_progress)
+            apply_control_nets(async_task, height, ip_adapter_face_path, ip_adapter_path, width, current_progress,
+                               controlnet_canny_path=controlnet_canny_path)
             if async_task.debugging_cn_preprocessor:
                 return
 

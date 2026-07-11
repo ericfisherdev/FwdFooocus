@@ -36,12 +36,22 @@ loaded_ControlNets = {}
 @torch.no_grad()
 @torch.inference_mode()
 def refresh_controlnets(model_paths):
+    """Z-Image's DiT ControlNet checkpoint (FWDF-156) uses a completely
+    different state-dict layout from the SDXL UNet ControlNet/ControlLora
+    formats `core.load_controlnet()` detects, so which loader to use is
+    dispatched by the currently-loaded base model's family rather than
+    sniffed from the file itself (mirrors `assert_model_integrity()`'s
+    family lookup above).
+    """
     global loaded_ControlNets
+    family = getattr(model_base, 'family', ModelFamily.UNKNOWN)
     cache = {}
     for p in model_paths:
         if p is not None:
             if p in loaded_ControlNets:
                 cache[p] = loaded_ControlNets[p]
+            elif family == ModelFamily.Z_IMAGE:
+                cache[p] = core.load_controlnet_zimage(p)
             else:
                 cache[p] = core.load_controlnet(p)
     loaded_ControlNets = cache

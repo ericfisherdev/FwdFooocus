@@ -112,6 +112,16 @@ class ModelPatcher:
     def set_model_output_block_patch(self, patch):
         self.set_model_patch(patch, "output_block_patch")
 
+    def set_model_double_block_patch(self, patch):
+        # NextDiT's (Z-Image, FWDF-123) per-main-layer hook -- the DiT analogue
+        # of set_model_input_block_patch's UNet per-block hook. See
+        # ldm_patched/ldm/lumina/model.py:NextDiT.forward (FWDF-156).
+        self.set_model_patch(patch, "double_block")
+
+    def set_model_noise_refiner_patch(self, patch):
+        # NextDiT's per-noise_refiner-layer hook (FWDF-156); see set_model_double_block_patch.
+        self.set_model_patch(patch, "noise_refiner")
+
     def add_object_patch(self, name, obj):
         self.object_patches[name] = obj
 

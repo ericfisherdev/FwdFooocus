@@ -478,5 +478,5 @@ class ZImage(BaseModel):
                     extra = extra.to(dtype)
             extra_conds[o] = extra
 
-        model_output = self.diffusion_model(xc, t, context=context, **extra_conds).float()
+        model_output = self.diffusion_model(xc, t, context=context, transformer_options=transformer_options, **extra_conds).float()
         return self.model_sampling.calculate_denoised(sigma, model_output, x)
