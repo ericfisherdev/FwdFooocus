@@ -6,7 +6,9 @@ def cast_bias_weight(s, input):
     non_blocking = ldm_patched.modules.model_management.device_supports_non_blocking(input.device)
     if s.bias is not None:
         bias = s.bias.to(device=input.device, dtype=input.dtype, non_blocking=non_blocking)
-    weight = s.weight.to(device=input.device, dtype=input.dtype, non_blocking=non_blocking)
+    weight = None
+    if s.weight is not None:
+        weight = s.weight.to(device=input.device, dtype=input.dtype, non_blocking=non_blocking)
     return weight, bias
 
 
@@ -87,6 +89,24 @@ class disable_weight_init:
             else:
                 return super().forward(*args, **kwargs)
 
+    class RMSNorm(torch.nn.RMSNorm):
+        ldm_patched_cast_weights = False
+        def reset_parameters(self):
+            return None
+
+        def forward_ldm_patched_cast_weights(self, input):
+            weight = None
+            if self.weight is not None:
+                non_blocking = ldm_patched.modules.model_management.device_supports_non_blocking(input.device)
+                weight = self.weight.to(device=input.device, dtype=input.dtype, non_blocking=non_blocking)
+            return torch.nn.functional.rms_norm(input, self.normalized_shape, weight, self.eps)
+
+        def forward(self, *args, **kwargs):
+            if self.ldm_patched_cast_weights:
+                return self.forward_ldm_patched_cast_weights(*args, **kwargs)
+            else:
+                return super().forward(*args, **kwargs)
+
     @classmethod
     def conv_nd(s, dims, *args, **kwargs):
         if dims == 2:
@@ -111,4 +131,7 @@ class manual_cast(disable_weight_init):
         ldm_patched_cast_weights = True
 
     class LayerNorm(disable_weight_init.LayerNorm):
+        ldm_patched_cast_weights = True
+
+    class RMSNorm(disable_weight_init.RMSNorm):
         ldm_patched_cast_weights = True
