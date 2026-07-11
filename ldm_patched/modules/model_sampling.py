@@ -183,7 +183,9 @@ class ModelSamplingDiscreteFlow(torch.nn.Module):
     def set_parameters(self, shift=1.0, timesteps=1000, multiplier=1000):
         self.shift = shift
         self.multiplier = multiplier
-        ts = self.sigma(torch.arange(1, timesteps + 1, 1))
+        # Normalize by timesteps before scaling by multiplier so the buffer
+        # always spans (0, 1] regardless of the configured multiplier.
+        ts = self.sigma((torch.arange(1, timesteps + 1, 1) / timesteps) * multiplier)
         self.register_buffer('sigmas', ts)
 
     @property
