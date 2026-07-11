@@ -77,6 +77,19 @@ class TestNextDiTForward(unittest.TestCase):
             out = self.model(x, timesteps, context)
         self.assertEqual(out.shape, x.shape)
 
+    def test_forward_accepts_non_contiguous_latent(self):
+        """patchify must handle strided (non-contiguous) latents — a shape-
+        valid slice would crash a view()-based implementation."""
+        config = make_tiny_config()
+        model = NextDiT(**config)
+        init_small_weights(model)
+        wide = torch.randn(1, config["in_channels"], 8, 16)
+        x = wide[:, :, :, ::2]
+        self.assertFalse(x.is_contiguous())
+        with torch.no_grad():
+            out = model(x, torch.full((1,), 0.5), torch.randn(1, 6, config["cap_feat_dim"]))
+        self.assertEqual(out.shape, x.shape)
+
     def test_forward_crops_padding_for_non_multiple_of_patch_size(self):
         # H=W=9 isn't a multiple of patch_size=2; the backbone pads internally
         # for patchify/unpatchify but must crop back to the original size.

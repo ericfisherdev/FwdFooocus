@@ -50,7 +50,9 @@ def patchify(x, patch_size):
     ph = pw = patch_size
     h_tokens = H // ph
     w_tokens = W // pw
-    x = x.view(B, C, h_tokens, ph, w_tokens, pw)
+    # reshape, not view: the incoming latent may be a non-contiguous strided
+    # tensor (e.g. a slice), which view() rejects at runtime.
+    x = x.reshape(B, C, h_tokens, ph, w_tokens, pw)
     x = x.permute(0, 2, 4, 3, 5, 1).flatten(3).flatten(1, 2)
     return x, h_tokens, w_tokens
 
