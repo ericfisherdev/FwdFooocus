@@ -90,7 +90,12 @@ class StableDiffusionModel:
             loras_to_load.append((lora_filename, weight))
 
         self.unet_with_lora = self.unet.clone() if self.unet is not None else None
-        self.clip_with_lora = self.clip.clone() if self.clip is not None else None
+        # Non-CLIP encoders (e.g. Qwen3-4B's TransformerTextEncoder, FWDF-125)
+        # have no clone()/add_patches(): no LoRA files target them in this
+        # codebase yet, so they are wired through as-is instead of cloned.
+        self.clip_with_lora = (
+            self.clip.clone() if self.clip is not None and hasattr(self.clip, 'clone') else self.clip
+        )
 
         for lora_filename, weight in loras_to_load:
             lora_unmatch = ldm_patched.modules.utils.load_torch_file(lora_filename, safe_load=False)
@@ -113,7 +118,7 @@ class StableDiffusionModel:
                     if item not in loaded_keys:
                         print("UNet LoRA key skipped: ", item)
 
-            if self.clip_with_lora is not None and len(lora_clip) > 0:
+            if self.clip_with_lora is not None and len(lora_clip) > 0 and hasattr(self.clip_with_lora, 'add_patches'):
                 loaded_keys = self.clip_with_lora.add_patches(lora_clip, weight)
                 print(f'Loaded LoRA [{lora_filename}] for CLIP [{self.filename}] '
                       f'with {len(loaded_keys)} keys at weight {weight}.')
@@ -199,12 +204,10 @@ def encode_vae_inpaint(vae, pixels, mask):
     return latent, latent_mask
 
 
-# VAEApprox and get_previewer() below are hardcoded to 4-channel latents (xlvaeapp.pth /
-# vaeapp_sd15.pth are both 4-channel-input approximators). This is out of scope for FWDF-120,
-# which only threads latent channel count through empty-latent creation. FWDF-127 (Z-Image
-# pipeline integration) is responsible for branching get_previewer() on latent format and
-# supplying a Flux/QwenImage latent_rgb_factors-based preview path instead of routing
-# 16-channel latents through VAEApprox.
+# VAEApprox is hardcoded to 4-channel latents (xlvaeapp.pth / vaeapp_sd15.pth are both
+# 4-channel-input approximators). get_previewer() below routes anything else (Flux/Z-Image's
+# 16-channel latents) through a weight-free latent_rgb_factors projection instead
+# (_rgb_factors_previewer), never through VAEApprox.
 class VAEApprox(torch.nn.Module):
     def __init__(self):
         super(VAEApprox, self).__init__()
@@ -231,21 +234,49 @@ class VAEApprox(torch.nn.Module):
 VAE_approx_models = {}
 
 
+def _rgb_factors_previewer(latent_rgb_factors):
+    """Fast, weight-free live preview for latent formats with no VAEApprox
+    checkpoint (Flux/Z-Image's 16-channel latents): a per-channel linear
+    projection into RGB, the same technique ComfyUI's Latent2RGBPreviewer
+    uses. No model weights to load and no VRAM cost beyond the tiny factor
+    matrix itself.
+    """
+    factors = torch.tensor(latent_rgb_factors)
+
+    @torch.no_grad()
+    @torch.inference_mode()
+    def preview_function(x0, step, total_steps):
+        with torch.no_grad():
+            local_factors = factors.to(device=x0.device, dtype=x0.dtype)
+            rgb = torch.einsum('bchw,co->bohw', x0, local_factors)
+            rgb = einops.rearrange(rgb, 'b c h w -> b h w c')[0]
+            rgb = (rgb * 127.5 + 127.5).clip(0, 255)
+            return rgb.cpu().numpy().astype(np.uint8)
+
+    return preview_function
+
+
 @torch.no_grad()
 @torch.inference_mode()
 def get_previewer(model):
     global VAE_approx_models
 
-    if getattr(model.model.latent_format, 'latent_channels', 4) != 4:
+    latent_format = model.model.latent_format
+    latent_channels = getattr(latent_format, 'latent_channels', 4)
+
+    if latent_channels != 4:
         # Both VAEApprox checkpoints are 4-channel-input approximators; a
-        # 16-channel latent would crash the preview callback. Previews stay
-        # disabled for such families until FWDF-127 supplies a
-        # latent_rgb_factors-based preview path (ksampler already treats a
-        # None previewer as previews-off).
-        return None
+        # 16-channel latent would crash the preview callback. Fall back to a
+        # latent_rgb_factors projection when the format defines one, or
+        # disable previews (ksampler already treats a None previewer as
+        # previews-off) when it doesn't.
+        latent_rgb_factors = getattr(latent_format, 'latent_rgb_factors', None)
+        if latent_rgb_factors is None:
+            return None
+        return _rgb_factors_previewer(latent_rgb_factors)
 
     from modules.config import path_vae_approx
-    is_sdxl = isinstance(model.model.latent_format, ldm_patched.modules.latent_formats.SDXL)
+    is_sdxl = isinstance(latent_format, ldm_patched.modules.latent_formats.SDXL)
     vae_approx_filename = os.path.join(path_vae_approx, 'xlvaeapp.pth' if is_sdxl else 'vaeapp_sd15.pth')
 
     if vae_approx_filename in VAE_approx_models:

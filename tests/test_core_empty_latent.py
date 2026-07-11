@@ -1,8 +1,11 @@
-"""Tests for modules.core.generate_empty_latent channel-count threading (FWDF-120)."""
+"""Tests for modules.core.generate_empty_latent channel-count threading (FWDF-120)
+and modules.core.get_previewer's latent-format branching (FWDF-127)."""
 
 import sys
 import unittest
 from pathlib import Path
+
+import torch
 
 # Ensure project root is on sys.path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -64,16 +67,40 @@ class TestEmptyLatentImageGenerate(unittest.TestCase):
 
 
 class TestPreviewerGuard(unittest.TestCase):
-    """get_previewer() must refuse non-4-channel latent formats: both
-    VAEApprox checkpoints are 4-channel approximators, and ksampler treats
-    a None previewer as previews-disabled (FWDF-127 adds the real
-    16-channel preview path)."""
+    """get_previewer() must never route a non-4-channel latent through
+    VAEApprox (both checkpoints are 4-channel approximators and would
+    crash the preview callback). Formats with latent_rgb_factors (Flux,
+    Z-Image) get the FWDF-127 rgb-factors preview path instead; formats
+    with neither get a None previewer, which ksampler treats as
+    previews-disabled."""
 
-    def test_returns_none_for_16_channel_latent_format(self):
+    def test_returns_working_previewer_for_16_channel_flux_latent_format(self):
         from ldm_patched.modules import latent_formats
 
         class FakeInner:
             latent_format = latent_formats.Flux()
+
+        class FakeModel:
+            model = FakeInner()
+
+        previewer = core.get_previewer(FakeModel())
+        self.assertIsNotNone(previewer)
+
+        x0 = torch.randn(1, 16, 4, 4)
+        preview = previewer(x0, 1, 9)
+
+        self.assertEqual(preview.shape, (4, 4, 3))
+        self.assertEqual(preview.dtype.name, 'uint8')
+        self.assertTrue((preview >= 0).all())
+        self.assertTrue((preview <= 255).all())
+
+    def test_returns_none_for_16_channel_format_with_no_rgb_factors(self):
+        class FakeLatentFormat:
+            latent_channels = 16
+            latent_rgb_factors = None
+
+        class FakeInner:
+            latent_format = FakeLatentFormat()
 
         class FakeModel:
             model = FakeInner()

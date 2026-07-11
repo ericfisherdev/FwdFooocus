@@ -4,13 +4,17 @@ import torch
 import modules.patch
 import modules.config
 import modules.flags
+import modules.model_family
+import modules.model_family_detection
+import modules.qwen3_text_encoder
 import ldm_patched.modules.model_management
 import ldm_patched.modules.latent_formats
 import modules.inpaint_worker
 import extras.vae_interpose as vae_interpose
 from extras.expansion import FooocusExpansion
 
-from ldm_patched.modules.model_base import SDXL, SDXLRefiner
+from ldm_patched.modules.model_base import SDXL, SDXLRefiner, ZImage as ZImageDiffusionModel
+from modules.model_family import ModelFamily
 from modules.sample_hijack import clip_separate
 from modules.util import get_file_from_folder_list, get_enabled_loras
 from modules.fast_checkpoint import resolve_checkpoint_path
@@ -49,7 +53,16 @@ def refresh_controlnets(model_paths):
 def assert_model_integrity():
     error_message = None
 
-    if not isinstance(model_base.unet_with_lora.model, SDXL):
+    family = getattr(model_base, 'family', ModelFamily.UNKNOWN)
+
+    if family == ModelFamily.Z_IMAGE:
+        if not isinstance(model_base.unet_with_lora.model, ZImageDiffusionModel):
+            error_message = 'Z-Image base model did not load the expected DiT architecture.'
+        elif model_base.clip_with_lora is None:
+            error_message = 'Z-Image requires the Qwen3-4B text encoder to be loaded; none was assembled.'
+        elif model_base.vae is None:
+            error_message = 'Z-Image requires a standalone VAE to be loaded; none was assembled.'
+    elif not isinstance(model_base.unet_with_lora.model, SDXL):
         error_message = 'You have selected base model other than SDXL. This is not supported yet.'
 
     if error_message is not None:
@@ -66,15 +79,32 @@ def refresh_base_model(name, vae_name=None):
     filename = resolve_checkpoint_path(
         name, modules.config.paths_checkpoints, modules.config.path_fast_checkpoints
     )
+    family = modules.model_family_detection.get_family(name)
 
-    vae_filename = None
-    if vae_name is not None and vae_name != modules.flags.default_vae:
+    if family == ModelFamily.Z_IMAGE:
+        # Z-Image ships as a DiT-only checkpoint: the standalone VAE is a
+        # companion download, not a user-selectable dropdown entry (see
+        # modules.model_family's Z-Image capability entry, supports_vae_override=False).
+        vae_filename = modules.config.downloading_z_image_vae()
+    elif vae_name is not None and vae_name != modules.flags.default_vae:
         vae_filename = get_file_from_folder_list(vae_name, modules.config.path_vae)
+    else:
+        vae_filename = None
 
     if model_base.filename == filename and model_base.vae_filename == vae_filename:
         return
 
     model_base = core.load_model(filename, vae_filename)
+    model_base.family = family
+
+    if family == ModelFamily.Z_IMAGE:
+        # The checkpoint's clip_target() is None (ZImage's diffusion weights
+        # carry no text encoder), so core.load_model() leaves model_base.clip
+        # unset; wire the standalone Qwen3-4B encoder (FWDF-122/125) in its
+        # place instead of the (absent) checkpoint CLIP.
+        modules.config.downloading_z_image_text_encoder()
+        model_base.clip = modules.qwen3_text_encoder.load_qwen3_text_encoder()
+
     print(f'Base model loaded: {model_base.filename}')
     print(f'VAE loaded: {model_base.vae_filename}')
     return
@@ -218,6 +248,11 @@ def set_clip_skip(clip_skip: int):
     if final_clip is None:
         return
 
+    # clip_layer() is CLIP-specific; non-CLIP encoders (Qwen3-4B, Qwen3-VL-4B)
+    # have no clip-skip concept, so clip-skip is a no-op for them.
+    if not hasattr(final_clip, 'clip_layer'):
+        return
+
     final_clip.clip_layer(-abs(clip_skip))
     return
 
@@ -249,6 +284,12 @@ def refresh_everything(refiner_model_name, base_model_name, loras,
     final_vae = None
     final_refiner_unet = None
     final_refiner_vae = None
+
+    base_family = modules.model_family_detection.get_family(base_model_name)
+    if not modules.model_family.get_capabilities(base_family).supports_refiner:
+        # e.g. Z-Image: a DiT+Qwen3 stack with no refiner concept at all.
+        refiner_model_name = 'None'
+        use_synthetic_refiner = False
 
     if use_synthetic_refiner and refiner_model_name == 'None':
         print('Synthetic Refiner Activated')
