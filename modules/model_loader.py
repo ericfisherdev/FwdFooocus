@@ -43,10 +43,13 @@ def _has_valid_verification_marker(
         expected_size: Optional[int],
 ) -> bool:
     """True if a sidecar marker records a prior successful verification of
-    this exact (sha256, size) expectation AND the file's size still matches.
+    this exact (sha256, size) expectation AND the file's on-disk size still
+    matches the size recorded at verification time.
 
-    Skips re-hashing multi-gigabyte files on every warm start; a size check
-    still guards against truncation/replacement since the marker was written.
+    Skips re-hashing multi-gigabyte files on every warm start. The disk-size
+    re-check uses the size recorded when the marker was written, so it guards
+    against truncation/replacement even for callers that only supply
+    `expected_sha256`.
     """
     marker = _verification_marker(cached_file)
     if not os.path.exists(marker):
@@ -56,12 +59,17 @@ def _has_valid_verification_marker(
             recorded = f.read().strip()
     except OSError:
         return False
-    expected_record = f'sha256={expected_sha256} size={expected_size}'
-    if recorded != expected_record:
+    expected_prefix = f'sha256={expected_sha256} size={expected_size} disk_size='
+    if not recorded.startswith(expected_prefix):
         return False
-    if expected_size is not None and os.path.getsize(cached_file) != expected_size:
+    try:
+        recorded_disk_size = int(recorded[len(expected_prefix):])
+    except ValueError:
         return False
-    return True
+    try:
+        return os.path.getsize(cached_file) == recorded_disk_size
+    except OSError:
+        return False
 
 
 def _write_verification_marker(
@@ -69,8 +77,18 @@ def _write_verification_marker(
         expected_sha256: Optional[str],
         expected_size: Optional[int],
 ) -> None:
+    disk_size = os.path.getsize(cached_file)
     with open(_verification_marker(cached_file), 'w', encoding='utf-8') as f:
-        f.write(f'sha256={expected_sha256} size={expected_size}')
+        f.write(f'sha256={expected_sha256} size={expected_size} disk_size={disk_size}')
+
+
+def _remove_verification_state(cached_file: str) -> None:
+    """Delete a cached file and its sidecar marker, tolerating absence."""
+    for path in (cached_file, _verification_marker(cached_file)):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
 
 
 def load_file_from_url(
@@ -109,7 +127,7 @@ def load_file_from_url(
             mismatch = _describe_mismatch(cached_file, expected_sha256, expected_size)
             if mismatch:
                 print(f'{mismatch} Deleting cached file and re-downloading from "{url}".')
-                os.remove(cached_file)
+                _remove_verification_state(cached_file)
             else:
                 _write_verification_marker(cached_file, expected_sha256, expected_size)
 
@@ -121,9 +139,12 @@ def load_file_from_url(
         if verification_requested:
             mismatch = _describe_mismatch(cached_file, expected_sha256, expected_size)
             if mismatch:
+                # Leave nothing behind that a later call could mistake for a
+                # verified download.
+                _remove_verification_state(cached_file)
                 raise RuntimeError(
                     f'{mismatch} The download from "{url}" appears corrupted. '
-                    f'Delete "{cached_file}" and try again, or check your network/mirror.'
+                    f'It has been deleted; try again, or check your network/mirror.'
                 )
             _write_verification_marker(cached_file, expected_sha256, expected_size)
 
