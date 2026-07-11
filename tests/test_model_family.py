@@ -90,6 +90,60 @@ class TestSd15Entry(unittest.TestCase):
         self.assertIsNot(sd15, sdxl)
 
 
+class TestZImageEntry(unittest.TestCase):
+    """Z-Image-Turbo's registry entry, added by FWDF-127."""
+
+    def setUp(self):
+        self.z_image = model_family.get_capabilities(model_family.ModelFamily.Z_IMAGE)
+
+    def test_distinct_instance_from_sdxl(self):
+        sdxl = model_family.get_capabilities(model_family.ModelFamily.SDXL)
+        self.assertIsNot(self.z_image, sdxl)
+
+    def test_no_refiner_no_adm_no_freeu_no_clip_skip(self):
+        self.assertFalse(self.z_image.supports_refiner)
+        self.assertFalse(self.z_image.supports_adm_guidance)
+        self.assertFalse(self.z_image.supports_freeu)
+        self.assertFalse(self.z_image.supports_clip_skip)
+
+    def test_adaptive_cfg_and_sharpness_disabled(self):
+        self.assertFalse(self.z_image.supports_adaptive_cfg)
+        self.assertFalse(self.z_image.supports_sharpness)
+
+    def test_controlnet_ip_adapter_inpaint_engine_unsupported(self):
+        self.assertFalse(self.z_image.supports_controlnet)
+        self.assertFalse(self.z_image.supports_ip_adapter)
+        self.assertFalse(self.z_image.supports_inpaint_engine)
+
+    def test_negative_prompt_supported_and_cfg_non_zero(self):
+        # cfg=0 would silently make the negative-prompt field a no-op.
+        self.assertTrue(self.z_image.supports_negative_prompt)
+        self.assertGreater(self.z_image.default_cfg, 0.0)
+        self.assertGreaterEqual(self.z_image.default_cfg, self.z_image.cfg_range[0])
+        self.assertLessEqual(self.z_image.default_cfg, self.z_image.cfg_range[1])
+
+    def test_vae_not_overridable(self):
+        self.assertFalse(self.z_image.supports_vae_override)
+
+    def test_latent_channels_is_sixteen(self):
+        self.assertEqual(self.z_image.latent_channels, 16)
+
+    def test_turbo_performance_mode(self):
+        self.assertEqual(len(self.z_image.performance_modes), 1)
+        turbo = self.z_image.performance_modes[0]
+        self.assertEqual(turbo.label, 'Turbo')
+        self.assertTrue(1 <= turbo.steps <= 20)
+
+    def test_sampler_names_are_euler_family_only(self):
+        self.assertTrue(all('euler' in name for name in self.z_image.sampler_names))
+
+    def test_scheduler_names_exclude_hardcoded_architecture_specific_ones(self):
+        # modules/sample_hijack.py hardcodes 'turbo'/'align_your_steps' to
+        # SDXL/SD1 today (see modules/model_family.py's module docstring).
+        self.assertNotIn('turbo', self.z_image.scheduler_names)
+        self.assertNotIn('align_your_steps', self.z_image.scheduler_names)
+
+
 class TestUnknownFallback(unittest.TestCase):
     def test_unknown_is_identical_to_sdxl(self):
         sdxl = model_family.FAMILY_CAPABILITIES[model_family.ModelFamily.SDXL]
@@ -97,21 +151,21 @@ class TestUnknownFallback(unittest.TestCase):
         self.assertIs(unknown, sdxl)
 
     def test_get_capabilities_falls_back_to_unknown_for_unpopulated_family(self):
-        # Z_IMAGE and KREA2 enum members exist as placeholders for later
-        # tickets (FWDF-123..127) but have no registry entry yet.
+        # KREA2 is a Krea 2 backlog placeholder with no registry entry yet.
+        # Z_IMAGE has a real entry as of FWDF-127 (see TestZImageEntry).
         sdxl = model_family.get_capabilities(model_family.ModelFamily.SDXL)
-        self.assertIs(model_family.get_capabilities(model_family.ModelFamily.Z_IMAGE), sdxl)
         self.assertIs(model_family.get_capabilities(model_family.ModelFamily.KREA2), sdxl)
 
     def test_fallback_routes_through_the_unknown_entry_not_a_hardcoded_default(self):
         # Swap in a distinct UNKNOWN descriptor: unregistered families must
         # resolve to it, proving get_capabilities() reads the UNKNOWN entry
-        # rather than defaulting to SDXL directly.
+        # rather than defaulting to SDXL directly. KREA2 stands in for an
+        # unregistered family (Z_IMAGE has a real entry as of FWDF-127).
         original = model_family.FAMILY_CAPABILITIES[model_family.ModelFamily.UNKNOWN]
         distinct = dataclasses.replace(original, supports_freeu=not original.supports_freeu)
         model_family.FAMILY_CAPABILITIES[model_family.ModelFamily.UNKNOWN] = distinct
         try:
-            self.assertIs(model_family.get_capabilities(model_family.ModelFamily.Z_IMAGE), distinct)
+            self.assertIs(model_family.get_capabilities(model_family.ModelFamily.KREA2), distinct)
         finally:
             model_family.FAMILY_CAPABILITIES[model_family.ModelFamily.UNKNOWN] = original
 

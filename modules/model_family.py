@@ -6,9 +6,10 @@ means adding one `ModelFamily` member and one `FAMILY_CAPABILITIES` entry.
 Consumers (pipeline, Gradio UI, new-UI API) look up capabilities through
 `get_capabilities()` instead of hardcoding SDXL assumptions.
 
-This module ships only the registry; no consumer reads it yet (that is
-FWDF-127 for the pipeline, FWDF-128 for the new-UI capabilities API, and
-FWDF-129/FWDF-130 for Gradio/new-UI show-hide).
+FWDF-127 is the first consumer, reading `get_capabilities()` from
+`modules/default_pipeline.py` to gate refiner assembly. FWDF-128 (new-UI
+capabilities API) and FWDF-129/FWDF-130 (Gradio/new-UI show-hide) are the
+remaining planned consumers.
 
 Scheduler caveat for future family entries: `"turbo"` and
 `"align_your_steps"` in `scheduler_names` are architecture-specific today.
@@ -147,9 +148,70 @@ _SDXL_CAPABILITIES = _build_sdxl_capabilities()
 # SD1.5-specific behavior, not an assertion that SD15 == SDXL forever.
 _SD15_CAPABILITIES = _build_sdxl_capabilities()
 
+
+def _build_z_image_capabilities() -> FamilyCapabilities:
+    """Z-Image-Turbo: a CFG-distilled flow-matching DiT (FWDF-123/124) with a
+    hand-assembled Qwen3-4B text encoder (FWDF-122/125) and a standalone
+    Flux-format VAE (FWDF-121/126) -- none of which are wired through
+    modules/config.py's global checkpoint/CLIP/VAE machinery the way SDXL's
+    single-file checkpoint is. It has no refiner, ADM guidance, FreeU, or
+    CLIP-skip concept: those are all UNet-block or CLIP-specific tricks this
+    DiT+Qwen3 stack doesn't expose. adaptive_cfg and sharpness are also
+    disabled: both are eps-space post-processing heuristics tuned for
+    SDXL's noise parameterization, unverified against this model's
+    flow-matching/velocity output.
+
+    The ~8-9 step, low-CFG performance mode mirrors the community-documented
+    ComfyUI Z-Image-Turbo workflow -- see modules/qwen3_text_encoder.py's
+    docstring for the same "not independently verified against Tongyi-MAI's
+    own pipeline" caveat. cfg deliberately stays non-zero (unlike some
+    community workflows that use cfg=0) so supports_negative_prompt=True
+    remains meaningful.
+    """
+    turbo = PerformanceMode(
+        label='Turbo',
+        steps=9,
+        steps_uov=9,
+        cfg=None,
+        lora_filename=None,
+        restricted=False,
+    )
+    return FamilyCapabilities(
+        supports_refiner=False,
+        supports_adm_guidance=False,
+        supports_freeu=False,
+        supports_clip_skip=False,
+        supports_adaptive_cfg=False,
+        supports_sharpness=False,
+        supports_negative_prompt=True,
+        supports_controlnet=False,
+        supports_ip_adapter=False,
+        supports_inpaint_engine=False,
+        supports_vae_override=False,
+        vae_names=None,
+        performance_modes=(turbo,),
+        # Euler-family samplers are documented as best-behaved for this
+        # Turbo model; SDXL's dpmpp_2m_sde_gpu/karras default is untested
+        # against the flow schedule and deliberately excluded.
+        sampler_names=('euler', 'euler_ancestral'),
+        # 'turbo' and 'align_your_steps' are excluded: both are hardcoded to
+        # specific architectures in modules/sample_hijack.py (see this
+        # module's docstring) and are not valid for Z-Image yet.
+        scheduler_names=('normal', 'simple'),
+        aspect_ratios=tuple(sdxl_aspect_ratios),
+        default_cfg=1.5,
+        cfg_range=(1.0, 4.0),
+        default_steps=9,
+        latent_channels=16,
+    )
+
+
+_Z_IMAGE_CAPABILITIES = _build_z_image_capabilities()
+
 FAMILY_CAPABILITIES: dict[ModelFamily, FamilyCapabilities] = {
     ModelFamily.SDXL: _SDXL_CAPABILITIES,
     ModelFamily.SD15: _SD15_CAPABILITIES,
+    ModelFamily.Z_IMAGE: _Z_IMAGE_CAPABILITIES,
     # UNKNOWN must resolve to the exact same object as SDXL (identity, not
     # a duplicate literal) so unrecognized checkpoints keep today's
     # behavior and the two stay in lockstep by construction.
