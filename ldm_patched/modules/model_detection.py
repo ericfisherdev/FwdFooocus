@@ -192,8 +192,6 @@ def detect_unet_config(state_dict, key_prefix, dtype):
 # Future architecture families register themselves via register_detector() instead of
 # editing this table or model_config_from_unet() directly (Open/Closed Principle).
 # Planned discriminants for upcoming families:
-#   - Z-Image / Lumina2-NextDiT (FWDF-124): '{prefix}x_embedder.weight' and
-#     '{prefix}cap_embedder.*'
 #   - Krea 2 (backlog): '{prefix}txtfusion.projector.weight'
 _DETECTOR_TABLE = [
     ArchitectureDetector(
@@ -202,6 +200,62 @@ _DETECTOR_TABLE = [
         detect_config=detect_unet_config,
     ),
 ]
+
+
+def matches_z_image(state_dict_keys, key_prefix):
+    """Z-Image / Lumina2-NextDiT (FWDF-123, FWDF-124) discriminant: the DiT's
+    patchify projection plus its caption embedder, neither of which any UNet
+    or other currently-registered architecture has.
+    """
+    if '{}x_embedder.weight'.format(key_prefix) not in state_dict_keys:
+        return False
+    cap_embedder_prefix = '{}cap_embedder.'.format(key_prefix)
+    return any(k.startswith(cap_embedder_prefix) for k in state_dict_keys)
+
+
+def detect_z_image_config(state_dict, key_prefix, dtype):
+    """Read NextDiT's (FWDF-123) constructor config off tensor shapes, mirroring
+    ComfyUI's comfy/model_detection.py Z-Image branch. Values that are architectural
+    constants rather than learned tensor shapes (RoPE axes/theta, norm epsilon, FFN
+    width multiplier) are not stored anywhere in the state dict and are set to
+    Z-Image's fixed, published config instead of being inferred.
+    """
+    state_dict_keys = list(state_dict.keys())
+
+    x_embedder_weight = state_dict['{}x_embedder.weight'.format(key_prefix)]
+    dim = x_embedder_weight.shape[0]
+    patch_size = 2
+    in_channels = x_embedder_weight.shape[1] // (patch_size * patch_size)
+
+    cap_feat_dim = state_dict['{}cap_embedder.1.weight'.format(key_prefix)].shape[1]
+
+    head_dim = state_dict['{}layers.0.attention.q_norm.weight'.format(key_prefix)].shape[0]
+    n_heads = dim // head_dim
+
+    n_layers = count_blocks(state_dict_keys, '{}layers.'.format(key_prefix) + '{}.')
+    n_refiner_layers = count_blocks(state_dict_keys, '{}noise_refiner.'.format(key_prefix) + '{}.')
+
+    return {
+        "dtype": dtype,
+        "image_model": "z_image",
+        "patch_size": patch_size,
+        "in_channels": in_channels,
+        "dim": dim,
+        "n_layers": n_layers,
+        "n_refiner_layers": n_refiner_layers,
+        "n_heads": n_heads,
+        "n_kv_heads": n_heads,
+        "multiple_of": 256,
+        "ffn_dim_multiplier": 8.0 / 3.0,
+        "norm_eps": 1e-05,
+        "qk_norm": True,
+        "cap_feat_dim": cap_feat_dim,
+        "axes_dims": [32, 48, 48],
+        "axes_lens": [1536, 512, 512],
+        "rope_theta": 256.0,
+        "z_image_modulation": True,
+        "time_scale": 1000.0,
+    }
 
 
 def register_detector(name, matches, detect_config):
@@ -218,6 +272,9 @@ def register_detector(name, matches, detect_config):
     if any(detector.name == name for detector in _DETECTOR_TABLE):
         raise ValueError(f"architecture detector '{name}' is already registered")
     _DETECTOR_TABLE.insert(-1, ArchitectureDetector(name, matches, detect_config))
+
+
+register_detector("z-image", matches_z_image, detect_z_image_config)
 
 
 def model_config_from_unet_config(unet_config):

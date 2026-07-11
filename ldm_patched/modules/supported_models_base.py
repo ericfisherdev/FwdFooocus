@@ -27,7 +27,12 @@ class BASE:
     @classmethod
     def matches(s, unet_config):
         for k in s.unet_config:
-            if s.unet_config[k] != unet_config[k]:
+            # unet_config keys are not a common superset across architecture
+            # families (e.g. DiT families like ZImage declare keys such as
+            # "dim" that UNet-family detected configs never have, and vice
+            # versa), so a key absent from the detected config means this
+            # class simply doesn't match rather than a lookup error.
+            if k not in unet_config or s.unet_config[k] != unet_config[k]:
                 return False
         return True
 
