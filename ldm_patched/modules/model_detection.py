@@ -1,5 +1,36 @@
+from collections.abc import Callable
+from typing import NamedTuple
+
+import torch
+
 import ldm_patched.modules.supported_models
 import ldm_patched.modules.supported_models_base
+
+
+class UnsupportedArchitectureError(Exception):
+    """Raised by model_config_from_unet() when an ArchitectureDetector recognizes a
+    checkpoint's architecture but ldm_patched.modules.supported_models has no matching
+    entry registered for it yet (e.g. a Z-Image checkpoint before FWDF-124 lands).
+    Carries the detected architecture name and its detected unet_config so callers can
+    build a descriptive error message instead of crashing on a None model_config.
+    """
+
+    def __init__(self, architecture_name, unet_config):
+        self.architecture_name = architecture_name
+        self.unet_config = unet_config
+        super().__init__(f"no supported_models entry registered for detected architecture '{architecture_name}'")
+
+
+class ArchitectureDetector(NamedTuple):
+    """One entry in the pluggable architecture detection table used by
+    model_config_from_unet(). `matches` inspects the checkpoint's state dict keys and
+    returns True if this detector recognizes the architecture; `detect_config` is only
+    ever called after `matches` confirmed the keys it needs are present, so it can read
+    tensor shapes unconditionally.
+    """
+    name: str
+    matches: Callable[[list, str], bool]
+    detect_config: Callable[[dict, str, torch.dtype], dict]
 
 def count_blocks(state_dict_keys, prefix_string):
     count = 0
@@ -151,6 +182,44 @@ def detect_unet_config(state_dict, key_prefix, dtype):
 
     return unet_config
 
+
+# Ordered architecture detection table. model_config_from_unet() walks this table in
+# order and calls the first detector whose `matches()` returns True. The UNet entry
+# below is the terminal fallback and must stay last: it gates on the same
+# 'input_blocks.0.0.weight' key detect_unet_config() has always required, so it never
+# runs against a non-UNet (e.g. DiT) state dict.
+#
+# Future architecture families register themselves via register_detector() instead of
+# editing this table or model_config_from_unet() directly (Open/Closed Principle).
+# Planned discriminants for upcoming families:
+#   - Z-Image / Lumina2-NextDiT (FWDF-124): '{prefix}x_embedder.weight' and
+#     '{prefix}cap_embedder.*'
+#   - Krea 2 (backlog): '{prefix}txtfusion.projector.weight'
+_DETECTOR_TABLE = [
+    ArchitectureDetector(
+        name="unet",
+        matches=lambda state_dict_keys, key_prefix: f'{key_prefix}input_blocks.0.0.weight' in state_dict_keys,
+        detect_config=detect_unet_config,
+    ),
+]
+
+
+def register_detector(name, matches, detect_config):
+    """Register an architecture detector ahead of the terminal UNet fallback.
+
+    `matches(state_dict_keys, key_prefix)` must return True only when the checkpoint
+    has the keys `detect_config` needs to read; `detect_config(state_dict, key_prefix,
+    dtype)` must return a unet_config dict compatible with model_config_from_unet_config().
+    Detectors are tried in registration order, but always before the UNet fallback,
+    since it is never displaced from the end of the table. Names must be unique so a
+    re-registration (e.g. a double import) fails loudly instead of silently
+    accumulating stale entries.
+    """
+    if any(detector.name == name for detector in _DETECTOR_TABLE):
+        raise ValueError(f"architecture detector '{name}' is already registered")
+    _DETECTOR_TABLE.insert(-1, ArchitectureDetector(name, matches, detect_config))
+
+
 def model_config_from_unet_config(unet_config):
     for model_config in ldm_patched.modules.supported_models.models:
         if model_config.matches(unet_config):
@@ -160,12 +229,26 @@ def model_config_from_unet_config(unet_config):
     return None
 
 def model_config_from_unet(state_dict, unet_key_prefix, dtype, use_base_if_no_match=False):
-    unet_config = detect_unet_config(state_dict, unet_key_prefix, dtype)
-    model_config = model_config_from_unet_config(unet_config)
-    if model_config is None and use_base_if_no_match:
-        return ldm_patched.modules.supported_models_base.BASE(unet_config)
-    else:
-        return model_config
+    state_dict_keys = list(state_dict.keys())
+    for detector in _DETECTOR_TABLE:
+        if not detector.matches(state_dict_keys, unet_key_prefix):
+            continue
+
+        unet_config = detector.detect_config(state_dict, unet_key_prefix, dtype)
+        model_config = model_config_from_unet_config(unet_config)
+        if model_config is not None:
+            return model_config
+        if use_base_if_no_match:
+            return ldm_patched.modules.supported_models_base.BASE(unet_config)
+        if detector is _DETECTOR_TABLE[-1]:
+            # Terminal UNet fallback: preserve the pre-registry contract of returning
+            # None for a UNet-shaped checkpoint that resolves to no supported model,
+            # so sd.py keeps raising its original "Could not detect model type" error
+            # instead of a misleading "architecture 'unet' is unregistered" one.
+            return None
+        raise UnsupportedArchitectureError(detector.name, unet_config)
+
+    return None
 
 def convert_config(unet_config):
     new_config = unet_config.copy()
