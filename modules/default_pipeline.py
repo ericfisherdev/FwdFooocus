@@ -195,13 +195,17 @@ def clip_encode(texts, pool_top_k=1):
         return None
 
     cond_list = []
-    pooled_acc = 0
+    # Encoders without a pooled projection head (e.g. Qwen3-4B, Qwen3-VL-4B)
+    # return pooled=None; keep pooled_acc as None until the first non-None
+    # value is seen instead of seeding it with an int, which would raise
+    # TypeError on `+=` the moment any encoder in the mix has no pooled output.
+    pooled_acc = None
 
     for i, text in enumerate(texts):
         cond, pooled = clip_encode_single(final_clip, text)
         cond_list.append(cond)
-        if i < pool_top_k:
-            pooled_acc += pooled
+        if i < pool_top_k and pooled is not None:
+            pooled_acc = pooled if pooled_acc is None else pooled_acc + pooled
 
     return [[torch.cat(cond_list, dim=1), {"pooled_output": pooled_acc}]]
 
