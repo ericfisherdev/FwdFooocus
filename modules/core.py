@@ -151,8 +151,9 @@ def load_model(ckpt_filename, vae_filename=None):
 
 @torch.no_grad()
 @torch.inference_mode()
-def generate_empty_latent(width=1024, height=1024, batch_size=1):
-    return opEmptyLatentImage.generate(width=width, height=height, batch_size=batch_size)[0]
+def generate_empty_latent(width=1024, height=1024, batch_size=1, latent_channels=4):
+    return opEmptyLatentImage.generate(width=width, height=height, batch_size=batch_size,
+                                        latent_channels=latent_channels)[0]
 
 
 @torch.no_grad()
@@ -193,6 +194,12 @@ def encode_vae_inpaint(vae, pixels, mask):
     return latent, latent_mask
 
 
+# VAEApprox and get_previewer() below are hardcoded to 4-channel latents (xlvaeapp.pth /
+# vaeapp_sd15.pth are both 4-channel-input approximators). This is out of scope for FWDF-120,
+# which only threads latent channel count through empty-latent creation. FWDF-127 (Z-Image
+# pipeline integration) is responsible for branching get_previewer() on latent format and
+# supplying a Flux/QwenImage latent_rgb_factors-based preview path instead of routing
+# 16-channel latents through VAEApprox.
 class VAEApprox(torch.nn.Module):
     def __init__(self):
         super(VAEApprox, self).__init__()
@@ -223,6 +230,14 @@ VAE_approx_models = {}
 @torch.inference_mode()
 def get_previewer(model):
     global VAE_approx_models
+
+    if getattr(model.model.latent_format, 'latent_channels', 4) != 4:
+        # Both VAEApprox checkpoints are 4-channel-input approximators; a
+        # 16-channel latent would crash the preview callback. Previews stay
+        # disabled for such families until FWDF-127 supplies a
+        # latent_rgb_factors-based preview path (ksampler already treats a
+        # None previewer as previews-off).
+        return None
 
     from modules.config import path_vae_approx
     is_sdxl = isinstance(model.model.latent_format, ldm_patched.modules.latent_formats.SDXL)

@@ -1018,8 +1018,8 @@ class EmptyLatentImage:
 
     CATEGORY = "latent"
 
-    def generate(self, width, height, batch_size=1):
-        latent = torch.zeros([batch_size, 4, height // 8, width // 8], device=self.device)
+    def generate(self, width, height, batch_size=1, latent_channels=4):
+        latent = torch.zeros([batch_size, latent_channels, height // 8, width // 8], device=self.device)
         return ({"samples":latent}, )
 
 
