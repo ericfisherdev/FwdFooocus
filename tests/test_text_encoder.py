@@ -347,6 +347,13 @@ def default_pipeline():
         raise
     yield pipeline
     restore()
+    # The imported module was bootstrapped against the stubs above; evict it
+    # so no later test module receives this stub-bound instance from the
+    # sys.modules cache (or via the package attribute).
+    sys.modules.pop('modules.default_pipeline', None)
+    import modules as _modules_pkg
+    if getattr(_modules_pkg, 'default_pipeline', None) is pipeline:
+        delattr(_modules_pkg, 'default_pipeline')
 
 
 class _RecordingEncoder:
