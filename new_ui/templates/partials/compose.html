@@ -60,7 +60,8 @@
 
 <!-- Negative Prompt (collapsible) -->
 <div class="compose__negative-prompt"
-     x-data="{ negOpen: false }">
+     x-data="{ negOpen: false }"
+     x-show="$store.model.capabilities?.supports_negative_prompt ?? true">
     <button type="button" class="collapsible-header text-label"
             :aria-expanded="negOpen.toString()"
             aria-controls="negative-prompt-content"
@@ -103,12 +104,12 @@
         <div class="quick-settings__item">
             <label class="text-label">Performance</label>
             <div class="quick-settings__radio-group">
-                <template x-for="perf in ['Speed', 'Quality', 'Extreme Speed']" :key="perf">
+                <template x-for="mode in performanceModes" :key="mode.label">
                     <button type="button" class="btn btn-secondary btn-sm"
-                            :class="{ 'btn-primary': performance === perf }"
-                            :aria-pressed="(performance === perf).toString()"
-                            @click="setPerformance(perf)"
-                            x-text="perf === 'Extreme Speed' ? 'Extreme' : perf"></button>
+                            :class="{ 'btn-primary': performance === mode.label }"
+                            :aria-pressed="(performance === mode.label).toString()"
+                            @click="setPerformance(mode.label)"
+                            x-text="mode.label === 'Extreme Speed' ? 'Extreme' : mode.label"></button>
                 </template>
             </div>
         </div>
@@ -116,7 +117,7 @@
             <label class="text-label" for="quick-settings-aspect-ratio">Aspect Ratio</label>
             <div class="select-wrapper">
                 <select id="quick-settings-aspect-ratio" class="select" x-model="aspectRatio">
-                    <template x-for="ar in $store.config.availableAspectRatios" :key="ar">
+                    <template x-for="ar in aspectRatioOptions" :key="ar">
                         <option :value="ar" x-text="ar.replace('*', ' × ')"></option>
                     </template>
                 </select>
