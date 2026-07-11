@@ -240,7 +240,7 @@ class JointTransformerBlock(nn.Module):
             x = x + self.attention_norm2(
                 clamp_fp16(self.attention(self.attention_norm1(x), freqs_cis, mask=mask))
             )
-            x = x + self.ffn_norm2(self.feed_forward(self.ffn_norm1(x)))
+            x = x + self.ffn_norm2(clamp_fp16(self.feed_forward(self.ffn_norm1(x))))
         return x
 
 
