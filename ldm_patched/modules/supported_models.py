@@ -306,5 +306,43 @@ class SD_X4Upscaler(SD20):
         out = model_base.SD_X4Upscaler(self, device=device)
         return out
 
+class ZImage(supported_models_base.BASE):
+    """Tongyi-MAI's Z-Image, wrapping the NextDiT (Lumina2) backbone (FWDF-123)
+    instead of UNetModel. unet_config carries NextDiT's constructor keys, detected
+    off tensor shapes and fixed architectural constants by
+    model_detection.detect_z_image_config().
+    """
+    unet_config = {
+        "dim": 3840,
+        "n_layers": 30,
+        "n_heads": 30,
+        "n_kv_heads": 30,
+        "in_channels": 16,
+        "cap_feat_dim": 2560,
+        "axes_dims": [32, 48, 48],
+        "axes_lens": [1536, 512, 512],
+        "norm_eps": 1e-05,
+        "qk_norm": True,
+        "n_refiner_layers": 2,
+        "rope_theta": 256.0,
+    }
+
+    unet_extra_config = {}
+
+    latent_format = latent_formats.Flux
+
+    sampling_settings = {
+        "shift": 3.0,
+    }
+
+    def get_model(self, state_dict, prefix="", device=None):
+        return model_base.ZImage(self, device=device)
+
+    def clip_target(self):
+        # FWDF-125's Qwen3-4B ClipTarget has not landed on this branch yet;
+        # placeholder mirrors Stable_Zero123/SVD_img2vid until it does.
+        return None
+
 models = [Stable_Zero123, SD15, SD20, SD21UnclipL, SD21UnclipH, SDXLRefiner, SDXL, SSD1B, Segmind_Vega, SD_X4Upscaler]
 models += [SVD_img2vid]
+models += [ZImage]

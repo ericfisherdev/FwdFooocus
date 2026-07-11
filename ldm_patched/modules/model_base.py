@@ -2,6 +2,7 @@ import torch
 from ldm_patched.ldm.modules.diffusionmodules.openaimodel import UNetModel, Timestep
 from ldm_patched.ldm.modules.encoders.noise_aug_modules import CLIPEmbeddingNoiseAugmentation
 from ldm_patched.ldm.modules.diffusionmodules.upscaling import ImageConcatWithNoiseAugmentation
+import ldm_patched.ldm.lumina.model
 import ldm_patched.modules.model_management
 import ldm_patched.modules.conds
 import ldm_patched.modules.ops
@@ -430,3 +431,52 @@ class SD_X4Upscaler(BaseModel):
         out['c_concat'] = ldm_patched.modules.conds.CONDNoiseShape(image)
         out['y'] = ldm_patched.modules.conds.CONDRegular(noise_level)
         return out
+
+class ZImage(BaseModel):
+    """Z-Image wraps ldm_patched.ldm.lumina.model.NextDiT (FWDF-123) in place of
+    the UNetModel BaseModel.__init__ builds by default.
+    """
+    def __init__(self, model_config, model_type=ModelType.FLOW, device=None):
+        unet_config = model_config.unet_config
+        unet_config["disable_unet_model_creation"] = True
+        super().__init__(model_config, model_type=model_type, device=device)
+
+        if self.manual_cast_dtype is not None:
+            operations = ldm_patched.modules.ops.manual_cast
+        else:
+            operations = ldm_patched.modules.ops.disable_weight_init
+        self.diffusion_model = ldm_patched.ldm.lumina.model.NextDiT(**unet_config, device=device, operations=operations)
+
+    def apply_model(self, x, t, c_concat=None, c_crossattn=None, control=None, transformer_options={}, **kwargs):
+        """NextDiT expects a raw flow-matching timestep in [0, 1] and applies its
+        own (1 - t) / negated-output conventions internally (see
+        ldm_patched/ldm/lumina/model.py), so unlike BaseModel.apply_model() this
+        skips ModelSamplingDiscreteFlow.timestep()'s sigma * multiplier rescale --
+        passing that rescaled value straight through would push NextDiT's internal
+        `1 - timesteps` far outside [0, 1]. Caption conditioning (Qwen3 hidden
+        states, FWDF-125) arrives as c_crossattn like any other cross-attention
+        conditioning and is passed straight through to NextDiT's `context`
+        argument, which feeds its cap_embedder; Z-Image has no inpaint-style
+        c_concat, so that path is dropped rather than inherited unused.
+        """
+        sigma = t
+        xc = self.model_sampling.calculate_input(sigma, x)
+
+        context = c_crossattn
+        dtype = self.get_dtype()
+        if self.manual_cast_dtype is not None:
+            dtype = self.manual_cast_dtype
+
+        xc = xc.to(dtype)
+        t = t.float()
+        context = context.to(dtype)
+        extra_conds = {}
+        for o in kwargs:
+            extra = kwargs[o]
+            if hasattr(extra, "dtype"):
+                if extra.dtype != torch.int and extra.dtype != torch.long:
+                    extra = extra.to(dtype)
+            extra_conds[o] = extra
+
+        model_output = self.diffusion_model(xc, t, context=context, **extra_conds).float()
+        return self.model_sampling.calculate_denoised(sigma, model_output, x)
