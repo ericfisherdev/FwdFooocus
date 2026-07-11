@@ -290,6 +290,16 @@ def _install_default_pipeline_test_doubles():
         lambda: sys.modules.__setitem__('modules.core', original_core)
         if original_core is not None else sys.modules.pop('modules.core', None)
     )
+    # 'import modules.core as core' binds the *package attribute* when it
+    # already exists (set by any earlier test importing the real module),
+    # bypassing the sys.modules stub — swap the attribute too.
+    import modules as _modules_pkg
+    _original_core_attr = getattr(_modules_pkg, 'core', None)
+    _modules_pkg.core = core_stub
+    restore_actions.append(
+        lambda: setattr(_modules_pkg, 'core', _original_core_attr)
+        if _original_core_attr is not None else delattr(_modules_pkg, 'core')
+    )
 
     expansion_stub = types.ModuleType('extras.expansion')
     expansion_stub.FooocusExpansion = _FakeExpansion
@@ -299,6 +309,17 @@ def _install_default_pipeline_test_doubles():
         lambda: sys.modules.__setitem__('extras.expansion', original_expansion)
         if original_expansion is not None else sys.modules.pop('extras.expansion', None)
     )
+    try:
+        import extras as _extras_pkg
+    except ImportError:
+        _extras_pkg = None
+    if _extras_pkg is not None:
+        _original_expansion_attr = getattr(_extras_pkg, 'expansion', None)
+        _extras_pkg.expansion = expansion_stub
+        restore_actions.append(
+            lambda: setattr(_extras_pkg, 'expansion', _original_expansion_attr)
+            if _original_expansion_attr is not None else delattr(_extras_pkg, 'expansion')
+        )
 
     import ldm_patched.modules.model_management as model_management
     original_load_models_gpu = model_management.load_models_gpu
