@@ -61,8 +61,6 @@ class TestEmptyLatentImageGenerate(unittest.TestCase):
         self.assertEqual(latent["samples"].shape, (1, 16, 8, 8))
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestPreviewerGuard(unittest.TestCase):
@@ -81,3 +79,7 @@ class TestPreviewerGuard(unittest.TestCase):
             model = FakeInner()
 
         self.assertIsNone(core.get_previewer(FakeModel()))
+
+
+if __name__ == "__main__":
+    unittest.main()
