@@ -6,24 +6,34 @@ on:
     branches:
       - main
 
+# Serialize bump runs so concurrent merges don't race the push to main
+concurrency:
+  group: calver-version-bump
+  cancel-in-progress: false
+
 jobs:
   update-version:
     # Only run if PR was actually merged (not just closed)
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
 
+    # The push authenticates with VERSION_BUMP_TOKEN, not GITHUB_TOKEN,
+    # so the workflow token only needs read access.
     permissions:
-      contents: write
+      contents: read
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           ref: main
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # GITHUB_TOKEN cannot bypass the require-PR branch protection on main;
+          # VERSION_BUMP_TOKEN is an admin-owned fine-grained PAT (Contents: read/write) that can.
+          token: ${{ secrets.VERSION_BUMP_TOKEN }}
+          persist-credentials: true
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.10'
 
@@ -40,7 +50,6 @@ jobs:
           git diff --staged --quiet || git commit -m "chore: bump version to ${{ steps.update.outputs.version }} [skip ci]"
 
       - name: Push changes
-        uses: ad-m/github-push-action@v0.8.0
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          branch: main
+        run: |
+          git pull --rebase origin main
+          git push origin main
