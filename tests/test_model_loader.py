@@ -1,13 +1,18 @@
 import hashlib
 import os
 import shutil
+import sys
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 from unittest.mock import patch
 
-import modules.model_loader as model_loader
-from modules.model_loader import load_file_from_url
+# Ensure project root is on sys.path (direct execution support)
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+import modules.model_loader as model_loader  # noqa: E402
+from modules.model_loader import load_file_from_url  # noqa: E402
 
 
 def _write_file(path, content: bytes):
@@ -173,8 +178,6 @@ class TestLoadFileFromUrl(unittest.TestCase):
         self.assertIn('Size mismatch', str(ctx.exception))
 
 
-if __name__ == '__main__':
-    unittest.main()
 
 
 class TestVerificationMarker(unittest.TestCase):
@@ -246,3 +249,46 @@ class TestVerificationMarker(unittest.TestCase):
                 dl.side_effect = restore
                 model_loader.load_file_from_url(url, model_dir=tmp_dir, expected_sha256=sha, expected_size=5)
                 dl.assert_called_once()
+
+
+    def test_sha_only_expectation_still_guards_disk_size_on_warm_start(self):
+        """Callers passing only expected_sha256 must still get truncation
+        protection: the marker records the on-disk size at verification time
+        and re-checks it every warm start."""
+        import hashlib
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = os.path.join(tmp_dir, 'model.bin')
+            self._write(path)
+            sha = hashlib.sha256(b'hello').hexdigest()
+            url = 'https://huggingface.co/x/resolve/abc/model.bin'
+
+            def restore(u, dest, progress=True):
+                self._write(dest)
+
+            with mock.patch('torch.hub.download_url_to_file', side_effect=restore) as dl:
+                model_loader.load_file_from_url(url, model_dir=tmp_dir, expected_sha256=sha)
+                self._write(path, b'truncated!!')
+                model_loader.load_file_from_url(url, model_dir=tmp_dir, expected_sha256=sha)
+                dl.assert_called_once()
+
+    def test_failed_redownload_leaves_no_file_or_marker(self):
+        """A corrupted fresh download must be deleted along with any stale
+        marker before the RuntimeError propagates."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = os.path.join(tmp_dir, 'model.bin')
+            url = 'https://huggingface.co/x/resolve/abc/model.bin'
+
+            def bad_download(u, dest, progress=True):
+                self._write(dest, b'corrupted')
+
+            with mock.patch('torch.hub.download_url_to_file', side_effect=bad_download):
+                with self.assertRaises(RuntimeError):
+                    model_loader.load_file_from_url(url, model_dir=tmp_dir,
+                                                    expected_sha256='0' * 64, expected_size=5)
+
+            self.assertFalse(os.path.exists(path))
+            self.assertFalse(os.path.exists(path + '.verified'))
+
+
+if __name__ == '__main__':
+    unittest.main()
