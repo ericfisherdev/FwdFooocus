@@ -51,9 +51,10 @@ def _real_z_image_state_dict(prefix=""):
 
 
 class TestMatchesZImage(unittest.TestCase):
-    def test_matches_when_x_embedder_and_cap_embedder_present(self):
+    def test_matches_when_all_required_keys_present(self):
         prefix = "model.diffusion_model."
-        keys = [prefix + "x_embedder.weight", prefix + "cap_embedder.1.weight"]
+        keys = [prefix + "x_embedder.weight", prefix + "cap_embedder.1.weight",
+                prefix + "layers.0.attention.q_norm.weight"]
         self.assertTrue(model_detection.matches_z_image(keys, prefix))
 
     def test_does_not_match_without_x_embedder(self):
@@ -72,7 +73,8 @@ class TestMatchesZImage(unittest.TestCase):
         self.assertFalse(model_detection.matches_z_image(keys, prefix))
 
     def test_respects_key_prefix(self):
-        keys = ["other.x_embedder.weight", "other.cap_embedder.1.weight"]
+        keys = ["other.x_embedder.weight", "other.cap_embedder.1.weight",
+                "other.layers.0.attention.q_norm.weight"]
         self.assertFalse(model_detection.matches_z_image(keys, "model.diffusion_model."))
         self.assertTrue(model_detection.matches_z_image(keys, "other."))
 
