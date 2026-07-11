@@ -63,8 +63,10 @@ def _read_state_dict_keys(path: str) -> frozenset[str]:
     try:
         with safe_open(path, framework='numpy') as f:
             return frozenset(f.keys())
-    except SafetensorError as e:
-        raise CorruptCheckpointError(f"malformed safetensors header in '{path}': {e}") from e
+    except (SafetensorError, OSError) as e:
+        # OSError covers the file vanishing or losing read permission between
+        # the caller's os.stat() and this open (get_family() must never raise).
+        raise CorruptCheckpointError(f"cannot read safetensors header of '{path}': {e}") from e
 
 
 def _detect_family_from_keys(keys: frozenset[str]) -> ModelFamily:
