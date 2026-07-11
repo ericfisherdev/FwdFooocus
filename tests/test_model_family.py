@@ -18,7 +18,7 @@ _original_argv = sys.argv
 sys.argv = [sys.argv[0]]
 try:
     from modules import model_family  # noqa: E402
-    from modules.flags import Performance, sampler_list, scheduler_list, sdxl_aspect_ratios  # noqa: E402
+    from modules.flags import Performance, guidance_scale_range, sampler_list, scheduler_list, sdxl_aspect_ratios  # noqa: E402
 finally:
     sys.argv = _original_argv
 
@@ -52,7 +52,7 @@ class TestSdxlMatchesFlags(unittest.TestCase):
         self.assertEqual(self.sdxl.scheduler_names, tuple(scheduler_list))
 
     def test_cfg_range_matches_guidance_scale_slider_bounds(self):
-        self.assertEqual(self.sdxl.cfg_range, (1.0, 30.0))
+        self.assertEqual(self.sdxl.cfg_range, guidance_scale_range)
 
     def test_latent_channels(self):
         self.assertEqual(self.sdxl.latent_channels, 4)
