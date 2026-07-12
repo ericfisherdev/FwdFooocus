@@ -53,8 +53,7 @@ try:
         sys.modules['torchvision.transforms'] = _transforms_stub
         sys.modules['torchvision.transforms.functional'] = _functional_stub
 
-    import modules.patch as patch  # noqa: E402
-    import modules.inpaint_worker as inpaint_worker  # noqa: E402
+    from modules import inpaint_worker, patch  # noqa: E402
 
 finally:
     sys.argv = _original_argv
