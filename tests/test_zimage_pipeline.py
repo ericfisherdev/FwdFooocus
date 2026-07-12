@@ -26,6 +26,9 @@ _original_argv = sys.argv
 sys.argv = [sys.argv[0]]
 
 import modules.config  # noqa: E402
+# Captured before any fixture installs the modules.core stub, so tests that
+# need the REAL class (e.g. the refresh_loras invariant) are order-immune.
+from modules.core import StableDiffusionModel as RealStableDiffusionModel  # noqa: E402
 
 sys.argv = _original_argv
 
@@ -462,3 +465,41 @@ class TestRefreshEverythingRefinerCapabilityGate:
         )
 
         refresh_refiner_mock.assert_called_once_with('sdxl_refiner.safetensors')
+
+
+class TestRefreshLorasCloneInvariant:
+    def test_patchable_but_unclonable_encoder_is_rejected(self, monkeypatch):
+        """An encoder with add_patches() but no clone() would accumulate LoRA
+        patches on the shared instance across refreshes; refresh_loras() must
+        fail loudly instead of aliasing."""
+        import torch.nn as nn
+
+        class _PatchableUnclonableClip:
+            cond_stage_model = nn.Linear(2, 2)
+
+            def add_patches(self, patches, weight):
+                return []
+
+        class _FakeUnet:
+            model = nn.Linear(2, 2)
+
+            def clone(self):
+                return self
+
+        # Bypass __init__ (it builds LoRA key maps from real model configs);
+        # the invariant under test lives in refresh_loras().
+        model = RealStableDiffusionModel.__new__(RealStableDiffusionModel)
+        model.unet = _FakeUnet()
+        model.vae = object()
+        model.clip = _PatchableUnclonableClip()
+        model.clip_vision = None
+        model.filename = 'fake.safetensors'
+        model.vae_filename = None
+        model.unet_with_lora = model.unet
+        model.clip_with_lora = model.clip
+        model.visited_loras = ''
+        model.lora_key_map_unet = {}
+        model.lora_key_map_clip = {}
+
+        with pytest.raises(TypeError, match="add_patches\\(\\) without clone\\(\\)"):
+            model.refresh_loras([('some_lora.safetensors', 1.0)])
