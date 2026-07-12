@@ -150,7 +150,7 @@ def _install_default_pipeline_test_doubles():
             if _original_expansion_attr is not None else delattr(_extras_pkg, 'expansion')
         )
 
-    import ldm_patched.modules.model_management as model_management
+    from ldm_patched.modules import model_management
     original_load_models_gpu = model_management.load_models_gpu
     model_management.load_models_gpu = lambda *a, **k: None
     restore_actions.append(lambda: setattr(model_management, 'load_models_gpu', original_load_models_gpu))
@@ -205,6 +205,8 @@ class TestRefreshBaseModelZImageRouting:
                              lambda name: z_image_family)
 
         vae_download_mock = MagicMock(return_value='/models/vae/ae.safetensors')
+        monkeypatch.setattr(pipeline.modules.config, 'z_image_vae_path',
+                             MagicMock(return_value='/models/vae/ae.safetensors'))
         text_encoder_download_mock = MagicMock(return_value='/models/text_encoders/qwen_3_4b.safetensors')
         monkeypatch.setattr(pipeline.modules.config, 'downloading_z_image_vae', vae_download_mock)
         monkeypatch.setattr(pipeline.modules.config, 'downloading_z_image_text_encoder',
@@ -239,6 +241,8 @@ class TestRefreshBaseModelZImageRouting:
         monkeypatch.setattr(pipeline.modules.model_family_detection, 'get_family',
                              lambda name: z_image_family)
         monkeypatch.setattr(pipeline.modules.config, 'downloading_z_image_vae',
+                             MagicMock(return_value='/models/vae/ae.safetensors'))
+        monkeypatch.setattr(pipeline.modules.config, 'z_image_vae_path',
                              MagicMock(return_value='/models/vae/ae.safetensors'))
         monkeypatch.setattr(pipeline.modules.config, 'downloading_z_image_text_encoder', MagicMock())
         monkeypatch.setattr(pipeline.modules.qwen3_text_encoder, 'load_qwen3_text_encoder', MagicMock())
