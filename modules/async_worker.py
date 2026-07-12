@@ -1072,7 +1072,11 @@ def worker():
                              do_not_show_finished_images=not show_intermediate_results or async_task.disable_intermediate_results)
                 return current_progress, img, prompt, negative_prompt
 
-        if 'inpaint' in goals and inpaint_parameterized:
+        if 'inpaint' in goals and inpaint_parameterized \
+                and not _inpaint_family_lacks_engine_head(async_task.base_model_name):
+            # Same capability gate as apply_inpaint()/apply_image_input():
+            # enhancement inpainting must not download the SDXL inpainter or
+            # feed its LoRA to prompt processing for gated families.
             progressbar(async_task, current_progress, 'Downloading inpainter ...')
             inpaint_head_model_path, inpaint_patch_model_path = modules.config.downloading_inpaint_models(
                 inpaint_engine)
