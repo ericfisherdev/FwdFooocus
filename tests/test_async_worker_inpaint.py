@@ -122,5 +122,4 @@ class TestInpaintFamilyLacksEngineHead:
 if __name__ == '__main__':
     # Pytest-style test classes (no unittest.TestCase inheritance) need the
     # pytest runner for direct execution; unittest.main() would collect zero.
-    import pytest as _pytest
-    raise SystemExit(_pytest.main([__file__]))
+    raise SystemExit(pytest.main([__file__]))
