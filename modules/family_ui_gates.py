@@ -40,8 +40,12 @@ def restricted_interactive(*, supported: bool, performance: str) -> bool:
 
 
 def negative_prompt_visible(caps: FamilyCapabilities, performance: str) -> bool:
-    """Union rule for `negative_prompt`, the one control both handlers show/hide."""
-    return caps.supports_negative_prompt and not performance_restricted(performance)
+    """Union rule for `negative_prompt`, the one control both handlers show/hide.
+
+    Delegates to `restricted_interactive` so the union rule lives in exactly
+    one place — by construction, not by call-site care.
+    """
+    return restricted_interactive(supported=caps.supports_negative_prompt, performance=performance)
 
 
 def refiner_switch_visible(caps: FamilyCapabilities, refiner_model_value: str) -> bool:
