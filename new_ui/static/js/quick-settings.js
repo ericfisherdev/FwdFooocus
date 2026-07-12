@@ -61,6 +61,9 @@ function quickSettings() {
             // allowed list (mirrors the backend's _resolve_performance_
             // selection/_validated_or_default fallbacks in new_ui/app.py).
             this.$watch('$store.model.capabilities', () => this._resetInvalidChoices());
+            // $watch is lazy: capabilities may already have loaded before
+            // this component initialized, so reconcile once immediately.
+            if (this.$store.model.capabilities) this._resetInvalidChoices();
         },
 
         /** Push current quick-settings values into $store.generation so

@@ -59,6 +59,9 @@ function settingsState() {
             // list (mirrors the backend's _validated_choice fallback in
             // new_ui/app.py's _build_generate_args).
             this.$watch('$store.model.capabilities', () => this._resetInvalidChoices());
+            // $watch is lazy: capabilities may already have loaded before
+            // this component initialized, so reconcile once immediately.
+            if (this.$store.model.capabilities) this._resetInvalidChoices();
         },
 
         async _loadSamplers() {

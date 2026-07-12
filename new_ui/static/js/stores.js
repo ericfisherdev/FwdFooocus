@@ -231,16 +231,23 @@ document.addEventListener('alpine:init', () => {
         baseModel: '',
         family: null,
         capabilities: null,
+        _capabilitiesRequestSeq: 0,
 
         /** Fetch the FamilyCapabilities descriptor for a checkpoint.
          *  Leaves the previously loaded family/capabilities in place on
          *  a failed or non-OK fetch rather than throwing or clearing
-         *  them, so gated controls keep their last-known-good state. */
+         *  them, so gated controls keep their last-known-good state.
+         *  A request sequence token discards stale responses: switching
+         *  A -> B must never let A's slower response overwrite B's
+         *  family/capabilities after the fact. */
         async loadCapabilities(checkpointName) {
+            const seq = ++this._capabilitiesRequestSeq;
             try {
                 const resp = await fetch(`/api/capabilities?checkpoint=${encodeURIComponent(checkpointName)}`);
+                if (seq !== this._capabilitiesRequestSeq) return; // superseded
                 if (!resp.ok) return;
                 const data = await resp.json();
+                if (seq !== this._capabilitiesRequestSeq) return; // superseded
                 this.family = data.family;
                 this.capabilities = data;
             } catch (e) {
