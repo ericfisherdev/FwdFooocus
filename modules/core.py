@@ -99,7 +99,8 @@ class StableDiffusionModel:
         if self.clip is not None and hasattr(self.clip, 'add_patches') and not hasattr(self.clip, 'clone'):
             raise TypeError(
                 f'{type(self.clip).__name__} implements add_patches() without clone(); '
-                f'refresh_loras() requires both (clonable) or neither (wired through as-is).'
+                f'a patchable encoder must be clonable, or LoRA patches would '
+                f'accumulate on the shared instance across refreshes.'
             )
         self.clip_with_lora = (
             self.clip.clone() if self.clip is not None and hasattr(self.clip, 'clone') else self.clip
