@@ -62,6 +62,12 @@ try:
 
 finally:
     sys.argv = _original_argv
+    # Restore immediately after the modules under test captured their
+    # imports — pytest may import later test modules before any fixture
+    # teardown runs, and they must not observe the stand-ins.
+    for _name in _installed_stub_names:
+        sys.modules.pop(_name, None)
+    _installed_stub_names.clear()
 
 
 @pytest.fixture
@@ -77,14 +83,6 @@ def fake_family(monkeypatch):
     return holder
 
 
-
-@pytest.fixture(scope='module', autouse=True)
-def _remove_installed_stubs_after_module():
-    """Pop the torchvision stand-ins this module installed once its tests
-    finish, so they cannot leak into later test modules in the session."""
-    yield
-    for name in _installed_stub_names:
-        sys.modules.pop(name, None)
 
 
 class TestInpaintFamilyLacksEngineHead:
