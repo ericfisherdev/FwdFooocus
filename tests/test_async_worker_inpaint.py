@@ -29,7 +29,7 @@ sys.argv = [sys.argv[0]]
 # files a None-returning generate_mask_from_image depending on run order.
 if 'extras.inpaint_mask' not in sys.modules:
     _inpaint_mask_stub = types.ModuleType('extras.inpaint_mask')
-    _inpaint_mask_stub.generate_mask_from_image = lambda *a, **k: None
+    _inpaint_mask_stub.generate_mask_from_image = lambda *_args, **_kwargs: None
     _inpaint_mask_stub.SAMOptions = object
     sys.modules['extras.inpaint_mask'] = _inpaint_mask_stub
 
