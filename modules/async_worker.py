@@ -196,6 +196,14 @@ class EarlyReturnException(BaseException):
     pass
 
 
+def _native_resolution_range(base_model_name):
+    """The detected family's (floor, ceiling) native-resolution range used by
+    Vary/Upscale — single-sourced for both call sites (and future consumers)."""
+    return modules.model_family.get_capabilities(
+        modules.model_family_detection.get_family(base_model_name)
+    ).native_resolution_range
+
+
 def worker():
     global async_tasks
 
@@ -484,9 +492,7 @@ def worker():
             denoising_strength = 0.85
         if async_task.overwrite_vary_strength > 0:
             denoising_strength = async_task.overwrite_vary_strength
-        resolution_floor, resolution_ceiling = modules.model_family.get_capabilities(
-            modules.model_family_detection.get_family(async_task.base_model_name)
-        ).native_resolution_range
+        resolution_floor, resolution_ceiling = _native_resolution_range(async_task.base_model_name)
         shape_ceil = get_image_shape_ceil(uov_input_image)
         if shape_ceil < resolution_floor:
             print(f'[Vary] Image is resized because it is too small.')
@@ -619,9 +625,7 @@ def worker():
             f = 2.0
         else:
             f = 1.0
-        resolution_floor, _ = modules.model_family.get_capabilities(
-            modules.model_family_detection.get_family(async_task.base_model_name)
-        ).native_resolution_range
+        resolution_floor, _ = _native_resolution_range(async_task.base_model_name)
         shape_ceil = get_shape_ceil(H * f, W * f)
         if shape_ceil < resolution_floor:
             print(f'[Upscale] Image is resized because it is too small.')
