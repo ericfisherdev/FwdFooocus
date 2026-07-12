@@ -31,6 +31,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 _original_argv = sys.argv
 sys.argv = [sys.argv[0]]
+# Bound before the try so the finally's cleanup loop can't raise NameError
+# (masking the real error) when an import inside the try fails.
+_installed_stub_names = []
 try:
 
     import transformers  # noqa: E402,F401  (forces the real torchvision-unavailable check first)
@@ -41,7 +44,6 @@ try:
     except ImportError:
         _torchvision_available = False
 
-    _installed_stub_names = []
     if not _torchvision_available:
         _functional_stub = types.ModuleType('torchvision.transforms.functional')
         _functional_stub.InterpolationMode = object
@@ -143,6 +145,16 @@ class TestMaskingIsChannelAgnostic:
 
         self.assertions_hold(out, fill_latent, generated_output, mask)
 
+    def test_fully_unmasked_latent_is_entirely_pinned_to_original(self):
+        out, fill_latent, generated_output, mask = _run_forward(channels=16, mask_covers_last_columns=0)
+
+        self.assertions_hold(out, fill_latent, generated_output, mask)
+
+    def test_fully_masked_latent_is_entirely_regenerated(self):
+        out, fill_latent, generated_output, mask = _run_forward(channels=16, mask_covers_last_columns=4)
+
+        self.assertions_hold(out, fill_latent, generated_output, mask)
+
     @staticmethod
     def assertions_hold(out, fill_latent, generated_output, mask):
         assert out.shape == fill_latent.shape
@@ -173,5 +185,4 @@ class TestNoOpWithoutActiveInpaintTask:
 
 
 if __name__ == '__main__':
-    import unittest
-    unittest.main()
+    pytest.main([__file__])

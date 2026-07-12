@@ -213,6 +213,13 @@ def _inpaint_family_lacks_engine_head(base_model_name: str) -> bool:
     return not modules.model_family.get_capabilities(family).supports_inpaint_engine
 
 
+def _inpaint_engine_active(base_model_name: str, inpaint_parameterized: bool) -> bool:
+    """Single gate for every inpaint-engine site (apply_inpaint,
+    apply_image_input, process_enhance): the engine is in play only when the
+    task requests it AND the checkpoint's family has a learned engine head."""
+    return inpaint_parameterized and not _inpaint_family_lacks_engine_head(base_model_name)
+
+
 class EarlyReturnException(BaseException):
     pass
 
@@ -600,7 +607,7 @@ def worker():
         # off inpaint_worker.current_task.latent/.latent_mask (set by
         # load_latent() above) via plain tensor broadcasting -- channel-count-
         # and architecture-agnostic, and independent of this patch() call.
-        if inpaint_parameterized and not _inpaint_family_lacks_engine_head(async_task.base_model_name):
+        if _inpaint_engine_active(async_task.base_model_name, inpaint_parameterized):
             pipeline.final_unet = inpaint_worker.current_task.patch(
                 inpaint_head_model_path=inpaint_head_model_path,
                 inpaint_latent=latent_inpaint,
@@ -969,7 +976,7 @@ def worker():
                     and (np.any(inpaint_mask > 127) or len(async_task.outpaint_selections) > 0):
                 progressbar(async_task, 1, 'Downloading upscale models ...')
                 modules.config.downloading_upscale_model()
-                if inpaint_parameterized and not _inpaint_family_lacks_engine_head(async_task.base_model_name):
+                if _inpaint_engine_active(async_task.base_model_name, inpaint_parameterized):
                     # Same family gate as apply_inpaint()'s .patch() call:
                     # stale/preset inpaint_engine values must not trigger the
                     # SDXL inpainter download (or its LoRA append) for
@@ -1072,8 +1079,7 @@ def worker():
                              do_not_show_finished_images=not show_intermediate_results or async_task.disable_intermediate_results)
                 return current_progress, img, prompt, negative_prompt
 
-        if 'inpaint' in goals and inpaint_parameterized \
-                and not _inpaint_family_lacks_engine_head(async_task.base_model_name):
+        if 'inpaint' in goals and _inpaint_engine_active(async_task.base_model_name, inpaint_parameterized):
             # Same capability gate as apply_inpaint()/apply_image_input():
             # enhancement inpainting must not download the SDXL inpainter or
             # feed its LoRA to prompt processing for gated families.
