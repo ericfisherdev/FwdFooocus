@@ -17,6 +17,7 @@ sys.argv = [sys.argv[0]]
 from fastapi.testclient import TestClient  # noqa: E402
 from new_ui.app import app, _build_generate_args  # noqa: E402
 import modules.config as config  # noqa: E402
+from modules import flags  # noqa: E402
 from modules.model_family import FamilyCapabilities, ModelFamily, PerformanceMode  # noqa: E402
 
 sys.argv = _original_argv
@@ -410,6 +411,28 @@ class TestBuildGenerateArgsFamilyAware:
         assert args[self.IDX_PERFORMANCE_SELECTION] == "Speed"
         assert args[self.IDX_OVERWRITE_STEP] == 20
         assert args[self.IDX_ASPECT_RATIOS_SELECTION] == "512*512"
+
+    def test_z_image_family_never_resolves_accel_lora_performance_labels(self):
+        """FWDF-153: the real Z-Image capability registry (modules/model_family.py)
+        only defines a single 'Turbo' performance mode with lora_filename=None,
+        so requesting one of SDXL's accel-LoRA labels for a Z-Image checkpoint
+        must never resolve to that Performance enum member -- which is the only
+        way async_worker.py's set_lcm_defaults/set_lightning_defaults/
+        set_hyper_sd_defaults (and the sdxl_*_lora.safetensors they append) can
+        ever run. Uses the real Z-Image registry entry (no synthetic
+        capabilities override), unlike test_z_image_family_falls_back_to_its_own_choice_lists
+        above, which only covers 'Quality'.
+        """
+        for label in ("Lightning", "Extreme Speed", "Hyper-SD"):
+            args = self._build({"performance_selection": label}, family=ModelFamily.Z_IMAGE)
+            resolved = args[self.IDX_PERFORMANCE_SELECTION]
+            # Z-Image's only mode is 'Turbo', which the legacy-enum mapping
+            # resolves to 'Speed' (a non-restricted Performance) — assert the
+            # exact successful fallback, not merely the absence of an accel label.
+            assert resolved == flags.Performance.SPEED.value, (
+                f"{label!r} should resolve to the Z-Image fallback 'Speed', got {resolved!r}"
+            )
+            assert not flags.Performance.has_restricted_features(resolved)
 
 
 class TestCheckpointNameBoundary:

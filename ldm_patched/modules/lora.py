@@ -208,17 +208,25 @@ def model_lora_keys_unet(model, key_map={}):
             key_lora = k[len("diffusion_model."):-len(".weight")].replace(".", "_")
             key_map["lora_unet_{}".format(key_lora)] = k
 
-    diffusers_keys = ldm_patched.modules.utils.unet_to_diffusers(model.model_config.unet_config)
-    for k in diffusers_keys:
-        if k.endswith(".weight"):
-            unet_key = "diffusion_model.{}".format(diffusers_keys[k])
-            key_lora = k[:-len(".weight")].replace(".", "_")
-            key_map["lora_unet_{}".format(key_lora)] = unet_key
+    unet_config = model.model_config.unet_config
+    # unet_config["disable_unet_model_creation"] (set by model_base.ZImage.__init__
+    # and any future non-UNetModel backbone) means this config never described a
+    # UNetModel in the first place, so unet_to_diffusers()'s UNetModel-only keys
+    # (num_res_blocks/channel_mult/transformer_depth/transformer_depth_output) do
+    # not exist on it and must not be indexed. The generic diffusion_model.-prefix
+    # loop above is the only key-mapping path for those architectures.
+    if not unet_config.get("disable_unet_model_creation", False):
+        diffusers_keys = ldm_patched.modules.utils.unet_to_diffusers(unet_config)
+        for k in diffusers_keys:
+            if k.endswith(".weight"):
+                unet_key = f"diffusion_model.{diffusers_keys[k]}"
+                key_lora = k[:-len(".weight")].replace(".", "_")
+                key_map[f"lora_unet_{key_lora}"] = unet_key
 
-            diffusers_lora_prefix = ["", "unet."]
-            for p in diffusers_lora_prefix:
-                diffusers_lora_key = "{}{}".format(p, k[:-len(".weight")].replace(".to_", ".processor.to_"))
-                if diffusers_lora_key.endswith(".to_out.0"):
-                    diffusers_lora_key = diffusers_lora_key[:-2]
-                key_map[diffusers_lora_key] = unet_key
+                diffusers_lora_prefix = ["", "unet."]
+                for p in diffusers_lora_prefix:
+                    diffusers_lora_key = "{}{}".format(p, k[:-len(".weight")].replace(".to_", ".processor.to_"))
+                    if diffusers_lora_key.endswith(".to_out.0"):
+                        diffusers_lora_key = diffusers_lora_key[:-2]
+                    key_map[diffusers_lora_key] = unet_key
     return key_map
