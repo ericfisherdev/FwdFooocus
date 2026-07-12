@@ -41,6 +41,7 @@ try:
     except ImportError:
         _torchvision_available = False
 
+    _installed_stub_names = []
     if not _torchvision_available:
         _functional_stub = types.ModuleType('torchvision.transforms.functional')
         _functional_stub.InterpolationMode = object
@@ -52,11 +53,23 @@ try:
         sys.modules['torchvision'] = _torchvision_stub
         sys.modules['torchvision.transforms'] = _transforms_stub
         sys.modules['torchvision.transforms.functional'] = _functional_stub
+        _installed_stub_names.extend(
+            ['torchvision', 'torchvision.transforms', 'torchvision.transforms.functional'])
 
     from modules import inpaint_worker, patch  # noqa: E402
 
 finally:
     sys.argv = _original_argv
+
+
+
+@pytest.fixture(scope='module', autouse=True)
+def _remove_installed_stubs_after_module():
+    """Pop the torchvision stand-ins this module installed once its tests
+    finish, so they cannot leak into later test modules in the session."""
+    yield
+    for name in _installed_stub_names:
+        sys.modules.pop(name, None)
 
 
 class _FakeRealModel:
