@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import modules.config as config
+import modules.flags as flags
 import modules.lora_metadata as lora_metadata
 from modules.heartbeat import update_heartbeat
 
@@ -136,7 +137,7 @@ def get_models():
     # Plain def (not async): FastAPI runs sync routes in a threadpool, so the
     # blocking os.stat/safetensors header reads in get_family() cannot stall
     # the event loop on a cache-cold call.
-    """Return available checkpoints, refiners, and VAEs.
+    """Return available checkpoints, LoRAs, and per-checkpoint families.
 
     `checkpoint_families` is an additive sibling map (filename -> ModelFamily
     value) alongside `checkpoints`; the `checkpoints` list itself stays a
@@ -309,14 +310,30 @@ def _build_generate_args(body: dict) -> list:
     performance_selection = _resolve_performance_selection(
         body.get("performance_selection", body.get("performance")), caps, config.default_performance
     )
+    # AsyncTask does Performance(performance_selection) with the legacy enum
+    # (modules/flags.py); a family-specific mode label outside that enum
+    # (e.g. Z-Image's 'Turbo') would raise ValueError at task creation. Map
+    # such labels to the legacy 'Speed' member and carry the mode's step
+    # count via overwrite_step (unless the caller set one explicitly).
+    overwrite_step = int(body.get("overwrite_step", -1))
+    if performance_selection not in flags.Performance.values():
+        selected_mode = next(
+            (mode for mode in caps.performance_modes if mode.label == performance_selection), None)
+        if selected_mode is not None and overwrite_step < 0:
+            overwrite_step = selected_mode.steps
+        performance_selection = flags.Performance.SPEED.value
     aspect_ratios_selection = _validated_or_default(
         body.get("aspect_ratios_selection"), caps.aspect_ratios, config.default_aspect_ratio
     )
     sharpness = float(body.get("sharpness", config.default_sample_sharpness)) if caps.supports_sharpness else 0.0
     cfg_scale = float(body.get("cfg_scale", caps.default_cfg))
-    refiner_model_name = (
+    # Path-injection boundary (same as base_model_name): the refiner name
+    # used downstream is selected FROM the trusted checkpoint list.
+    requested_refiner = (
         body.get("refiner_model_name", config.default_refiner_model_name) if caps.supports_refiner else "None"
     )
+    refiner_model_name = "None" if requested_refiner in (None, "None") else next(
+        (name for name in config.model_filenames if name == requested_refiner), "None")
     refiner_switch = (
         float(body.get("refiner_switch", config.default_refiner_switch)) if caps.supports_refiner else 0.0
     )
@@ -327,7 +344,9 @@ def _build_generate_args(body: dict) -> list:
     clip_skip = int(body.get("clip_skip", 2)) if caps.supports_clip_skip else 1
     sampler_name = _validated_choice(body.get("sampler_name"), caps.sampler_names, config.default_sampler)
     scheduler_name = _validated_choice(body.get("scheduler_name"), caps.scheduler_names, config.default_scheduler)
-    vae_name = body.get("vae_name", "Default (model)") if caps.supports_vae_override else "Default (model)"
+    requested_vae = body.get("vae_name", "Default (model)") if caps.supports_vae_override else "Default (model)"
+    vae_name = "Default (model)" if requested_vae in (None, "Default (model)") else next(
+        (name for name in config.vae_filenames if name == requested_vae), "Default (model)")
     freeu_enabled = body.get("freeu_enabled", False) if caps.supports_freeu else False
 
     loras_input = body.get("loras", [])
@@ -405,7 +424,7 @@ def _build_generate_args(body: dict) -> list:
         sampler_name,
         scheduler_name,
         vae_name,
-        int(body.get("overwrite_step", -1)),
+        overwrite_step,
         int(body.get("overwrite_switch", -1)),
         int(body.get("overwrite_width", -1)),
         int(body.get("overwrite_height", -1)),

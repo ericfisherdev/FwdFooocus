@@ -237,6 +237,7 @@ class TestBuildGenerateArgsFamilyAware:
     IDX_SAMPLER_NAME = 32
     IDX_SCHEDULER_NAME = 33
     IDX_VAE_NAME = 34
+    IDX_OVERWRITE_STEP = 35
     IDX_FREEU_ENABLED = 49
 
     def _zero_length_padding_patches(self):
@@ -290,7 +291,9 @@ class TestBuildGenerateArgsFamilyAware:
         unknown_args = self._build(body, family=ModelFamily.UNKNOWN)
         assert sdxl_args == unknown_args
 
-    def test_sdxl_family_honors_explicit_request_values(self):
+    def test_sdxl_family_honors_explicit_request_values(self, monkeypatch):
+        monkeypatch.setattr(config, "model_filenames", ["refiner.safetensors"])
+        monkeypatch.setattr(config, "vae_filenames", ["custom.vae.safetensors"])
         body = {
             "negative_prompt": "blurry",
             "refiner_model_name": "refiner.safetensors",
@@ -341,6 +344,11 @@ class TestBuildGenerateArgsFamilyAware:
         assert args[self.IDX_FREEU_ENABLED] is False
         assert args[self.IDX_VAE_NAME] == "Default (model)"
 
+    def test_omitted_cfg_scale_uses_family_default(self):
+        synthetic = _make_z_image_like_capabilities()
+        args = self._build({}, family=ModelFamily.Z_IMAGE, capabilities=synthetic)
+        assert args[self.IDX_CFG_SCALE] == synthetic.default_cfg
+
     def test_z_image_family_falls_back_to_its_own_choice_lists(self):
         synthetic = _make_z_image_like_capabilities()
         body = {
@@ -353,7 +361,11 @@ class TestBuildGenerateArgsFamilyAware:
 
         assert args[self.IDX_SAMPLER_NAME] == "euler"
         assert args[self.IDX_SCHEDULER_NAME] == "simple"
-        assert args[self.IDX_PERFORMANCE_SELECTION] == "Fast"
+        # 'Fast' is not a legacy flags.Performance member: AsyncTask would
+        # raise ValueError on it, so the builder maps it to 'Speed' and
+        # carries the mode's step count via overwrite_step.
+        assert args[self.IDX_PERFORMANCE_SELECTION] == "Speed"
+        assert args[self.IDX_OVERWRITE_STEP] == 20
         assert args[self.IDX_ASPECT_RATIOS_SELECTION] == "512*512"
 
 
