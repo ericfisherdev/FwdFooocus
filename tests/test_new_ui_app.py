@@ -42,6 +42,7 @@ def _make_z_image_like_capabilities() -> FamilyCapabilities:
         supports_sharpness=False,
         supports_negative_prompt=False,
         supports_controlnet=False,
+        controlnet_types=(),
         supports_ip_adapter=False,
         supports_inpaint_engine=False,
         supports_vae_override=False,

@@ -75,6 +75,9 @@ class TestSdxlMatchesFlags(unittest.TestCase):
         self.assertTrue(self.sdxl.supports_ip_adapter)
         self.assertTrue(self.sdxl.supports_inpaint_engine)
 
+    def test_supports_both_canny_and_cpds_controlnet_types(self):
+        self.assertEqual(self.sdxl.controlnet_types, ('canny', 'cpds'))
+
     def test_vae_override_unrestricted_by_default(self):
         self.assertTrue(self.sdxl.supports_vae_override)
         self.assertIsNone(self.sdxl.vae_names)
@@ -124,6 +127,11 @@ class TestZImageEntry(unittest.TestCase):
         # Scoped to PyraCanny only -- see modules/model_family.py's
         # _build_z_image_capabilities docstring (FWDF-156).
         self.assertTrue(self.z_image.supports_controlnet)
+
+    def test_controlnet_types_scoped_to_canny_only(self):
+        # CPDS has no published DiT equivalent (FWDF-156 follow-up fix):
+        # unlike SDXL, Z-Image's controlnet_types omits it.
+        self.assertEqual(self.z_image.controlnet_types, ('canny',))
 
     def test_negative_prompt_supported_and_cfg_non_zero(self):
         # cfg=0 would silently make the negative-prompt field a no-op.
@@ -206,6 +214,7 @@ def _make_blank_capabilities(**overrides):
         supports_sharpness=False,
         supports_negative_prompt=False,
         supports_controlnet=False,
+        controlnet_types=(),
         supports_ip_adapter=False,
         supports_inpaint_engine=False,
         supports_vae_override=False,
@@ -222,6 +231,25 @@ def _make_blank_capabilities(**overrides):
     )
     values.update(overrides)
     return model_family.FamilyCapabilities(**values)
+
+
+class TestControlnetTypesConsistency(unittest.TestCase):
+    """FWDF-156 follow-up: controlnet_types is the single source of truth
+    for per-type ControlNet support; supports_controlnet must always agree
+    with it, enforced at construction time."""
+
+    def test_supports_controlnet_true_with_empty_types_raises(self):
+        with self.assertRaises(ValueError):
+            _make_blank_capabilities(supports_controlnet=True, controlnet_types=())
+
+    def test_supports_controlnet_false_with_nonempty_types_raises(self):
+        with self.assertRaises(ValueError):
+            _make_blank_capabilities(supports_controlnet=False, controlnet_types=('canny',))
+
+    def test_consistent_values_construct_successfully(self):
+        caps = _make_blank_capabilities(supports_controlnet=True, controlnet_types=('canny', 'cpds'))
+        self.assertTrue(caps.supports_controlnet)
+        self.assertEqual(caps.controlnet_types, ('canny', 'cpds'))
 
 
 class TestRegistryExtensibility(unittest.TestCase):

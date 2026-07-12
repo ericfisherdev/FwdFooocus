@@ -232,6 +232,35 @@ def _native_resolution_range(base_model_name):
     ).native_resolution_range
 
 
+def _controlnet_family(base_model_name: str):
+    """The family every ControlNet routing decision (which checkpoint loader
+    to use, which control types are available) must dispatch on -- the
+    REQUESTED checkpoint's family, not `pipeline.model_base.family`.
+
+    `pipeline.model_base.family` reflects the currently *loaded* model and
+    is only brought in sync with `async_task.base_model_name` by
+    `pipeline.refresh_everything()`, which `process_prompt()` calls well
+    after ControlNet routing/download decisions (`apply_image_input()`,
+    `pipeline.refresh_controlnets()`) already ran. Reading pipeline state
+    at those sites routes a base-model family switch between consecutive
+    requests with the *previous* request's family.
+    """
+    return modules.model_family_detection.get_family(base_model_name)
+
+
+def _controlnet_type_supported(base_model_name: str, controlnet_type: str) -> bool:
+    """Whether the requested checkpoint's family capability registry entry
+    (`modules.model_family.FamilyCapabilities.controlnet_types`) lists
+    `controlnet_type` (e.g. `'canny'`/`'cpds'`) as supported. Gates
+    ControlNet-type-specific downloads/processing so an unsupported type
+    (e.g. CPDS for Z-Image, which has no DiT equivalent) is never handed to
+    the wrong loader or looked up in `pipeline.loaded_ControlNets`, which
+    never received an entry for it.
+    """
+    family = _controlnet_family(base_model_name)
+    return controlnet_type in modules.model_family.get_capabilities(family).controlnet_types
+
+
 def worker():
     global async_tasks
 
@@ -353,17 +382,22 @@ def worker():
                      total_count, show_intermediate_results, persist_image=True):
         if async_task.last_stop is not False:
             ldm_patched.modules.model_management.interrupt_current_processing()
-        family = getattr(pipeline.model_base, 'family', modules.model_family.ModelFamily.UNKNOWN)
+        family = _controlnet_family(async_task.base_model_name)
         # Z-Image's PyraCanny-equivalent (FWDF-156) is applied once, directly
         # to pipeline.final_unet, in apply_control_nets() above -- it has no
-        # conditioning-based apply_controlnet() path (CPDS has no DiT
-        # equivalent and is capability-gated out of the UI for this family),
-        # so this per-task conditioning loop is SDXL/UNet-only.
+        # conditioning-based apply_controlnet() path, so this per-task
+        # conditioning loop is SDXL/UNet-only. Each type is additionally
+        # gated on the requested family's controlnet_types (CPDS has no DiT
+        # equivalent and is capability-gated out for Z-Image) so an
+        # unsupported type -- for which apply_image_input() never downloaded
+        # a checkpoint -- is never looked up in pipeline.loaded_ControlNets.
         if 'cn' in goals and family != modules.model_family.ModelFamily.Z_IMAGE:
-            for cn_flag, cn_path in [
-                (flags.cn_canny, controlnet_canny_path),
-                (flags.cn_cpds, controlnet_cpds_path)
+            for cn_flag, cn_path, cn_type in [
+                (flags.cn_canny, controlnet_canny_path, 'canny'),
+                (flags.cn_cpds, controlnet_cpds_path, 'cpds')
             ]:
+                if not _controlnet_type_supported(async_task.base_model_name, cn_type):
+                    continue
                 for cn_img, cn_stop, cn_weight in async_task.cn_tasks[cn_flag]:
                     positive_cond, negative_cond = core.apply_controlnet(
                         positive_cond, negative_cond,
@@ -485,7 +519,7 @@ def worker():
                 yield_result(async_task, cn_img, current_progress, async_task.black_out_nsfw, do_not_show_finished_images=True)
 
         canny_tasks = async_task.cn_tasks[flags.cn_canny]
-        family = getattr(pipeline.model_base, 'family', modules.model_family.ModelFamily.UNKNOWN)
+        family = _controlnet_family(async_task.base_model_name)
         if family == modules.model_family.ModelFamily.Z_IMAGE and len(canny_tasks) > 0:
             # Z-Image's DiT ControlNet (FWDF-156) patches the unet model
             # directly -- like the ip_adapter tasks just below -- instead of
@@ -498,17 +532,24 @@ def worker():
                     pipeline.final_unet, pipeline.loaded_ControlNets[controlnet_canny_path],
                     pipeline.final_vae, cn_img_tensor, cn_weight)
 
-        for task in async_task.cn_tasks[flags.cn_cpds]:
-            cn_img, cn_stop, cn_weight = task
-            cn_img = resize_image(HWC3(cn_img), width=width, height=height)
+        # CPDS has no DiT equivalent (modules.model_family's Z-Image entry
+        # omits it from controlnet_types) -- skip its preprocessing entirely
+        # for a family that does not support it, rather than doing the work
+        # and discarding the result: apply_image_input() never downloaded a
+        # CPDS checkpoint for this family, so there is nothing valid to feed
+        # process_task()'s conditioning loop anyway.
+        if _controlnet_type_supported(async_task.base_model_name, 'cpds'):
+            for task in async_task.cn_tasks[flags.cn_cpds]:
+                cn_img, cn_stop, cn_weight = task
+                cn_img = resize_image(HWC3(cn_img), width=width, height=height)
 
-            if not async_task.skipping_cn_preprocessor:
-                cn_img = preprocessors.cpds(cn_img)
+                if not async_task.skipping_cn_preprocessor:
+                    cn_img = preprocessors.cpds(cn_img)
 
-            cn_img = HWC3(cn_img)
-            task[0] = core.numpy_to_pytorch(cn_img)
-            if async_task.debugging_cn_preprocessor:
-                yield_result(async_task, cn_img, current_progress, async_task.black_out_nsfw, do_not_show_finished_images=True)
+                cn_img = HWC3(cn_img)
+                task[0] = core.numpy_to_pytorch(cn_img)
+                if async_task.debugging_cn_preprocessor:
+                    yield_result(async_task, cn_img, current_progress, async_task.black_out_nsfw, do_not_show_finished_images=True)
         for task in async_task.cn_tasks[flags.cn_ip]:
             cn_img, cn_stop, cn_weight = task
             cn_img = HWC3(cn_img)
@@ -1027,12 +1068,17 @@ def worker():
             goals.append('cn')
             progressbar(async_task, 1, 'Downloading control models ...')
             if len(async_task.cn_tasks[flags.cn_canny]) > 0:
-                family = getattr(pipeline.model_base, 'family', modules.model_family.ModelFamily.UNKNOWN)
+                family = _controlnet_family(async_task.base_model_name)
                 if family == modules.model_family.ModelFamily.Z_IMAGE:
                     controlnet_canny_path = modules.config.downloading_controlnet_zimage_canny()
                 else:
                     controlnet_canny_path = modules.config.downloading_controlnet_canny()
-            if len(async_task.cn_tasks[flags.cn_cpds]) > 0:
+            # CPDS has no DiT equivalent -- gated on the REQUESTED family's
+            # controlnet_types (modules.model_family) so a Z-Image task never
+            # downloads it only to hand it to load_controlnet_zimage() later
+            # (pipeline.refresh_controlnets()), which cannot load it.
+            if len(async_task.cn_tasks[flags.cn_cpds]) > 0 and _controlnet_type_supported(
+                    async_task.base_model_name, 'cpds'):
                 controlnet_cpds_path = modules.config.downloading_controlnet_cpds()
             if len(async_task.cn_tasks[flags.cn_ip]) > 0:
                 clip_vision_path, ip_negative_path, ip_adapter_path = modules.config.downloading_ip_adapters('ip')
@@ -1258,9 +1304,14 @@ def worker():
                 goals, inpaint_head_model_path, inpaint_image, inpaint_mask, inpaint_parameterized, ip_adapter_face_path,
                 ip_adapter_path, ip_negative_path, skip_prompt_processing, use_synthetic_refiner)
 
-        # Load or unload CNs
+        # Load or unload CNs. Pass the REQUESTED family explicitly (not read
+        # from pipeline state): refresh_controlnets() runs before
+        # process_prompt()'s pipeline.refresh_everything() call below, so
+        # pipeline.model_base.family still reflects the previous request's
+        # checkpoint on a base-model family switch.
         progressbar(async_task, current_progress, 'Loading control models ...')
-        pipeline.refresh_controlnets([controlnet_canny_path, controlnet_cpds_path])
+        pipeline.refresh_controlnets([controlnet_canny_path, controlnet_cpds_path],
+                                     _controlnet_family(async_task.base_model_name))
         ip_adapter.load_ip_adapter(clip_vision_path, ip_negative_path, ip_adapter_path)
         ip_adapter.load_ip_adapter(clip_vision_path, ip_negative_path, ip_adapter_face_path)
 

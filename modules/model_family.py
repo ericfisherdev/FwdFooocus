@@ -63,6 +63,14 @@ class FamilyCapabilities:
     bucket that `apply_vary`/`apply_upscale` (`modules/async_worker.py`) clamp
     an input image into before VAE-encoding it -- see `_native_resolution_range()`
     below for how it is derived from `aspect_ratios`.
+
+    `controlnet_types` (FWDF-156) is the coarse-grained `supports_controlnet`
+    flag's per-type breakdown: which `modules.flags` ControlNet annotators
+    (`'canny'`, `'cpds'`) this family's ControlNet implementation actually
+    supports. SDXL/SD15/UNKNOWN support both; Z-Image's DiT ControlNet
+    backport supports Canny only (CPDS has no published DiT equivalent).
+    `supports_controlnet` must always equal `bool(controlnet_types)` --
+    enforced in `__post_init__` -- so the two can never silently disagree.
     """
 
     supports_refiner: bool
@@ -73,6 +81,7 @@ class FamilyCapabilities:
     supports_sharpness: bool
     supports_negative_prompt: bool
     supports_controlnet: bool
+    controlnet_types: tuple[str, ...]
     supports_ip_adapter: bool
     supports_inpaint_engine: bool
     supports_vae_override: bool
@@ -86,6 +95,14 @@ class FamilyCapabilities:
     default_steps: int
     latent_channels: int
     native_resolution_range: tuple[float, float]
+
+    def __post_init__(self):
+        if self.supports_controlnet != bool(self.controlnet_types):
+            raise ValueError(
+                f"supports_controlnet ({self.supports_controlnet!r}) must equal "
+                f"bool(controlnet_types) ({bool(self.controlnet_types)!r}); "
+                f"got controlnet_types={self.controlnet_types!r}"
+            )
 
 
 def _native_resolution_range(aspect_ratios: tuple[str, ...]) -> tuple[float, float]:
@@ -158,6 +175,7 @@ def _build_sdxl_capabilities() -> FamilyCapabilities:
         supports_sharpness=True,
         supports_negative_prompt=True,
         supports_controlnet=True,
+        controlnet_types=('canny', 'cpds'),
         supports_ip_adapter=True,
         supports_inpaint_engine=True,
         supports_vae_override=True,
@@ -202,17 +220,20 @@ def _build_z_image_capabilities() -> FamilyCapabilities:
     community workflows that use cfg=0) so supports_negative_prompt=True
     remains meaningful.
 
-    supports_controlnet=True as of FWDF-156, scoped to PyraCanny only: the
-    DiT ControlNet backport (`ldm_patched/ldm/lumina/controlnet.py`,
+    supports_controlnet=True as of FWDF-156, scoped to PyraCanny only via
+    controlnet_types=('canny',): the DiT ControlNet backport
+    (`ldm_patched/ldm/lumina/controlnet.py`,
     `ldm_patched/modules/controlnet.py:ZImageControlNetPatch`) only covers
     Alibaba/Tongyi-MAI's Z-Image-Turbo-Fun-Controlnet-Union-2.1 Canny path;
-    CPDS has no published DiT equivalent and stays unsupported for this
-    family. This boolean has no dedicated UI consumer yet (FWDF-128/129/130,
-    still open as of this ticket) -- whichever of those wires the ControlNet
-    type list into the new-UI/Gradio ImagePrompt tab must gate on a
-    per-control-type list (not just this single flag) so CPDS/ImagePrompt/
-    FaceSwap stay hidden for Z_IMAGE until they have their own DiT-native
-    implementations.
+    CPDS has no published DiT equivalent and is omitted from
+    controlnet_types, gating both its download and its per-task processing
+    in modules/async_worker.py (`_controlnet_type_supported()`). The
+    per-control-type list itself has no dedicated UI consumer yet
+    (FWDF-128/129/130, still open as of this ticket) -- whichever of those
+    wires it into the new-UI/Gradio ImagePrompt tab must read
+    controlnet_types (not just the coarse supports_controlnet flag) so
+    CPDS/ImagePrompt/FaceSwap stay hidden for Z_IMAGE until they have their
+    own DiT-native implementations.
     """
     turbo = PerformanceMode(
         label='Turbo',
@@ -231,6 +252,7 @@ def _build_z_image_capabilities() -> FamilyCapabilities:
         supports_sharpness=False,
         supports_negative_prompt=True,
         supports_controlnet=True,
+        controlnet_types=('canny',),
         supports_ip_adapter=False,
         supports_inpaint_engine=False,
         supports_vae_override=False,
