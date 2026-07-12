@@ -57,6 +57,12 @@ class TestSdxlMatchesFlags(unittest.TestCase):
     def test_latent_channels(self):
         self.assertEqual(self.sdxl.latent_channels, 4)
 
+    def test_native_resolution_range_matches_hardcoded_vary_upscale_literals(self):
+        # Golden-path regression: apply_vary/apply_upscale (modules/async_worker.py)
+        # used to hardcode 1024/2048 directly; the registry-derived value must
+        # stay numerically identical so SDXL's Vary/Upscale behavior is unchanged.
+        self.assertEqual(self.sdxl.native_resolution_range, (1024.0, 2048.0))
+
     def test_all_capability_flags_true_except_documented(self):
         self.assertTrue(self.sdxl.supports_refiner)
         self.assertTrue(self.sdxl.supports_adm_guidance)
@@ -134,6 +140,21 @@ class TestZImageEntry(unittest.TestCase):
         self.assertEqual(turbo.label, 'Turbo')
         self.assertTrue(1 <= turbo.steps <= 20)
 
+    def test_native_resolution_range_is_a_valid_floor_ceiling_pair(self):
+        floor, ceiling = self.z_image.native_resolution_range
+        self.assertGreater(floor, 0.0)
+        self.assertEqual(ceiling, floor * 2.0)
+
+    def test_native_resolution_range_matches_sdxl_today(self):
+        # Z-Image reuses SDXL's aspect_ratios list (no Z-Image-specific
+        # entries exist yet -- see modules/model_family.py's
+        # _build_z_image_capabilities), so the registry-derived resolution
+        # bucket is currently identical to SDXL's. This documents that
+        # parity is intentional (driven by the shared aspect_ratios data,
+        # not a hardcoded duplicate) rather than a bug.
+        sdxl = model_family.get_capabilities(model_family.ModelFamily.SDXL)
+        self.assertEqual(self.z_image.native_resolution_range, sdxl.native_resolution_range)
+
     def test_sampler_names_are_euler_family_only(self):
         self.assertTrue(all('euler' in name for name in self.z_image.sampler_names))
 
@@ -193,6 +214,7 @@ def _make_blank_capabilities(**overrides):
         cfg_range=(1.0, 1.0),
         default_steps=1,
         latent_channels=4,
+        native_resolution_range=(1.0, 1.0),
     )
     values.update(overrides)
     return model_family.FamilyCapabilities(**values)
@@ -229,6 +251,37 @@ class TestRegistryExtensibility(unittest.TestCase):
 
         sdxl = model_family.get_capabilities(model_family.ModelFamily.SDXL)
         self.assertIs(sdxl, self._original_entries[model_family.ModelFamily.SDXL])
+
+
+class TestNativeResolutionRangeDerivation(unittest.TestCase):
+    """`_native_resolution_range()` (FWDF-154) drives the Vary/Upscale
+    resolution floor/ceiling that used to be hardcoded 1024/2048 literals
+    in modules/async_worker.py.
+    """
+
+    def test_uniform_aspect_ratio_list_yields_floor_equal_to_every_entry(self):
+        # Every SDXL aspect ratio resolves to the same 1024.0 shape_ceil, so
+        # the derived floor must equal that shared value, not some other entry.
+        floor, ceiling = model_family._native_resolution_range(tuple(sdxl_aspect_ratios))
+        self.assertEqual(floor, 1024.0)
+        self.assertEqual(ceiling, 2048.0)
+
+    def test_ceiling_is_always_double_the_floor(self):
+        floor, ceiling = model_family._native_resolution_range(('512*512', '1024*1024'))
+        self.assertEqual(ceiling, floor * 2.0)
+
+    def test_floor_is_the_minimum_shape_ceil_across_entries(self):
+        # '512*512' -> shape_ceil 512.0 (smaller than '1024*1024' -> 1024.0);
+        # the floor must track the smallest bucket, not the largest or an
+        # average, so a family with one small aspect ratio isn't force-upsized
+        # past that entry's own native bucket.
+        floor, _ = model_family._native_resolution_range(('512*512', '1024*1024'))
+        self.assertEqual(floor, 512.0)
+
+    def test_matches_modules_util_get_shape_ceil_formula(self):
+        from modules.util import get_shape_ceil
+        floor, _ = model_family._native_resolution_range(('768*1344',))
+        self.assertEqual(floor, get_shape_ceil(768, 1344))
 
 
 class TestImmutability(unittest.TestCase):

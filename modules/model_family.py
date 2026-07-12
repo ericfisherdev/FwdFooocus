@@ -20,6 +20,7 @@ family entry must not list these two scheduler names until that hijack is
 extended to support it.
 """
 
+import math
 from dataclasses import dataclass
 from enum import Enum
 
@@ -57,6 +58,11 @@ class FamilyCapabilities:
     `modules.config.path_vae` contains" (today's global behavior). A
     populated tuple lets a family declare a curated/compatible VAE subset
     instead of the full global listing.
+
+    `native_resolution_range` is the (floor, ceiling) `modules.util.get_shape_ceil()`
+    bucket that `apply_vary`/`apply_upscale` (`modules/async_worker.py`) clamp
+    an input image into before VAE-encoding it -- see `_native_resolution_range()`
+    below for how it is derived from `aspect_ratios`.
     """
 
     supports_refiner: bool
@@ -79,6 +85,33 @@ class FamilyCapabilities:
     cfg_range: tuple[float, float]
     default_steps: int
     latent_channels: int
+    native_resolution_range: tuple[float, float]
+
+
+def _native_resolution_range(aspect_ratios: tuple[str, ...]) -> tuple[float, float]:
+    """Derive a family's (floor, ceiling) native resolution bucket from its
+    aspect-ratio list.
+
+    `modules.util.get_shape_ceil(h, w)` computes `ceil(sqrt(h*w) / 64) * 64`,
+    an image's total-pixel-count bucket rounded up to a multiple of 64. Every
+    entry in a well-formed `aspect_ratios` list resolves to the same bucket
+    (the family's native megapixel resolution, e.g. SDXL's ~1-megapixel
+    presets all resolve to 1024.0) -- the floor here is the minimum across
+    the list, and the ceiling is double that: the point past which
+    `apply_vary`/`apply_upscale` (`modules/async_worker.py`) stop upsizing an
+    input image further. The formula is duplicated rather than imported from
+    `modules.util` because that module pulls in cv2/PIL/numpy, dependencies
+    this lightweight capability-registry module should not need at import
+    time.
+
+    For SDXL's `aspect_ratios` this yields exactly `(1024.0, 2048.0)`,
+    matching the literals this replaces in `apply_vary`/`apply_upscale`.
+    """
+    def shape_ceil(h: int, w: int) -> float:
+        return math.ceil(((h * w) ** 0.5) / 64.0) * 64.0
+
+    floor = min(shape_ceil(*(int(v) for v in entry.split('*'))) for entry in aspect_ratios)
+    return floor, floor * 2.0
 
 
 def _build_sdxl_performance_modes() -> tuple[PerformanceMode, ...]:
@@ -133,6 +166,7 @@ def _build_sdxl_capabilities() -> FamilyCapabilities:
         sampler_names=tuple(sampler_list),
         scheduler_names=tuple(scheduler_list),
         aspect_ratios=tuple(sdxl_aspect_ratios),
+        native_resolution_range=_native_resolution_range(tuple(sdxl_aspect_ratios)),
         default_cfg=modules.config.default_cfg_scale,
         cfg_range=guidance_scale_range,
         default_steps=Steps.SPEED.value,
@@ -199,6 +233,15 @@ def _build_z_image_capabilities() -> FamilyCapabilities:
         # module's docstring) and are not valid for Z-Image yet.
         scheduler_names=('normal', 'simple'),
         aspect_ratios=tuple(sdxl_aspect_ratios),
+        # Derived from the same aspect_ratios list as SDXL (see the
+        # aspect_ratios= line above -- Z-Image has no aspect-ratio list of
+        # its own yet), so this numerically equals SDXL's (1024.0, 2048.0)
+        # today. That is not a bug: Z-Image's real native resolution is a
+        # community-documented ~1-megapixel bucket, same ballpark as SDXL's.
+        # Once Z-Image gets its own aspect_ratios entries this recomputes
+        # automatically with zero changes needed at the Vary/Upscale call
+        # sites in modules/async_worker.py.
+        native_resolution_range=_native_resolution_range(tuple(sdxl_aspect_ratios)),
         default_cfg=1.5,
         cfg_range=(1.0, 4.0),
         default_steps=9,

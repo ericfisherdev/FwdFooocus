@@ -5,6 +5,7 @@ from modules.heartbeat import is_browser_connected
 from modules.patch import PatchSettings, patch_settings, patch_all
 from modules.session_state import save_state as save_session_state
 import modules.config
+import modules.model_family
 import modules.model_family_detection
 
 patch_all()
@@ -483,13 +484,16 @@ def worker():
             denoising_strength = 0.85
         if async_task.overwrite_vary_strength > 0:
             denoising_strength = async_task.overwrite_vary_strength
+        resolution_floor, resolution_ceiling = modules.model_family.get_capabilities(
+            modules.model_family_detection.get_family(async_task.base_model_name)
+        ).native_resolution_range
         shape_ceil = get_image_shape_ceil(uov_input_image)
-        if shape_ceil < 1024:
+        if shape_ceil < resolution_floor:
             print(f'[Vary] Image is resized because it is too small.')
-            shape_ceil = 1024
-        elif shape_ceil > 2048:
+            shape_ceil = resolution_floor
+        elif shape_ceil > resolution_ceiling:
             print(f'[Vary] Image is resized because it is too big.')
-            shape_ceil = 2048
+            shape_ceil = resolution_ceiling
         uov_input_image = set_image_shape_ceil(uov_input_image, shape_ceil)
         initial_pixels = core.numpy_to_pytorch(uov_input_image)
         if advance_progress:
@@ -615,11 +619,14 @@ def worker():
             f = 2.0
         else:
             f = 1.0
+        resolution_floor, _ = modules.model_family.get_capabilities(
+            modules.model_family_detection.get_family(async_task.base_model_name)
+        ).native_resolution_range
         shape_ceil = get_shape_ceil(H * f, W * f)
-        if shape_ceil < 1024:
+        if shape_ceil < resolution_floor:
             print(f'[Upscale] Image is resized because it is too small.')
-            uov_input_image = set_image_shape_ceil(uov_input_image, 1024)
-            shape_ceil = 1024
+            uov_input_image = set_image_shape_ceil(uov_input_image, resolution_floor)
+            shape_ceil = resolution_floor
         else:
             uov_input_image = resample_image(uov_input_image, width=W * f, height=H * f)
         image_is_super_large = shape_ceil > 2800
