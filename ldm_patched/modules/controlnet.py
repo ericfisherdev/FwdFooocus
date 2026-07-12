@@ -588,10 +588,23 @@ def _detect_zimage_controlnet_config(sd):
 
 def load_controlnet_zimage(ckpt_path):
     """Load an Alibaba/Tongyi-MAI Z-Image-Turbo-Fun-Controlnet checkpoint
-    (e.g. `alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1`) into a
-    ldm_patched.ldm.lumina.controlnet.ZImage_Control and return it, ready to
-    be wrapped by ZImageControlNetPatch and applied via
-    ModelPatcher.set_model_double_block_patch/set_model_noise_refiner_patch.
+    (e.g. `alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1`, ~6.7GB bf16
+    for the real Union-2.1 checkpoint this ticket targets) into a
+    ldm_patched.ldm.lumina.controlnet.ZImage_Control, wrapped in a
+    ModelPatcher exactly like load_controlnet()'s SDXL path above
+    (`ControlNet.__init__`'s `control_model_wrapped`), and return that
+    ModelPatcher -- ready to be wrapped by ZImageControlNetPatch and applied
+    via ModelPatcher.set_model_double_block_patch/set_model_noise_refiner_patch.
+
+    The control model is constructed directly on `offload_device`. In the
+    usual (non-HIGH_VRAM) modes that device is the CPU, so the model is not
+    pinned in VRAM just from being loaded; ZImageControlNetPatch moves it
+    onto the compute device via model_management.load_models_gpu() only when
+    actually applied, letting it participate in the same VRAM budgeting/
+    eviction as every other ModelPatcher-wrapped model. Under
+    VRAMState.HIGH_VRAM, unet_offload_device() returns the compute device, so
+    the model is constructed in VRAM directly -- consistent with how HIGH_VRAM
+    keeps every model resident (FWDF-165).
 
     Only control-only extractions of this checkpoint family are supported
     (no base-model weights bundled in); a checkpoint that does not match
@@ -603,6 +616,7 @@ def load_controlnet_zimage(ckpt_path):
     config = _detect_zimage_controlnet_config(sd)
 
     load_device = ldm_patched.modules.model_management.get_torch_device()
+    offload_device = ldm_patched.modules.model_management.unet_offload_device()
     dtype = ldm_patched.modules.model_management.unet_dtype()
     manual_cast_dtype = ldm_patched.modules.model_management.unet_manual_cast(dtype, load_device)
     if manual_cast_dtype is not None:
@@ -612,7 +626,7 @@ def load_controlnet_zimage(ckpt_path):
         operations = ldm_patched.modules.ops.disable_weight_init
 
     control_model = ldm_patched.ldm.lumina.controlnet.ZImage_Control(
-        dtype=dtype, device=load_device, operations=operations, **config
+        dtype=dtype, device=offload_device, operations=operations, **config
     )
     missing, unexpected = control_model.load_state_dict(sd, strict=False)
     if len(missing) > 0 or len(unexpected) > 0:
@@ -625,7 +639,9 @@ def load_controlnet_zimage(ckpt_path):
             )
         )
     control_model.eval()
-    return control_model
+    return ldm_patched.modules.model_patcher.ModelPatcher(
+        control_model, load_device=load_device, offload_device=offload_device
+    )
 
 
 def _encode_zimage_control_hint(vae, image, additional_in_dim):
@@ -679,10 +695,20 @@ class ZImageControlNetPatch:
     _NOISE_REFINER_START = -3
     _DOUBLE_BLOCK_START = -1
 
-    def __init__(self, control_model, vae, image, strength):
-        self.control_model = control_model
+    def __init__(self, control_model_patcher, vae, image, strength) -> None:
+        # control_model_patcher is a ModelPatcher (load_controlnet_zimage()
+        # wraps the raw ZImage_Control the same way load_controlnet()'s SDXL
+        # path wraps its control model, above) so the ~6.7GB real Union-2.1
+        # checkpoint's residency is governed by model_management's normal
+        # load/evict machinery -- see __call__'s load_models_gpu() call --
+        # rather than being pinned on the compute device unconditionally.
+        # control_model stays a direct reference to the same underlying
+        # nn.Module for every actual weight/forward access below; wrapping
+        # never copies it, so this is not a second, independent instance.
+        self.control_model_patcher = control_model_patcher
+        self.control_model = control_model_patcher.model
         self.strength = strength
-        self._encoded_hint = _encode_zimage_control_hint(vae, image, control_model.additional_in_dim)
+        self._encoded_hint = _encode_zimage_control_hint(vae, image, self.control_model.additional_in_dim)
         self._state = None
 
     def __deepcopy__(self, memo):
@@ -744,6 +770,20 @@ class ZImageControlNetPatch:
         # the noise_refiner phase's own (unrelated) counter value. Mirrors
         # ComfyUI's `temp_data is None or temp_data[0] > cnet_index` guard.
         if self._state is None or self._state[0] > cnet_index:
+            # This branch runs exactly once per forward pass (the very first
+            # block of the noise_refiner phase) -- the only place __call__
+            # is about to touch control_model's weights for the first time
+            # this pass. Unlike the SDXL/UNet ControlNet path (whose
+            # ModelPatcher is discovered from positive/negative conditioning
+            # and loaded up front by ldm_patched/modules/sample.py's
+            # prepare_sampling()), this DiT ControlNet is patched directly
+            # into the unet's own ModelPatcher and so is never discovered
+            # that way -- load_models_gpu() here is what actually lets
+            # control_model_patcher participate in VRAM budgeting/eviction
+            # (FWDF-165): a no-op if already resident, or a real load if a
+            # prior generation's VRAM pressure evicted it back to its
+            # offload device since.
+            ldm_patched.modules.model_management.load_models_gpu([self.control_model_patcher])
             start = self._NOISE_REFINER_START if block_type == "noise_refiner" else self._DOUBLE_BLOCK_START
             hint = self._encoded_hint.to(device=img.device, dtype=img.dtype)
             embedded = self.control_model.embed_hint(hint, freqs_cis=pe, adaln_input=vec)
@@ -797,6 +837,14 @@ class ZImageControlNetPatch:
         context computed against the old one must not be reused once
         forward() resumes there; a dtype-only cast changes no addressing
         and leaves in-flight state valid.
+
+        This is called on the *main unet's* ModelPatcher device-move passes,
+        not control_model_patcher's own -- it deliberately never touches
+        control_model_patcher here. That residency is owned exclusively by
+        __call__'s load_models_gpu() call (FWDF-165); forcing it to follow
+        the main model's device on every pass would bypass model_management's
+        eviction bookkeeping and defeat the whole point of wrapping it in a
+        ModelPatcher in the first place.
         """
         if isinstance(device_or_dtype, (torch.device, str)):
             self._encoded_hint = self._encoded_hint.to(device_or_dtype)
