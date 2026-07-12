@@ -10,7 +10,7 @@ import modules.qwen3_text_encoder
 import ldm_patched.modules.model_management
 import ldm_patched.modules.latent_formats
 import modules.inpaint_worker
-import extras.vae_interpose as vae_interpose
+from extras import vae_interpose
 from extras.expansion import FooocusExpansion
 
 from ldm_patched.modules.model_base import SDXL, SDXLRefiner, ZImage as ZImageDiffusionModel
@@ -85,7 +85,9 @@ def refresh_base_model(name, vae_name=None):
         # Z-Image ships as a DiT-only checkpoint: the standalone VAE is a
         # companion download, not a user-selectable dropdown entry (see
         # modules.model_family's Z-Image capability entry, supports_vae_override=False).
-        vae_filename = modules.config.downloading_z_image_vae()
+        # Only the expected path is computed here (cheap) so the no-op reload
+        # short-circuit below stays fast; the verifying download runs after it.
+        vae_filename = modules.config.z_image_vae_path()
     elif vae_name is not None and vae_name != modules.flags.default_vae:
         vae_filename = get_file_from_folder_list(vae_name, modules.config.path_vae)
     else:
@@ -93,6 +95,9 @@ def refresh_base_model(name, vae_name=None):
 
     if model_base.filename == filename and model_base.vae_filename == vae_filename:
         return
+
+    if family == ModelFamily.Z_IMAGE:
+        modules.config.downloading_z_image_vae()
 
     model_base = core.load_model(filename, vae_filename)
     model_base.family = family

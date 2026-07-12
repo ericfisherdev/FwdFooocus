@@ -1037,6 +1037,12 @@ def downloading_z_image_text_encoder():
     return os.path.join(path_text_encoders, file_name)
 
 
+def z_image_vae_path():
+    """Expected on-disk path of the Z-Image companion VAE — cheap (no
+    download, no verification); use for reload short-circuit comparisons."""
+    return os.path.join(path_vae, 'ae.safetensors')
+
+
 def downloading_z_image_vae():
     file_name = 'ae.safetensors'
     load_file_from_url(
@@ -1046,4 +1052,4 @@ def downloading_z_image_vae():
         expected_sha256='afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38',
         expected_size=335304388,
     )
-    return os.path.join(path_vae, file_name)
+    return z_image_vae_path()
