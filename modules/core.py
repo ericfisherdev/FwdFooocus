@@ -165,7 +165,7 @@ def load_controlnet_zimage(ckpt_filename):
 
 @torch.no_grad()
 @torch.inference_mode()
-def apply_controlnet_zimage(unet, control_net_zimage_model, vae, image, strength):
+def apply_controlnet_zimage(unet, control_model_patcher, vae, image, strength):
     """Clone `unet` and patch in a Z-Image DiT ControlNet (FWDF-156) -- the
     same "clone, then set_model_*_patch" shape as
     modules/inpaint_worker.py:InpaintWorker.patch() and
@@ -175,8 +175,13 @@ def apply_controlnet_zimage(unet, control_net_zimage_model, vae, image, strength
     ldm_patched/modules/controlnet.py:ZImageControlNetPatch), not into
     positive/negative conditioning, so there is no equivalent of
     apply_controlnet()'s (positive, negative) return here.
+
+    `control_model_patcher` is the ModelPatcher load_controlnet_zimage()
+    returns (FWDF-165) -- ZImageControlNetPatch itself is what moves it onto
+    the compute device (via model_management.load_models_gpu(), lazily, only
+    when the patch actually runs), so no loading happens here.
     """
-    patch = ldm_patched.modules.controlnet.ZImageControlNetPatch(control_net_zimage_model, vae, image, strength)
+    patch = ldm_patched.modules.controlnet.ZImageControlNetPatch(control_model_patcher, vae, image, strength)
     patched_unet = unet.clone()
     patched_unet.set_model_double_block_patch(patch)
     patched_unet.set_model_noise_refiner_patch(patch)

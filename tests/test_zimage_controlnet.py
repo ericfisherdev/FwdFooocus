@@ -7,6 +7,7 @@
 import copy
 import inspect
 import unittest
+from unittest import mock
 
 import torch
 
@@ -16,6 +17,7 @@ from ldm_patched.modules.controlnet import (
     ZImageControlNetPatch,
     _detect_zimage_controlnet_config,
     _z_image_controlnet_convert,
+    load_controlnet_zimage,
 )
 from ldm_patched.modules.model_patcher import ModelPatcher
 
@@ -391,9 +393,26 @@ class TestZImageControlNetPatchIntegration(unittest.TestCase):
         self.control = ZImage_Control(**make_tiny_control_config())
         init_small_weights(self.control)
         self.control.eval()
+        self.control_patcher = ModelPatcher(
+            self.control, load_device=torch.device("cpu"), offload_device=torch.device("cpu"),
+        )
 
         self.vae = _StubVAE(control_in_dim=4, latent_hw=4)
         self.image = torch.rand(1, 8, 8, 3)
+
+        # These tests exercise real forward passes through __call__, which
+        # (FWDF-165) now calls model_management.load_models_gpu() once per
+        # pass -- irrelevant to what this class actually tests (patch
+        # behavior, not VRAM budgeting) and, with a real call, would leak
+        # this test's ModelPatcher into model_management's module-level
+        # current_loaded_models list for the rest of the pytest session.
+        # See TestZImageControlNetPatchLazyLoad below for the dedicated
+        # load_models_gpu integration coverage.
+        load_models_gpu_patcher = mock.patch(
+            "ldm_patched.modules.model_management.load_models_gpu", lambda *a, **k: None,
+        )
+        load_models_gpu_patcher.start()
+        self.addCleanup(load_models_gpu_patcher.stop)
 
     def _inputs(self):
         x = torch.randn(1, self.dit_config["in_channels"], 8, 8)
@@ -402,7 +421,7 @@ class TestZImageControlNetPatchIntegration(unittest.TestCase):
         return x, timesteps, context
 
     def _patched_transformer_options(self, strength=1.0):
-        patch = ZImageControlNetPatch(self.control, self.vae, self.image, strength=strength)
+        patch = ZImageControlNetPatch(self.control_patcher, self.vae, self.image, strength=strength)
         return patch, {"patches": {"double_block": [patch], "noise_refiner": [patch]}}
 
     def test_patched_output_differs_from_unpatched_and_has_correct_shape(self):
@@ -457,7 +476,7 @@ class TestZImageControlNetPatchIntegration(unittest.TestCase):
         # (core.apply_controlnet_zimage's patch, through NextDiT.forward()'s
         # own hooks) with such a VAE and asserts it completes cleanly.
         odd_vae = _StubVAE(control_in_dim=4, latent_hw=5)
-        patch = ZImageControlNetPatch(self.control, odd_vae, self.image, strength=1.0)
+        patch = ZImageControlNetPatch(self.control_patcher, odd_vae, self.image, strength=1.0)
         transformer_options = {"patches": {"double_block": [patch], "noise_refiner": [patch]}}
 
         x, t, ctx = self._inputs()
@@ -479,9 +498,12 @@ class TestZImageControlNetPatchDeepcopy(unittest.TestCase):
 
     def setUp(self):
         self.control = ZImage_Control(**make_tiny_control_config())
+        self.control_patcher = ModelPatcher(
+            self.control, load_device=torch.device("cpu"), offload_device=torch.device("cpu"),
+        )
         self.vae = _StubVAE(control_in_dim=4, latent_hw=4)
         self.image = torch.rand(1, 8, 8, 3)
-        self.patch = ZImageControlNetPatch(self.control, self.vae, self.image, strength=1.0)
+        self.patch = ZImageControlNetPatch(self.control_patcher, self.vae, self.image, strength=1.0)
 
     def test_deepcopy_returns_the_same_instance(self):
         copied = copy.deepcopy(self.patch)
@@ -511,6 +533,12 @@ class TestZImageControlNetPatchDeepcopy(unittest.TestCase):
         self.assertIs(cloned_double_block_patch, self.patch)
         self.assertIs(cloned_noise_refiner_patch, self.patch)
         self.assertIs(cloned_double_block_patch.control_model, self.control)
+        # FWDF-165: control_model_patcher (the ModelPatcher wrapping
+        # control_model for VRAM-budgeting purposes) must be shared too, not
+        # re-wrapped/duplicated -- a duplicate would track its own,
+        # independent load/evict state in model_management's
+        # current_loaded_models, defeating the point of sharing one patcher.
+        self.assertIs(cloned_double_block_patch.control_model_patcher, self.control_patcher)
         # The two hook lists themselves must still be independent containers
         # (clone()'s deepcopy of model_options is otherwise unaffected --
         # only the patch object inside is shared, not everything around it).
@@ -531,9 +559,12 @@ class TestZImageControlNetPatchTo(unittest.TestCase):
 
     def setUp(self):
         self.control = ZImage_Control(**make_tiny_control_config())
+        self.control_patcher = ModelPatcher(
+            self.control, load_device=torch.device("cpu"), offload_device=torch.device("cpu"),
+        )
         self.vae = _StubVAE(control_in_dim=4, latent_hw=4)
         self.image = torch.rand(1, 8, 8, 3)
-        self.patch = ZImageControlNetPatch(self.control, self.vae, self.image, strength=1.0)
+        self.patch = ZImageControlNetPatch(self.control_patcher, self.vae, self.image, strength=1.0)
 
     def test_dtype_argument_casts_encoded_hint_and_is_not_a_noop(self):
         self.assertEqual(self.patch._encoded_hint.dtype, torch.float32)
@@ -565,6 +596,19 @@ class TestZImageControlNetPatchTo(unittest.TestCase):
         self.patch.to(torch.device("cpu"))
 
         self.assertIsNone(self.patch._state)
+
+    def test_device_argument_does_not_touch_control_model_patcher(self):
+        # FWDF-165: control_model_patcher's residency is owned exclusively
+        # by __call__'s load_models_gpu() call, not by this .to() pass (see
+        # its docstring) -- a real re-wrap/replace here would defeat VRAM
+        # budgeting by fighting model_management's own bookkeeping.
+        original_patcher = self.patch.control_model_patcher
+
+        self.patch.to(torch.device("cpu"))
+        self.patch.to(torch.float64)
+
+        self.assertIs(self.patch.control_model_patcher, original_patcher)
+        self.assertIs(self.patch.control_model, self.control)
 
 
 class TestZImageControlNetConvert(unittest.TestCase):
@@ -627,6 +671,157 @@ class TestDetectZImageControlnetConfig(unittest.TestCase):
         sd = {"control_layers.4.adaLN_modulation.0.weight": None}
         config = _detect_zimage_controlnet_config(sd)
         self.assertEqual(config, {})
+
+
+class TestLoadControlnetZimageLazyDevice(unittest.TestCase):
+    """FWDF-165: load_controlnet_zimage() must construct ZImage_Control on
+    the offload device -- mirroring load_controlnet()'s SDXL ControlNet path
+    (ldm_patched/modules/controlnet.py, `ControlNet.__init__`'s
+    `control_model_wrapped`) -- and return it wrapped in a ModelPatcher, so
+    the real ~6.7GB Union-2.1 checkpoint is never pinned on the compute
+    device just from being loaded.
+
+    ZImage_Control's real-scale defaults (dim=3840/30 heads) are too large to
+    instantiate in a fast unit test (see TestDetectZImageControlnetConfig's
+    docstring), so it is stubbed here with a tiny factory that still receives
+    and forwards load_controlnet_zimage()'s real dtype/device/operations
+    arguments -- only the *device wiring* under test is faked away from
+    production scale, not the logic itself. get_torch_device()/
+    unet_offload_device() are mocked to two distinct, always-available
+    devices (no real GPU required) so the two can be told apart without
+    depending on the test host's hardware.
+    """
+
+    def setUp(self):
+        self.tiny_config = make_tiny_control_config(n_control_layers=3, additional_in_dim=17, refiner_control=True)
+        reference = ZImage_Control(**self.tiny_config)
+        self.sd = reference.state_dict()
+
+        # "meta" stands in for the compute device and "cpu" for the offload
+        # device -- both real, always-available torch devices, distinct from
+        # each other regardless of whether this test host has a GPU.
+        self.compute_device = torch.device("meta")
+        self.offload_device = torch.device("cpu")
+
+    def _load(self):
+        import ldm_patched.ldm.lumina.controlnet as control_module
+        import ldm_patched.modules.utils as utils_module
+        from ldm_patched.modules import model_management
+
+        real_zimage_control = control_module.ZImage_Control
+        tiny_config = self.tiny_config
+
+        def fake_zimage_control(dtype=None, device=None, operations=None, **_detected_config):
+            # _detected_config is _detect_zimage_controlnet_config(sd)'s output.
+            # self.sd was built from tiny_config, so detection MUST reproduce
+            # every tiny_config value -- assert that so this test fails if
+            # detection ever returns the wrong kwargs (the whole point of the
+            # key-layout regression guard). dtype/device/operations are the
+            # real arguments load_controlnet_zimage() computes and passes.
+            # _detect_zimage_controlnet_config only derives the state-dict-
+            # detectable keys (n_control_layers/additional_in_dim/
+            # refiner_control); assert each of those matches what tiny_config
+            # built the state dict with, so wrong detection fails the test.
+            assert _detected_config, "detection returned no config keys"
+            for key, detected in _detected_config.items():
+                assert detected == tiny_config[key], (
+                    f"detection produced {key}={detected!r}, expected {tiny_config[key]!r}"
+                )
+            return real_zimage_control(dtype=dtype, device=device, operations=operations, **tiny_config)
+
+        with mock.patch.object(control_module, "ZImage_Control", fake_zimage_control), \
+                mock.patch.object(utils_module, "load_torch_file", return_value=dict(self.sd)), \
+                mock.patch.object(model_management, "get_torch_device", return_value=self.compute_device), \
+                mock.patch.object(model_management, "unet_offload_device", return_value=self.offload_device), \
+                mock.patch.object(model_management, "unet_dtype", return_value=torch.float32):
+            return load_controlnet_zimage("unused.safetensors")
+
+    def test_returns_a_model_patcher_with_expected_load_and_offload_devices(self):
+        result = self._load()
+
+        self.assertIsInstance(result, ModelPatcher)
+        self.assertEqual(result.load_device, self.compute_device)
+        self.assertEqual(result.offload_device, self.offload_device)
+
+    def test_control_model_is_not_resident_on_the_compute_device_after_load(self):
+        result = self._load()
+
+        for name, param in result.model.named_parameters():
+            self.assertEqual(
+                param.device, self.offload_device,
+                "parameter '{}' is resident on {} immediately after load_controlnet_zimage(); "
+                "expected it to stay on the offload device ({}) until applied".format(
+                    name, param.device, self.offload_device,
+                ),
+            )
+
+    def test_load_state_dict_has_no_missing_or_unexpected_keys(self):
+        # Regression guard for the RuntimeError load_controlnet_zimage()
+        # raises on a key-layout mismatch: this tiny synthetic checkpoint
+        # must still load cleanly through the new ModelPatcher-wrapping path.
+        result = self._load()
+        self.assertEqual(result.model.n_control_layers, self.tiny_config["n_control_layers"])
+
+
+class TestZImageControlNetPatchLazyLoad(unittest.TestCase):
+    """FWDF-165: ZImageControlNetPatch.__call__ must ensure control_model_patcher
+    is resident on the compute device (via model_management.load_models_gpu())
+    once per forward pass -- at the "fresh embed" branch, the only place
+    __call__ is about to touch the control model's weights for the first
+    time in a given pass -- not once per per-layer __call__ invocation (a
+    real forward pass calls __call__ once per noise_refiner/main layer).
+    """
+
+    def setUp(self):
+        torch.manual_seed(0)
+        self.dit_config = make_tiny_dit_config()
+        self.model = NextDiT(**self.dit_config)
+        init_small_weights(self.model)
+        self.model.eval()
+
+        self.control = ZImage_Control(**make_tiny_control_config())
+        init_small_weights(self.control)
+        self.control.eval()
+        self.control_patcher = ModelPatcher(
+            self.control, load_device=torch.device("cpu"), offload_device=torch.device("cpu"),
+        )
+
+        self.vae = _StubVAE(control_in_dim=4, latent_hw=4)
+        self.image = torch.rand(1, 8, 8, 3)
+
+    def _inputs(self):
+        x = torch.randn(1, self.dit_config["in_channels"], 8, 8)
+        timesteps = torch.rand(1)
+        context = torch.randn(1, 3, self.dit_config["cap_feat_dim"])
+        return x, timesteps, context
+
+    def test_call_loads_the_control_patcher_onto_the_compute_device(self):
+        patch = ZImageControlNetPatch(self.control_patcher, self.vae, self.image, strength=1.0)
+        transformer_options = {"patches": {"double_block": [patch], "noise_refiner": [patch]}}
+        x, t, ctx = self._inputs()
+
+        with mock.patch("ldm_patched.modules.model_management.load_models_gpu") as spy:
+            with torch.no_grad():
+                self.model(x, t, ctx, transformer_options=transformer_options)
+
+        spy.assert_called_once_with([self.control_patcher])
+
+    def test_call_loads_once_per_forward_pass_not_once_per_block(self):
+        # A real sampling loop calls NextDiT.forward() once per denoising
+        # step without recreating the ControlNet patch (see
+        # TestZImageControlNetPatchIntegration.test_repeated_forward_passes_
+        # do_not_error_or_leak_state) -- load_models_gpu() must track that
+        # cadence, not the (much higher) per-block __call__ invocation count.
+        patch = ZImageControlNetPatch(self.control_patcher, self.vae, self.image, strength=1.0)
+        transformer_options = {"patches": {"double_block": [patch], "noise_refiner": [patch]}}
+
+        with mock.patch("ldm_patched.modules.model_management.load_models_gpu") as spy:
+            with torch.no_grad():
+                for _ in range(3):
+                    x, t, ctx = self._inputs()
+                    self.model(x, t, ctx, transformer_options=transformer_options)
+
+        self.assertEqual(spy.call_count, 3)
 
 
 if __name__ == "__main__":
