@@ -267,29 +267,29 @@ class TestCorruptCheckpointError(_CheckpointTestCase):
 
 
 class TestSessionStateKey(_CheckpointTestCase):
-    """session_state_key() shares the UNKNOWN -> config-string fallback rule."""
+    """session_state_id() shares the UNKNOWN -> config-string fallback rule."""
 
     def test_returns_family_value_when_detected(self):
         _write_checkpoint(self._checkpoint_path('sdxl.safetensors'), _SDXL_KEYS)
-        self.assertEqual(model_family_detection.session_state_key('sdxl.safetensors'), 'sdxl')
+        self.assertEqual(model_family_detection.session_state_id('sdxl.safetensors'), 'sdxl')
 
     def test_falls_back_to_config_default_base_model_when_unknown(self):
         _write_checkpoint(self._checkpoint_path('mystery.safetensors'), _UNRELATED_KEYS)
         model_family_detection.modules.config.default_base_model = 'pony'
 
-        self.assertEqual(model_family_detection.session_state_key('mystery.safetensors'), 'pony')
+        self.assertEqual(model_family_detection.session_state_id('mystery.safetensors'), 'pony')
 
     def test_returns_unknown_literal_when_unknown_and_no_config_default(self):
         _write_checkpoint(self._checkpoint_path('mystery.safetensors'), _UNRELATED_KEYS)
         model_family_detection.modules.config.default_base_model = None
 
-        self.assertEqual(model_family_detection.session_state_key('mystery.safetensors'), 'unknown')
+        self.assertEqual(model_family_detection.session_state_id('mystery.safetensors'), 'unknown')
 
     def test_detected_family_takes_priority_over_config_default(self):
         _write_checkpoint(self._checkpoint_path('sdxl.safetensors'), _SDXL_KEYS)
         model_family_detection.modules.config.default_base_model = 'pony'
 
-        self.assertEqual(model_family_detection.session_state_key('sdxl.safetensors'), 'sdxl')
+        self.assertEqual(model_family_detection.session_state_id('sdxl.safetensors'), 'sdxl')
 
 
 class TestCacheBoundedness(unittest.TestCase):

@@ -1522,7 +1522,7 @@ def worker():
                 # checkpoints whose family cannot be detected).
                 try:
                     save_session_state(
-                        modules.model_family_detection.session_state_key(task.base_model_name),
+                        modules.model_family_detection.session_state_id(task.base_model_name),
                         _build_session_state(task)
                     )
                 except Exception as e:

@@ -120,7 +120,7 @@ def get_family(checkpoint_filename: str) -> ModelFamily:
     return family
 
 
-def session_state_key(checkpoint_filename: str) -> str:
+def session_state_id(checkpoint_filename: str) -> str:
     """Resolve the session-state persistence key for a checkpoint.
 
     Uses the detected `ModelFamily` when recognized. Falls back to the

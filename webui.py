@@ -165,17 +165,17 @@ if isinstance(args_manager.args.preset, str):
 # hand-authored modules.config.default_base_model string for checkpoints
 # whose family cannot be detected).
 _saved_session_state = None
-_session_state_key = modules.model_family_detection.session_state_key(modules.config.default_base_model_name)
+_session_state_id = modules.model_family_detection.session_state_id(modules.config.default_base_model_name)
 from modules.session_state import load_state
-_saved_session_state = load_state(_session_state_key)
+_saved_session_state = load_state(_session_state_id)
 if not _saved_session_state and modules.config.default_base_model is not None \
-        and modules.config.default_base_model != _session_state_key:
+        and modules.config.default_base_model != _session_state_id:
     # Rows written before family-keyed persistence live under the
     # hand-authored config label; read them once so existing users don't
     # lose their saved state (the save site writes the new key forward).
     _saved_session_state = load_state(modules.config.default_base_model)
 if _saved_session_state:
-    print(f'[Session] Restored state for base model: {_session_state_key}')
+    print(f'[Session] Restored state for base model: {_session_state_id}')
 
 
 def _session_default(key, fallback):
