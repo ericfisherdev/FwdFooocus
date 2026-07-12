@@ -194,13 +194,18 @@ def get_capabilities_endpoint(
     from modules.model_family import get_capabilities
     from modules.model_family_detection import get_family
 
-    resolved_checkpoint = checkpoint or config.default_base_model_name
+    requested = checkpoint or config.default_base_model_name
     # The filename flows into filesystem path resolution (get_family reads
-    # the safetensors header) — only known, configured checkpoints may pass,
-    # so a crafted query string cannot probe arbitrary paths.
-    if resolved_checkpoint != config.default_base_model_name \
-            and resolved_checkpoint not in config.model_filenames:
-        raise HTTPException(status_code=404, detail="unknown checkpoint")
+    # the safetensors header) — resolve the request to a value taken FROM
+    # the trusted configuration (never the raw request string), so a crafted
+    # query cannot probe arbitrary paths.
+    if requested == config.default_base_model_name:
+        resolved_checkpoint = config.default_base_model_name
+    else:
+        resolved_checkpoint = next(
+            (name for name in config.model_filenames if name == requested), None)
+        if resolved_checkpoint is None:
+            raise HTTPException(status_code=404, detail="unknown checkpoint")
     family = get_family(resolved_checkpoint)
     capabilities = get_capabilities(family)
     return {"family": family.value, **dataclasses.asdict(capabilities)}
@@ -290,12 +295,13 @@ def _build_generate_args(body: dict) -> list:
     from modules.model_family import get_capabilities
     from modules.model_family_detection import get_family
 
-    requested_base_model = body.get("base_model_name", config.default_base_model_name)
-    # Same path-injection boundary as /api/capabilities: unknown names fall
-    # back to the configured default instead of reaching path resolution.
-    if requested_base_model != config.default_base_model_name \
-            and requested_base_model not in config.model_filenames:
-        requested_base_model = config.default_base_model_name
+    requested_name = body.get("base_model_name", config.default_base_model_name)
+    # Same path-injection boundary as /api/capabilities: the value used for
+    # path resolution is taken FROM trusted configuration; unknown names
+    # fall back to the configured default.
+    requested_base_model = next(
+        (name for name in config.model_filenames if name == requested_name),
+        config.default_base_model_name)
     family = get_family(requested_base_model)
     caps = get_capabilities(family)
 
