@@ -93,6 +93,14 @@ class StableDiffusionModel:
         # Non-CLIP encoders (e.g. Qwen3-4B's TransformerTextEncoder, FWDF-125)
         # have no clone()/add_patches(): no LoRA files target them in this
         # codebase yet, so they are wired through as-is instead of cloned.
+        # Enforce the pairing rather than assume it: an encoder that can
+        # accept patches but cannot clone would accumulate LoRA patches on
+        # the shared instance across refreshes (aliasing bug).
+        if self.clip is not None and hasattr(self.clip, 'add_patches') and not hasattr(self.clip, 'clone'):
+            raise TypeError(
+                f'{type(self.clip).__name__} implements add_patches() without clone(); '
+                f'refresh_loras() requires both (clonable) or neither (wired through as-is).'
+            )
         self.clip_with_lora = (
             self.clip.clone() if self.clip is not None and hasattr(self.clip, 'clone') else self.clip
         )
