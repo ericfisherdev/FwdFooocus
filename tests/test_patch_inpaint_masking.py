@@ -31,31 +31,33 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 _original_argv = sys.argv
 sys.argv = [sys.argv[0]]
-
-import transformers  # noqa: E402,F401  (forces the real torchvision-unavailable check first)
-
-_torchvision_available = True
 try:
-    import torchvision  # noqa: F401
-except ImportError:
-    _torchvision_available = False
 
-if not _torchvision_available:
-    _functional_stub = types.ModuleType('torchvision.transforms.functional')
-    _functional_stub.InterpolationMode = object
-    _functional_stub.rotate = lambda *a, **k: None
-    _transforms_stub = types.ModuleType('torchvision.transforms')
-    _transforms_stub.functional = _functional_stub
-    _torchvision_stub = types.ModuleType('torchvision')
-    _torchvision_stub.transforms = _transforms_stub
-    sys.modules['torchvision'] = _torchvision_stub
-    sys.modules['torchvision.transforms'] = _transforms_stub
-    sys.modules['torchvision.transforms.functional'] = _functional_stub
+    import transformers  # noqa: E402,F401  (forces the real torchvision-unavailable check first)
 
-import modules.patch as patch  # noqa: E402
-import modules.inpaint_worker as inpaint_worker  # noqa: E402
+    _torchvision_available = True
+    try:
+        import torchvision  # noqa: F401
+    except ImportError:
+        _torchvision_available = False
 
-sys.argv = _original_argv
+    if not _torchvision_available:
+        _functional_stub = types.ModuleType('torchvision.transforms.functional')
+        _functional_stub.InterpolationMode = object
+        _functional_stub.rotate = lambda *_args, **_kwargs: None
+        _transforms_stub = types.ModuleType('torchvision.transforms')
+        _transforms_stub.functional = _functional_stub
+        _torchvision_stub = types.ModuleType('torchvision')
+        _torchvision_stub.transforms = _transforms_stub
+        sys.modules['torchvision'] = _torchvision_stub
+        sys.modules['torchvision.transforms'] = _transforms_stub
+        sys.modules['torchvision.transforms.functional'] = _functional_stub
+
+    import modules.patch as patch  # noqa: E402
+    import modules.inpaint_worker as inpaint_worker  # noqa: E402
+
+finally:
+    sys.argv = _original_argv
 
 
 class _FakeRealModel:

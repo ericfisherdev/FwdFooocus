@@ -23,40 +23,42 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 _original_argv = sys.argv
 sys.argv = [sys.argv[0]]
-
-# Stub only when the real module (or an earlier stub) isn't already loaded:
-# unconditionally overwriting sys.modules would silently hand later test
-# files a None-returning generate_mask_from_image depending on run order.
-if 'extras.inpaint_mask' not in sys.modules:
-    _inpaint_mask_stub = types.ModuleType('extras.inpaint_mask')
-    _inpaint_mask_stub.generate_mask_from_image = lambda *_args, **_kwargs: None
-    _inpaint_mask_stub.SAMOptions = object
-    sys.modules['extras.inpaint_mask'] = _inpaint_mask_stub
-
-import transformers  # noqa: E402,F401  (forces the real torchvision-unavailable check first)
-
-_torchvision_available = True
 try:
-    import torchvision  # noqa: F401
-except ImportError:
-    _torchvision_available = False
 
-if not _torchvision_available:
-    _functional_stub = types.ModuleType('torchvision.transforms.functional')
-    _functional_stub.InterpolationMode = object
-    _functional_stub.rotate = lambda *a, **k: None
-    _transforms_stub = types.ModuleType('torchvision.transforms')
-    _transforms_stub.functional = _functional_stub
-    _torchvision_stub = types.ModuleType('torchvision')
-    _torchvision_stub.transforms = _transforms_stub
-    sys.modules['torchvision'] = _torchvision_stub
-    sys.modules['torchvision.transforms'] = _transforms_stub
-    sys.modules['torchvision.transforms.functional'] = _functional_stub
+    # Stub only when the real module (or an earlier stub) isn't already loaded:
+    # unconditionally overwriting sys.modules would silently hand later test
+    # files a None-returning generate_mask_from_image depending on run order.
+    if 'extras.inpaint_mask' not in sys.modules:
+        _inpaint_mask_stub = types.ModuleType('extras.inpaint_mask')
+        _inpaint_mask_stub.generate_mask_from_image = lambda *_args, **_kwargs: None
+        _inpaint_mask_stub.SAMOptions = object
+        sys.modules['extras.inpaint_mask'] = _inpaint_mask_stub
 
-import modules.async_worker as async_worker  # noqa: E402
-from modules.model_family import ModelFamily  # noqa: E402
+    import transformers  # noqa: E402,F401  (forces the real torchvision-unavailable check first)
 
-sys.argv = _original_argv
+    _torchvision_available = True
+    try:
+        import torchvision  # noqa: F401
+    except ImportError:
+        _torchvision_available = False
+
+    if not _torchvision_available:
+        _functional_stub = types.ModuleType('torchvision.transforms.functional')
+        _functional_stub.InterpolationMode = object
+        _functional_stub.rotate = lambda *_args, **_kwargs: None
+        _transforms_stub = types.ModuleType('torchvision.transforms')
+        _transforms_stub.functional = _functional_stub
+        _torchvision_stub = types.ModuleType('torchvision')
+        _torchvision_stub.transforms = _transforms_stub
+        sys.modules['torchvision'] = _torchvision_stub
+        sys.modules['torchvision.transforms'] = _transforms_stub
+        sys.modules['torchvision.transforms.functional'] = _functional_stub
+
+    from modules import async_worker  # noqa: E402
+    from modules.model_family import ModelFamily  # noqa: E402
+
+finally:
+    sys.argv = _original_argv
 
 
 @pytest.fixture
@@ -67,7 +69,7 @@ def fake_family(monkeypatch):
     holder = {'family': ModelFamily.SDXL}
     monkeypatch.setattr(
         async_worker.modules.model_family_detection, 'get_family',
-        lambda name: holder['family']
+        lambda _name: holder['family']
     )
     return holder
 
