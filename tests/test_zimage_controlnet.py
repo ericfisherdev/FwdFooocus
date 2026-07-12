@@ -4,6 +4,8 @@
 - ldm_patched/modules/controlnet.py's ZImageControlNetPatch/load_controlnet_zimage
 """
 
+import copy
+import inspect
 import unittest
 
 import torch
@@ -15,6 +17,7 @@ from ldm_patched.modules.controlnet import (
     _detect_zimage_controlnet_config,
     _z_image_controlnet_convert,
 )
+from ldm_patched.modules.model_patcher import ModelPatcher
 
 
 def make_tiny_dit_config():
@@ -202,6 +205,35 @@ class TestZImageControlModule(unittest.TestCase):
         self.assertEqual(hint.shape, embedded.shape)
         self.assertEqual(next_ctx.shape, embedded.shape)
 
+    def test_embed_hint_pads_non_patch_aligned_shape_instead_of_crashing(self):
+        # A control latent whose H/W are not already multiples of patch_size
+        # (e.g. from an odd overwrite_width/overwrite_height override
+        # producing a non-8-aligned VAE encode) used to crash embed_hint()'s
+        # .view() outright. embed_hint() now pads first via
+        # ldm_patched.ldm.lumina.model.pad_to_patch_size(), mirroring
+        # NextDiT.forward()'s own call, so this must not raise and must
+        # produce the ceil-to-even token grid instead.
+        control = ZImage_Control(**make_tiny_control_config())
+        init_small_weights(control)
+        control.eval()
+        control_context = torch.randn(1, 4, 5, 5)  # odd H/W, patch_size=2
+        with torch.no_grad():
+            embedded = control.embed_hint(control_context)
+        # pad_to_patch_size pads 5 -> 6 on each axis (circular, patch_size=2),
+        # then patch_size=2 over a 6x6 grid -> 3*3 = 9 tokens.
+        self.assertEqual(embedded.shape, (1, 9, 64))
+
+    def test_embed_hint_is_a_noop_pad_for_already_aligned_shapes(self):
+        # Regression guard: the padding call must not change behavior for
+        # the common (already-aligned) case existing checkpoints hit today.
+        control = ZImage_Control(**make_tiny_control_config())
+        init_small_weights(control)
+        control.eval()
+        control_context = torch.randn(1, 4, 4, 4)
+        with torch.no_grad():
+            embedded = control.embed_hint(control_context)
+        self.assertEqual(embedded.shape, (1, 4, 64))
+
 
 class TestNextDiTControlNetHooks(unittest.TestCase):
     """Verifies NextDiT.forward()'s double_block/noise_refiner patch hooks in
@@ -230,6 +262,28 @@ class TestNextDiTControlNetHooks(unittest.TestCase):
             out_empty_patches = self.model(x, t, ctx, transformer_options={"patches": {}})
         torch.testing.assert_close(out_bare, out_empty_options)
         torch.testing.assert_close(out_bare, out_empty_patches)
+
+    def test_transformer_options_default_is_none_not_a_shared_mutable_dict(self):
+        # Structural regression for Ruff B006: forward() writes a
+        # "total_blocks" key into transformer_options a few lines in, so a
+        # `transformer_options={}` default argument would bind ONE dict
+        # object (evaluated once at function-definition time) to every call
+        # that omits this argument, shared and mutated across all of them.
+        # The default must be the immutable sentinel None, normalized to a
+        # fresh {} inside the function body instead.
+        sig = inspect.signature(NextDiT.forward)
+        self.assertIsNone(sig.parameters["transformer_options"].default)
+
+    def test_repeated_bare_calls_produce_identical_deterministic_output(self):
+        # Behavioral sanity check for the omitted-argument path: each bare
+        # call must build its own {} internally and still produce the same
+        # (patch-free) output as any other, rather than erroring or drifting
+        # from some leftover state in a shared default dict.
+        x, t, ctx = self._inputs()
+        with torch.no_grad():
+            out_a = self.model(x, t, ctx)
+            out_b = self.model(x, t, ctx)
+        torch.testing.assert_close(out_a, out_b)
 
     def test_double_block_patch_called_once_per_main_layer_in_order(self):
         x, t, ctx = self._inputs()
@@ -393,6 +447,77 @@ class TestZImageControlNetPatchIntegration(unittest.TestCase):
         for out in outputs:
             self.assertFalse(torch.isnan(out).any().item())
         self.assertIsNone(patch._state)
+
+    def test_non_patch_aligned_hint_latent_does_not_crash_the_call_path(self):
+        # End-to-end regression for the embed_hint() padding fix: a VAE
+        # whose encode() returns a latent not already aligned to patch_size
+        # (e.g. from an odd overwrite_width/overwrite_height override) used
+        # to crash inside ZImageControlNetPatch.__call__ -> embed_hint()'s
+        # .view(). Drives the same call path production code uses
+        # (core.apply_controlnet_zimage's patch, through NextDiT.forward()'s
+        # own hooks) with such a VAE and asserts it completes cleanly.
+        odd_vae = _StubVAE(control_in_dim=4, latent_hw=5)
+        patch = ZImageControlNetPatch(self.control, odd_vae, self.image, strength=1.0)
+        transformer_options = {"patches": {"double_block": [patch], "noise_refiner": [patch]}}
+
+        x, t, ctx = self._inputs()
+        with torch.no_grad():
+            out = self.model(x, t, ctx, transformer_options=transformer_options)
+
+        self.assertEqual(out.shape, x.shape)
+        self.assertFalse(torch.isnan(out).any().item())
+        self.assertFalse(torch.isinf(out).any().item())
+
+
+class TestZImageControlNetPatchDeepcopy(unittest.TestCase):
+    """ModelPatcher.clone() (ldm_patched/modules/model_patcher.py) deep-copies
+    model_options wholesale, which would otherwise deep-copy a registered
+    ZImageControlNetPatch too -- duplicating its control_model (a full
+    nn.Module) and _encoded_hint tensor on every clone. __deepcopy__ makes
+    this patch return itself instead.
+    """
+
+    def setUp(self):
+        self.control = ZImage_Control(**make_tiny_control_config())
+        self.vae = _StubVAE(control_in_dim=4, latent_hw=4)
+        self.image = torch.rand(1, 8, 8, 3)
+        self.patch = ZImageControlNetPatch(self.control, self.vae, self.image, strength=1.0)
+
+    def test_deepcopy_returns_the_same_instance(self):
+        copied = copy.deepcopy(self.patch)
+        self.assertIs(copied, self.patch)
+
+    def test_deepcopy_inside_a_container_also_returns_the_same_instance(self):
+        # ModelPatcher.clone() deep-copies model_options as a whole nested
+        # structure (dicts/lists containing this patch), not the patch
+        # object directly -- exercise that shape.
+        container = {"patches": {"double_block": [self.patch]}}
+        copied_container = copy.deepcopy(container)
+        self.assertIs(copied_container["patches"]["double_block"][0], self.patch)
+        self.assertIsNot(copied_container, container)
+        self.assertIsNot(copied_container["patches"]["double_block"], container["patches"]["double_block"])
+
+    def test_cloning_a_patched_model_patcher_shares_the_control_module(self):
+        model = torch.nn.Linear(2, 2)
+        device = torch.device("cpu")
+        original = ModelPatcher(model, load_device=device, offload_device=device)
+        original.set_model_double_block_patch(self.patch)
+        original.set_model_noise_refiner_patch(self.patch)
+
+        cloned = original.clone()
+
+        cloned_double_block_patch = cloned.model_options["transformer_options"]["patches"]["double_block"][0]
+        cloned_noise_refiner_patch = cloned.model_options["transformer_options"]["patches"]["noise_refiner"][0]
+        self.assertIs(cloned_double_block_patch, self.patch)
+        self.assertIs(cloned_noise_refiner_patch, self.patch)
+        self.assertIs(cloned_double_block_patch.control_model, self.control)
+        # The two hook lists themselves must still be independent containers
+        # (clone()'s deepcopy of model_options is otherwise unaffected --
+        # only the patch object inside is shared, not everything around it).
+        self.assertIsNot(
+            cloned.model_options["transformer_options"]["patches"],
+            original.model_options["transformer_options"]["patches"],
+        )
 
 
 class TestZImageControlNetPatchTo(unittest.TestCase):

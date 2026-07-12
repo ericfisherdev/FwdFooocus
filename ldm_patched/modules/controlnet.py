@@ -685,6 +685,30 @@ class ZImageControlNetPatch:
         self._encoded_hint = _encode_zimage_control_hint(vae, image, control_model.additional_in_dim)
         self._state = None
 
+    def __deepcopy__(self, memo):
+        """`ModelPatcher.clone()` (`ldm_patched/modules/model_patcher.py`)
+        deep-copies `model_options` wholesale, which would otherwise deep-copy
+        this patch too -- duplicating `control_model` (a full `ZImage_Control`
+        `nn.Module`, every control weight tensor) and `_encoded_hint` (a
+        VAE-encoded latent tensor) on every clone. Neither should be
+        duplicated: the control weights and encoded hint are shared,
+        read-only inference state, identical to how `ControlNet`/`T2IAdapter`
+        (this same module, above) implement `.copy()` by sharing their
+        underlying model rather than deep-copying it.
+
+        Returning `self` also means every clone shares one `_state`
+        state-machine slot rather than getting an independent (and
+        immediately-stale) copy of whatever mid-forward-pass value it held
+        at clone time -- but that is safe, not just convenient: `_state`
+        always drains back to `None` at the end of one forward-pass sequence
+        (see `__call__` above) before this codebase's single-threaded,
+        sequential sampling loop ever begins another one on any clone, so no
+        two forward passes observe a partially-advanced `_state` from a
+        different clone's in-flight pass.
+        """
+        memo[id(self)] = self
+        return self
+
     def __call__(self, kwargs):
         img = kwargs["img"]
         img_input = kwargs["img_input"]

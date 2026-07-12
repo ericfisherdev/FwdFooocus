@@ -30,7 +30,7 @@ out of scope for this ticket's Canny-only rollout.
 import torch.nn as nn
 
 import ldm_patched.modules.ops
-from ldm_patched.ldm.lumina.model import JointTransformerBlock
+from ldm_patched.ldm.lumina.model import JointTransformerBlock, pad_to_patch_size
 
 ops = ldm_patched.modules.ops.disable_weight_init
 
@@ -134,6 +134,20 @@ class ZImage_Control(nn.Module):
     def embed_hint(self, control_context, freqs_cis=None, adaln_input=None):
         """Patchify + embed the (VAE-encoded) control hint latent.
 
+        `control_context` is padded to `patch_size` first, mirroring
+        `NextDiT.forward()`'s own `x = pad_to_patch_size(x, self.patch_size)`
+        call (`ldm_patched/ldm/lumina/model.py`) exactly -- this hint latent
+        and the main model's noise latent are both VAE-encoded from the same
+        pixel-space width/height (`modules/async_worker.py`'s
+        `apply_control_nets()` resizes the hint image to the generation's own
+        width/height before encoding), so padding both with the identical
+        function/patch_size keeps their resulting (h_tokens, w_tokens) grids
+        identical. Without this, a control latent whose H/W are not already
+        multiples of `patch_size` (e.g. from an odd `overwrite_width`/
+        `overwrite_height` override) crashes `.view()` below outright, or --
+        with a naive `.reshape()` instead -- would silently produce a
+        misaligned token grid that no longer lines up with NextDiT's own.
+
         For `refiner_control=False` checkpoints, the embedded tokens are
         fully refined right here via the plain `control_noise_refiner`
         blocks (which require `freqs_cis`/`adaln_input`, matching the
@@ -143,10 +157,14 @@ class ZImage_Control(nn.Module):
         interleaved with the main model's own noise_refiner loop.
         """
         patch_size, f_patch_size = 2, 1
+        control_context = pad_to_patch_size(control_context, patch_size)
         pH = pW = patch_size
         B, C, H, W = control_context.shape
+        # reshape, not view: mirrors ldm_patched.ldm.lumina.model.patchify()'s
+        # own comment -- the padded/concatenated latent may be a
+        # non-contiguous strided tensor, which view() rejects at runtime.
         tokens = (
-            control_context.view(B, C, H // pH, pH, W // pW, pW)
+            control_context.reshape(B, C, H // pH, pH, W // pW, pW)
             .permute(0, 2, 4, 3, 5, 1)
             .flatten(3)
             .flatten(1, 2)

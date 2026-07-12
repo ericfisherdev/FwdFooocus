@@ -360,7 +360,7 @@ class NextDiT(nn.Module):
         self.rope_embedder = EmbedND(dim // n_heads, theta=rope_theta, axes_dim=list(axes_dims))
         self._freqs_cache = None
 
-    def forward(self, x, timesteps, context, transformer_options={}, **kwargs):
+    def forward(self, x, timesteps, context, transformer_options=None, **kwargs):
         """
         x: (B, in_channels, H, W) noised latent
         timesteps: (B,) flow-matching timestep in [0, 1]
@@ -375,7 +375,17 @@ class NextDiT(nn.Module):
             present) replace the corresponding slice before the next block
             runs. Absent/empty patches are a strict no-op -- this is the only
             way this backbone's output can differ from before FWDF-156.
+
+            Defaults to `None` (normalized to a fresh `{}` below), not a `{}`
+            default argument: this method writes a `"total_blocks"` key into
+            it a few lines down, and a mutable default argument is
+            evaluated once at function-definition time and shared by every
+            call that omits it (Ruff B006) -- callers that all omit this
+            argument would otherwise silently share and mutate the same
+            dict across separate forward() calls.
         """
+        if transformer_options is None:
+            transformer_options = {}
         B, _, H, W = x.shape
         x = pad_to_patch_size(x, self.patch_size)
 
