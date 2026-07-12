@@ -132,7 +132,8 @@ class TestCapabilitiesAPI:
         mock_get_family.assert_called_once_with(config.default_base_model_name)
 
     def test_returns_capabilities_for_explicit_sdxl_checkpoint(self):
-        with patch("modules.model_family_detection.get_family", return_value=ModelFamily.SDXL):
+        with patch("modules.model_family_detection.get_family", return_value=ModelFamily.SDXL), \
+             patch.object(config, "model_filenames", ["sdxl_base.safetensors"]):
             r = client.get("/api/capabilities", params={"checkpoint": "sdxl_base.safetensors"})
         assert r.status_code == 200
         data = r.json()
@@ -146,7 +147,8 @@ class TestCapabilitiesAPI:
     def test_returns_capabilities_for_z_image_checkpoint(self):
         synthetic = _make_z_image_like_capabilities()
         with patch("modules.model_family_detection.get_family", return_value=ModelFamily.Z_IMAGE), \
-             patch("modules.model_family.get_capabilities", return_value=synthetic):
+             patch("modules.model_family.get_capabilities", return_value=synthetic), \
+             patch.object(config, "model_filenames", ["z_image.safetensors"]):
             r = client.get("/api/capabilities", params={"checkpoint": "z_image.safetensors"})
         assert r.status_code == 200
         data = r.json()
@@ -156,7 +158,8 @@ class TestCapabilitiesAPI:
         assert data["sampler_names"] == ["euler"]
 
     def test_family_is_a_plain_string_not_an_enum_repr(self):
-        with patch("modules.model_family_detection.get_family", return_value=ModelFamily.UNKNOWN):
+        with patch("modules.model_family_detection.get_family", return_value=ModelFamily.UNKNOWN), \
+             patch.object(config, "model_filenames", ["unknown.safetensors"]):
             r = client.get("/api/capabilities", params={"checkpoint": "unknown.safetensors"})
         data = r.json()
         assert data["family"] == "unknown"
@@ -352,3 +355,31 @@ class TestBuildGenerateArgsFamilyAware:
         assert args[self.IDX_SCHEDULER_NAME] == "simple"
         assert args[self.IDX_PERFORMANCE_SELECTION] == "Fast"
         assert args[self.IDX_ASPECT_RATIOS_SELECTION] == "512*512"
+
+
+class TestCheckpointNameBoundary:
+    """Checkpoint names from requests flow into filesystem path resolution;
+    only configured checkpoints may pass (CodeQL py/path-injection)."""
+
+    def test_capabilities_rejects_unknown_checkpoint(self):
+        r = client.get("/api/capabilities", params={"checkpoint": "../../../etc/passwd"})
+        assert r.status_code == 404
+
+    def test_capabilities_accepts_configured_checkpoint(self, monkeypatch):
+        monkeypatch.setattr(config, "model_filenames", ["known.safetensors"])
+        from unittest.mock import MagicMock
+        import modules.model_family_detection as mfd
+        from modules.model_family import ModelFamily
+        monkeypatch.setattr(mfd, "get_family", MagicMock(return_value=ModelFamily.SDXL))
+        r = client.get("/api/capabilities", params={"checkpoint": "known.safetensors"})
+        assert r.status_code == 200
+
+    def test_generate_args_falls_back_for_unknown_base_model(self, monkeypatch):
+        from unittest.mock import MagicMock
+        import new_ui.app as app_module
+        import modules.model_family_detection as mfd
+        spy = MagicMock(side_effect=mfd.get_family)
+        monkeypatch.setattr(app_module, "config", config)
+        monkeypatch.setattr(mfd, "get_family", spy)
+        args = app_module._build_generate_args({"base_model_name": "../../evil"})
+        assert spy.call_args[0][0] == config.default_base_model_name
