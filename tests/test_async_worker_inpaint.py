@@ -24,10 +24,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 _original_argv = sys.argv
 sys.argv = [sys.argv[0]]
 
-_inpaint_mask_stub = types.ModuleType('extras.inpaint_mask')
-_inpaint_mask_stub.generate_mask_from_image = lambda *a, **k: None
-_inpaint_mask_stub.SAMOptions = object
-sys.modules['extras.inpaint_mask'] = _inpaint_mask_stub
+# Stub only when the real module (or an earlier stub) isn't already loaded:
+# unconditionally overwriting sys.modules would silently hand later test
+# files a None-returning generate_mask_from_image depending on run order.
+if 'extras.inpaint_mask' not in sys.modules:
+    _inpaint_mask_stub = types.ModuleType('extras.inpaint_mask')
+    _inpaint_mask_stub.generate_mask_from_image = lambda *a, **k: None
+    _inpaint_mask_stub.SAMOptions = object
+    sys.modules['extras.inpaint_mask'] = _inpaint_mask_stub
 
 import transformers  # noqa: E402,F401  (forces the real torchvision-unavailable check first)
 
