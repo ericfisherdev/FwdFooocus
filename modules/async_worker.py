@@ -969,7 +969,11 @@ def worker():
                     and (np.any(inpaint_mask > 127) or len(async_task.outpaint_selections) > 0):
                 progressbar(async_task, 1, 'Downloading upscale models ...')
                 modules.config.downloading_upscale_model()
-                if inpaint_parameterized:
+                if inpaint_parameterized and not _inpaint_family_lacks_engine_head(async_task.base_model_name):
+                    # Same family gate as apply_inpaint()'s .patch() call:
+                    # stale/preset inpaint_engine values must not trigger the
+                    # SDXL inpainter download (or its LoRA append) for
+                    # families whose capability disables the engine.
                     progressbar(async_task, 1, 'Downloading inpainter ...')
                     inpaint_head_model_path, inpaint_patch_model_path = modules.config.downloading_inpaint_models(
                         async_task.inpaint_engine)
