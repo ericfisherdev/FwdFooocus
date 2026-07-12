@@ -1232,8 +1232,19 @@ with shared.gradio_root:
         state_is_generating = gr.State(False)
 
         def _capabilities_for_base_model(base_model_filename):
-            """Resolve the FamilyCapabilities for a base-model checkpoint filename."""
-            family = modules.model_family_detection.get_family(base_model_filename)
+            """Resolve the FamilyCapabilities for a base-model checkpoint filename.
+
+            The dropdown value arrives from the browser, and get_family() reads
+            the file's safetensors header — so the name used for path
+            resolution is selected FROM the trusted configured checkpoint list
+            (CodeQL py/path-injection boundary); unknown names resolve as
+            UNKNOWN without touching the filesystem.
+            """
+            trusted_name = next(
+                (name for name in modules.config.model_filenames if name == base_model_filename), None)
+            if trusted_name is None:
+                return modules.model_family.get_capabilities(modules.model_family.ModelFamily.UNKNOWN)
+            family = modules.model_family_detection.get_family(trusted_name)
             return modules.model_family.get_capabilities(family)
 
         def _family_gated_updates(base_model_filename, performance, refiner_model_value, sampler_name_value,
