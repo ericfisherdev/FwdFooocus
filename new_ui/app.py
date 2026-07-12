@@ -14,7 +14,7 @@ from pathlib import Path
 
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -195,6 +195,12 @@ def get_capabilities_endpoint(
     from modules.model_family_detection import get_family
 
     resolved_checkpoint = checkpoint or config.default_base_model_name
+    # The filename flows into filesystem path resolution (get_family reads
+    # the safetensors header) — only known, configured checkpoints may pass,
+    # so a crafted query string cannot probe arbitrary paths.
+    if resolved_checkpoint != config.default_base_model_name \
+            and resolved_checkpoint not in config.model_filenames:
+        raise HTTPException(status_code=404, detail="unknown checkpoint")
     family = get_family(resolved_checkpoint)
     capabilities = get_capabilities(family)
     return {"family": family.value, **dataclasses.asdict(capabilities)}
@@ -284,7 +290,13 @@ def _build_generate_args(body: dict) -> list:
     from modules.model_family import get_capabilities
     from modules.model_family_detection import get_family
 
-    family = get_family(body.get("base_model_name", config.default_base_model_name))
+    requested_base_model = body.get("base_model_name", config.default_base_model_name)
+    # Same path-injection boundary as /api/capabilities: unknown names fall
+    # back to the configured default instead of reaching path resolution.
+    if requested_base_model != config.default_base_model_name \
+            and requested_base_model not in config.model_filenames:
+        requested_base_model = config.default_base_model_name
+    family = get_family(requested_base_model)
     caps = get_capabilities(family)
 
     negative_prompt = body.get("negative_prompt", "") if caps.supports_negative_prompt else ""
@@ -362,7 +374,7 @@ def _build_generate_args(body: dict) -> list:
         body.get("read_wildcards_in_order", False),
         sharpness,
         cfg_scale,
-        body.get("base_model_name", config.default_base_model_name),
+        requested_base_model,
         refiner_model_name,
         refiner_switch,
         *lora_args,
