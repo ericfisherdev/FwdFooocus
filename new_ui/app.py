@@ -133,26 +133,16 @@ async def get_config():
 
 
 @app.get("/api/models")
-def get_models():
-    # Plain def (not async): FastAPI runs sync routes in a threadpool, so the
-    # blocking os.stat/safetensors header reads in get_family() cannot stall
-    # the event loop on a cache-cold call.
-    """Return available checkpoints, LoRAs, and per-checkpoint families.
+async def get_models():
+    """Return available checkpoints and LoRAs as flat filename-string lists.
 
-    `checkpoint_families` is an additive sibling map (filename -> ModelFamily
-    value) alongside `checkpoints`; the `checkpoints` list itself stays a
-    flat list of filename strings since the new-UI frontend (stores.js,
-    settings-drawer.html) already treats each entry as a plain string.
+    Per-checkpoint family/capability data is served by GET /api/capabilities
+    (queried per checkpoint by the frontend), so this route intentionally does
+    no per-checkpoint safetensors-header reads.
     """
-    from modules.model_family_detection import get_family
-
-    checkpoint_families = {
-        filename: get_family(filename).value for filename in config.model_filenames
-    }
     return {
         "checkpoints": config.model_filenames,
         "loras": config.lora_filenames,
-        "checkpoint_families": checkpoint_families,
     }
 
 

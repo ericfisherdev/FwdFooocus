@@ -141,31 +141,22 @@ class TestModelsAPI:
         assert "loras" in data
         assert isinstance(data["checkpoints"], list)
         assert isinstance(data["loras"], list)
+        # /api/models returns exactly these two keys. checkpoint_families was
+        # removed (FWDF-164) — the frontend never read it and computing it did a
+        # blocking header read per checkpoint. Assert the full shape so neither
+        # its return nor any other unexpected field can slip in silently.
+        assert set(data.keys()) == {"checkpoints", "loras"}
 
-    def test_checkpoints_field_stays_a_flat_string_list(self):
-        # checkpoint_families must be purely additive -- checkpoints itself
-        # must not be reshaped into {name, family} objects (stores.js and
-        # settings-drawer.html both treat each entry as a plain string).
+    def test_model_lists_stay_flat_string_lists(self):
+        # Both checkpoints and loras must stay flat lists of filename strings
+        # (stores.js and settings-drawer.html treat each entry as a plain
+        # string); neither may be reshaped into {name, ...} objects.
         r = client.get("/api/models")
         data = r.json()
         for entry in data["checkpoints"]:
             assert isinstance(entry, str)
-
-    def test_checkpoint_families_covers_every_checkpoint(self):
-        with patch.object(config, "model_filenames", ["sdxl.safetensors", "z_image.safetensors"]), \
-             patch(
-                 "modules.model_family_detection.get_family",
-                 side_effect=lambda filename: {
-                     "sdxl.safetensors": ModelFamily.SDXL,
-                     "z_image.safetensors": ModelFamily.Z_IMAGE,
-                 }[filename],
-             ):
-            r = client.get("/api/models")
-        data = r.json()
-        assert data["checkpoint_families"] == {
-            "sdxl.safetensors": "sdxl",
-            "z_image.safetensors": "z_image",
-        }
+        for entry in data["loras"]:
+            assert isinstance(entry, str)
 
 
 class TestCapabilitiesAPI:
