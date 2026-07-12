@@ -407,6 +407,47 @@ class TestDenoiseStrengthSlicing(unittest.TestCase):
         # denoise=0.9 truncates only slightly off the top of the full schedule.
         self.assertLessEqual(float(partial[0]), float(full[0]))
 
+    def test_partial_denoise_start_stays_within_model_sigma_range(self):
+        # FWDF-154: Vary/Upscale (modules/async_worker.py) feed a real
+        # denoising_strength (e.g. Vary Subtle=0.5, Strong=0.85, Upscale's
+        # default 0.382) into calculate_sigmas() for a flow model. The
+        # truncated schedule's starting sigma must stay within the model's
+        # own sigma_min/sigma_max -- never overshoot sigma_max (which would
+        # imply more noise than the model was ever trained on) and never
+        # collapse to sigma_min (which would mean the "partial" schedule
+        # denoised nothing).
+        for shift in [1.15, 3.0]:
+            model = self._model_with_flow_sampling(shift)
+            steps = 10
+            for denoise in [0.1, 0.382, 0.5, 0.85, 0.9]:
+                partial = self._partial_schedule(model, "normal", steps, denoise=denoise)
+                sigma_min = float(model.model_sampling.sigma_min)
+                sigma_max = float(model.model_sampling.sigma_max)
+                self.assertGreaterEqual(
+                    float(partial[0]), sigma_min,
+                    f"shift={shift} denoise={denoise}: partial schedule start below sigma_min")
+                self.assertLessEqual(
+                    float(partial[0]), sigma_max,
+                    f"shift={shift} denoise={denoise}: partial schedule start above sigma_max")
+
+    def test_partial_denoise_start_is_monotonic_in_denoise(self):
+        # Higher denoising_strength (Vary Strong=0.85 vs Subtle=0.5, or a
+        # user-overwritten value) must start the truncated schedule at a
+        # sigma no lower than a smaller denoise would -- i.e. the slice
+        # taken from the back of the longer schedule (new_steps =
+        # steps/denoise) must span a monotonically larger fraction of the
+        # sigma_min..sigma_max range as denoise grows. This is the property
+        # that would break if the slice direction (`sigmas[-(steps+1):]`)
+        # were ever flipped.
+        model = self._model_with_flow_sampling(3.0)
+        steps = 10
+        denoise_values = [0.1, 0.3, 0.5, 0.7, 0.9, 1.0]
+        starts = [
+            float(self._partial_schedule(model, "normal", steps, denoise=d)[0])
+            for d in denoise_values
+        ]
+        self.assertEqual(starts, sorted(starts))
+
 
 if __name__ == '__main__':
     unittest.main()

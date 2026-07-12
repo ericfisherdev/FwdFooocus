@@ -50,6 +50,7 @@ def _make_capabilities(**overrides) -> FamilyCapabilities:
         cfg_range=(1.0, 30.0),
         default_steps=30,
         latent_channels=4,
+        native_resolution_range=(1024.0, 2048.0),
     )
     values.update(overrides)
     return FamilyCapabilities(**values)
@@ -82,6 +83,7 @@ def _restricted_capabilities(**overrides) -> FamilyCapabilities:
         cfg_range=(1.0, 10.0),
         default_steps=20,
         latent_channels=16,
+        native_resolution_range=(1024.0, 2048.0),
     )
     values.update(overrides)
     return FamilyCapabilities(**values)

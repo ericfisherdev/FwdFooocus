@@ -56,6 +56,7 @@ def _make_z_image_like_capabilities() -> FamilyCapabilities:
         cfg_range=(1.0, 10.0),
         default_steps=20,
         latent_channels=16,
+        native_resolution_range=(1024.0, 2048.0),
     )
 
 
