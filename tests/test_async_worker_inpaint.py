@@ -25,6 +25,8 @@ _original_argv = sys.argv
 sys.argv = [sys.argv[0]]
 try:
 
+    _installed_stub_names = []
+
     # Stub only when the real module (or an earlier stub) isn't already loaded:
     # unconditionally overwriting sys.modules would silently hand later test
     # files a None-returning generate_mask_from_image depending on run order.
@@ -33,6 +35,7 @@ try:
         _inpaint_mask_stub.generate_mask_from_image = lambda *_args, **_kwargs: None
         _inpaint_mask_stub.SAMOptions = object
         sys.modules['extras.inpaint_mask'] = _inpaint_mask_stub
+        _installed_stub_names.append('extras.inpaint_mask')
 
     import transformers  # noqa: E402,F401  (forces the real torchvision-unavailable check first)
 
@@ -42,7 +45,6 @@ try:
     except ImportError:
         _torchvision_available = False
 
-    _installed_stub_names = []
     if not _torchvision_available:
         _functional_stub = types.ModuleType('torchvision.transforms.functional')
         _functional_stub.InterpolationMode = object
