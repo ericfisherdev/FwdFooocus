@@ -57,6 +57,13 @@ class TestBaseModelNormalization(unittest.TestCase):
         result = _normalize_base_model('custom_model_v1')
         self.assertEqual(result, 'custom_model_v1')
 
+    def test_z_image_variations(self):
+        """Test Z-Image/Lumina2/NextDiT (FWDF-123/153) variations are normalized."""
+        variations = ['z-image', 'Z_Image', 'zimage', 'lumina2', 'Lumina-2', 'nextdit', 'NextDiT']
+        for variant in variations:
+            result = _normalize_base_model(variant)
+            self.assertEqual(result, 'Z-Image', f"Failed for variant: {variant}")
+
 
 class TestTriggerWordExtraction(unittest.TestCase):
     """Test trigger word extraction from metadata."""

@@ -112,7 +112,9 @@ class StableDiffusionModel:
             lora_clip, lora_unmatch = match_lora(lora_unmatch, self.lora_key_map_clip)
 
             if len(lora_unmatch) > 12:
-                # model mismatch
+                # model mismatch: likely a LoRA trained for a different model family
+                print(f'LoRA [{lora_filename}] appears incompatible with model [{self.filename}]: '
+                      f'{len(lora_unmatch)} unmatched keys. Skipping.')
                 continue
 
             if len(lora_unmatch) > 0:

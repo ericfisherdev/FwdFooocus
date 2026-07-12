@@ -78,6 +78,7 @@ BASE_MODEL_PATTERNS = {
     r'pony|pdxl': 'Pony',
     r'sd[-_]?3|stable[-_]?diffusion[-_]?3': 'SD 3',
     r'flux': 'Flux',
+    r'z[-_]?image|lumina[-_]?2|nextdit': 'Z-Image',
 }
 
 
