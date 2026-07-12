@@ -762,7 +762,21 @@ class ZImageControlNetPatch:
         return kwargs
 
     def to(self, device_or_dtype):
-        if isinstance(device_or_dtype, torch.device):
+        """Handles both shapes `ModelPatcher.model_patches_to()`
+        (ldm_patched/modules/model_patcher.py) actually passes to every
+        registered patch object: a `torch.device` or device string (moving
+        load location -- `ldm_patched/modules/model_management.py`'s
+        `model_patches_to(self.device)`) and a `torch.dtype` (that same
+        module's post-load `model_patches_to(self.model.model_dtype())`
+        cast pass). Only the device case resets `_state`: the encoded hint
+        tensor is about to live on a new device, so any in-flight control
+        context computed against the old one must not be reused once
+        forward() resumes there; a dtype-only cast changes no addressing
+        and leaves in-flight state valid.
+        """
+        if isinstance(device_or_dtype, (torch.device, str)):
             self._encoded_hint = self._encoded_hint.to(device_or_dtype)
             self._state = None
+        elif isinstance(device_or_dtype, torch.dtype):
+            self._encoded_hint = self._encoded_hint.to(device_or_dtype)
         return self

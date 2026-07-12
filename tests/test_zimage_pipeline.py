@@ -306,6 +306,85 @@ class TestRefreshBaseModelSdxlRoutingUnchanged:
 
 
 # ---------------------------------------------------------------------------
+# refresh_controlnets(): explicit family routing (FWDF-156 follow-up fix)
+#
+# refresh_controlnets() used to dispatch on pipeline.model_base.family --
+# the currently *loaded* model's family, stale until refresh_everything()
+# (called later, from process_prompt() in modules/async_worker.py) catches
+# up. These tests pin model_base.family to one family while passing a
+# *different* family explicitly, proving routing follows the argument, not
+# pipeline state.
+# ---------------------------------------------------------------------------
+
+
+class TestRefreshControlnetsFamilyRouting:
+    @pytest.fixture(autouse=True)
+    def _reset_controlnet_cache(self, default_pipeline):
+        """loaded_ControlNets is a module-level cache keyed by path; a path
+        reused across tests must not short-circuit the loader-dispatch logic
+        this test class exists to verify."""
+        default_pipeline.loaded_ControlNets = {}
+        yield
+        default_pipeline.loaded_ControlNets = {}
+
+    def test_z_image_family_argument_chooses_zimage_loader_while_model_base_holds_sdxl(
+            self, default_pipeline, monkeypatch, sdxl_family, z_image_family):
+        pipeline = default_pipeline
+        pipeline.model_base = pipeline.core.StableDiffusionModel()
+        pipeline.model_base.family = sdxl_family  # stale: previous request's family
+
+        load_zimage_mock = MagicMock(return_value=object())
+        load_sdxl_mock = MagicMock(return_value=object())
+        monkeypatch.setattr(pipeline.core, 'load_controlnet_zimage', load_zimage_mock, raising=False)
+        monkeypatch.setattr(pipeline.core, 'load_controlnet', load_sdxl_mock, raising=False)
+
+        pipeline.refresh_controlnets(['/models/controlnet/z_image_canny.safetensors'], z_image_family)
+
+        load_zimage_mock.assert_called_once_with('/models/controlnet/z_image_canny.safetensors')
+        load_sdxl_mock.assert_not_called()
+
+    def test_sdxl_family_argument_chooses_sdxl_loader_while_model_base_holds_z_image(
+            self, default_pipeline, monkeypatch, sdxl_family, z_image_family):
+        pipeline = default_pipeline
+        pipeline.model_base = pipeline.core.StableDiffusionModel()
+        pipeline.model_base.family = z_image_family  # stale: previous request's family
+
+        load_zimage_mock = MagicMock(return_value=object())
+        load_sdxl_mock = MagicMock(return_value=object())
+        monkeypatch.setattr(pipeline.core, 'load_controlnet_zimage', load_zimage_mock, raising=False)
+        monkeypatch.setattr(pipeline.core, 'load_controlnet', load_sdxl_mock, raising=False)
+
+        pipeline.refresh_controlnets(['/models/controlnet/canny_sdxl.safetensors'], sdxl_family)
+
+        load_sdxl_mock.assert_called_once_with('/models/controlnet/canny_sdxl.safetensors')
+        load_zimage_mock.assert_not_called()
+
+    def test_none_paths_are_skipped_regardless_of_family(self, default_pipeline, monkeypatch, z_image_family):
+        pipeline = default_pipeline
+
+        load_zimage_mock = MagicMock(return_value=object())
+        monkeypatch.setattr(pipeline.core, 'load_controlnet_zimage', load_zimage_mock, raising=False)
+
+        pipeline.refresh_controlnets([None, None], z_image_family)
+
+        load_zimage_mock.assert_not_called()
+        assert pipeline.loaded_ControlNets == {}
+
+    def test_cached_path_is_reused_without_reloading(self, default_pipeline, monkeypatch, sdxl_family):
+        pipeline = default_pipeline
+        cached_controlnet = object()
+        pipeline.loaded_ControlNets = {'/models/controlnet/canny_sdxl.safetensors': cached_controlnet}
+
+        load_sdxl_mock = MagicMock(return_value=object())
+        monkeypatch.setattr(pipeline.core, 'load_controlnet', load_sdxl_mock, raising=False)
+
+        pipeline.refresh_controlnets(['/models/controlnet/canny_sdxl.safetensors'], sdxl_family)
+
+        load_sdxl_mock.assert_not_called()
+        assert pipeline.loaded_ControlNets['/models/controlnet/canny_sdxl.safetensors'] is cached_controlnet
+
+
+# ---------------------------------------------------------------------------
 # assert_model_integrity(): family-aware validation
 # ---------------------------------------------------------------------------
 

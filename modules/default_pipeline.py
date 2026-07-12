@@ -35,16 +35,23 @@ loaded_ControlNets = {}
 
 @torch.no_grad()
 @torch.inference_mode()
-def refresh_controlnets(model_paths):
+def refresh_controlnets(model_paths, family):
     """Z-Image's DiT ControlNet checkpoint (FWDF-156) uses a completely
     different state-dict layout from the SDXL UNet ControlNet/ControlLora
     formats `core.load_controlnet()` detects, so which loader to use is
-    dispatched by the currently-loaded base model's family rather than
-    sniffed from the file itself (mirrors `assert_model_integrity()`'s
-    family lookup above).
+    dispatched by `family` rather than sniffed from the file itself (mirrors
+    `assert_model_integrity()`'s family lookup above).
+
+    `family` is the caller's responsibility to derive from the REQUESTED
+    checkpoint (`modules.model_family_detection.get_family(async_task.base_model_name)`
+    in `modules/async_worker.py`), not read from `model_base.family` here:
+    this function runs before `refresh_base_model()`/`refresh_everything()`
+    bring `model_base.family` in sync with the requested checkpoint, so
+    reading pipeline state at this call site would route a base-model
+    family switch between consecutive requests with the PREVIOUS request's
+    family.
     """
     global loaded_ControlNets
-    family = getattr(model_base, 'family', ModelFamily.UNKNOWN)
     cache = {}
     for p in model_paths:
         if p is not None:

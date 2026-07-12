@@ -170,6 +170,38 @@ class TestZImageControlModule(unittest.TestCase):
         self.assertIsNone(hint)
         self.assertIs(next_ctx, control_context)
 
+    def test_embed_hint_with_additional_in_dim_matches_real_union_2_1_shape(self):
+        # additional_in_dim=17 is the real "-2.1" Union checkpoint's shape
+        # (mask(1ch) + inpaint_latent(16ch), see
+        # ldm_patched.modules.controlnet._encode_zimage_control_hint) --
+        # the x_embedder's input width must grow by exactly that much
+        # beyond control_in_dim's base channel count.
+        control = ZImage_Control(**make_tiny_control_config(control_in_dim=16, additional_in_dim=17))
+        init_small_weights(control)
+        control.eval()
+        control_context = torch.randn(1, 16 + 17, 4, 4)  # (B, control_in_dim + additional_in_dim, H, W)
+        with torch.no_grad():
+            embedded = control.embed_hint(control_context)
+        # patch_size=2 over a 4x4 grid -> 2*2 = 4 tokens, at dim=64 regardless
+        # of the input channel count (x_embedder projects into dim).
+        self.assertEqual(embedded.shape, (1, 4, 64))
+
+    def test_forward_control_block_after_additional_in_dim_embedding(self):
+        # Exercises the extra-channel path through embed_hint() and into a
+        # real control-block forward pass, not just the embedding shape.
+        control = ZImage_Control(**make_tiny_control_config(control_in_dim=16, additional_in_dim=17))
+        init_small_weights(control)
+        control.eval()
+        control_context = torch.randn(1, 16 + 17, 4, 4)
+        x = torch.randn(1, 4, 64)
+        adaln = torch.randn(1, 64)
+        freqs_cis = make_identity_freqs_cis(1, 4)
+        with torch.no_grad():
+            embedded = control.embed_hint(control_context)
+            hint, next_ctx = control.forward_control_block(0, embedded, x, freqs_cis, adaln)
+        self.assertEqual(hint.shape, embedded.shape)
+        self.assertEqual(next_ctx.shape, embedded.shape)
+
 
 class TestNextDiTControlNetHooks(unittest.TestCase):
     """Verifies NextDiT.forward()'s double_block/noise_refiner patch hooks in
@@ -361,6 +393,53 @@ class TestZImageControlNetPatchIntegration(unittest.TestCase):
         for out in outputs:
             self.assertFalse(torch.isnan(out).any().item())
         self.assertIsNone(patch._state)
+
+
+class TestZImageControlNetPatchTo(unittest.TestCase):
+    """ModelPatcher.model_patches_to() (ldm_patched/modules/model_patcher.py)
+    calls .to() on every registered patch with either a torch.device or --
+    for the model's own dtype pass, ldm_patched/modules/model_management.py's
+    `model_patches_to(self.model.model_dtype())` -- a torch.dtype. Before
+    this fix, only the torch.device branch was handled; a dtype-only or
+    string-device move was a silent no-op.
+    """
+
+    def setUp(self):
+        self.control = ZImage_Control(**make_tiny_control_config())
+        self.vae = _StubVAE(control_in_dim=4, latent_hw=4)
+        self.image = torch.rand(1, 8, 8, 3)
+        self.patch = ZImageControlNetPatch(self.control, self.vae, self.image, strength=1.0)
+
+    def test_dtype_argument_casts_encoded_hint_and_is_not_a_noop(self):
+        self.assertEqual(self.patch._encoded_hint.dtype, torch.float32)
+
+        result = self.patch.to(torch.float64)
+
+        self.assertIs(result, self.patch)
+        self.assertEqual(self.patch._encoded_hint.dtype, torch.float64)
+
+    def test_dtype_argument_does_not_clear_in_flight_state(self):
+        self.patch._state = (0, (None, torch.zeros(1, 4, 64)))
+
+        self.patch.to(torch.float64)
+
+        self.assertIsNotNone(self.patch._state)
+
+    def test_string_device_argument_moves_encoded_hint_and_resets_state(self):
+        self.patch._state = (0, (None, torch.zeros(1, 4, 64)))
+
+        result = self.patch.to("cpu")
+
+        self.assertIs(result, self.patch)
+        self.assertEqual(self.patch._encoded_hint.device, torch.device("cpu"))
+        self.assertIsNone(self.patch._state)
+
+    def test_torch_device_argument_resets_state(self):
+        self.patch._state = (0, (None, torch.zeros(1, 4, 64)))
+
+        self.patch.to(torch.device("cpu"))
+
+        self.assertIsNone(self.patch._state)
 
 
 class TestZImageControlNetConvert(unittest.TestCase):
