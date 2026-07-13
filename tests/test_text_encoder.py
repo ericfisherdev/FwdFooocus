@@ -8,21 +8,21 @@ Covers:
   `TypeError: unsupported operand type(s) for +=: 'int' and 'NoneType'`
   the moment any encoder in the mix has no pooled projection).
 
-modules.default_pipeline is unusually expensive to import as-is:
-1. It unconditionally imports a torchvision-only inpainting architecture
-   (LaMa, reached via modules.patch -> modules.inpaint_worker ->
-   modules.upscaler). torchvision is a docker-only dependency
-   (requirements_docker.txt), not installed in every dev/test environment.
-2. At *module import time* it calls refresh_everything(...), which loads a
-   real SDXL checkpoint (modules.core.load_model) and a real GPT2
-   prompt-expansion model (extras.expansion.FooocusExpansion) from disk --
-   neither of which exists in a test environment.
-
-Neither concern is part of this ticket's scope, so rather than changing
-production import behavior, the fixture below installs the minimum set of
-test doubles needed to let the real, unmodified clip_encode() /
-clip_encode_single() / clone_cond() run end-to-end, and restores the
+modules.default_pipeline unconditionally imports a torchvision-only
+inpainting architecture (LaMa, reached via modules.patch ->
+modules.inpaint_worker -> modules.upscaler). torchvision is a docker-only
+dependency (requirements_docker.txt), not installed in every dev/test
+environment. That concern is not part of this ticket's scope, so rather than
+changing production import behavior, the fixture below installs a minimal
+torchvision stand-in when needed, letting the real, unmodified clip_encode()
+/ clip_encode_single() / clone_cond() run end-to-end, and restores the
 environment afterward.
+
+(modules.default_pipeline used to also call refresh_everything(...) at
+*module import time*, loading a real SDXL checkpoint and GPT2 prompt-expansion
+model from disk -- FWDF-167 moved that call into an explicit
+initialize_default_pipeline() that application entrypoints call at startup,
+so importing the module here no longer requires stubbing that out.)
 """
 import os
 import sys
@@ -199,43 +199,10 @@ class TestPathTextEncodersConfig:
 # ---------------------------------------------------------------------------
 
 
-class _FakeStableDiffusionModel:
-    """Stands in for modules.core.StableDiffusionModel: enough surface for
-    modules.default_pipeline's module-level refresh_everything(...) bootstrap
-    to complete without touching any real checkpoint file."""
-
-    def __init__(self, unet=None, vae=None, clip=None, clip_vision=None,
-                 filename=None, vae_filename=None):
-        self.unet = unet
-        self.vae = vae
-        self.clip = clip
-        self.clip_vision = clip_vision
-        self.filename = filename
-        self.vae_filename = vae_filename
-        self.unet_with_lora = unet
-        self.clip_with_lora = clip
-
-    def refresh_loras(self, loras):
-        pass
-
-
-class _FakeUnet:
-    def __init__(self, model):
-        self.model = model
-
-
-class _FakeClip:
-    patcher = None
-
-
-class _FakeExpansion:
-    patcher = None
-
-
 def _install_default_pipeline_test_doubles():
-    """Install the minimum set of test doubles needed to import the real
-    modules.default_pipeline without a torchvision install or real model
-    weights. Returns a zero-arg callable that restores the prior state.
+    """Install a torchvision stand-in (when torchvision isn't installed) so
+    the real modules.default_pipeline can be imported. Returns a zero-arg
+    callable that restores the prior state.
 
     Order matters: `transformers` must finish its own (real) import before
     a torchvision stand-in is registered, because transformers decides once,
@@ -270,62 +237,6 @@ def _install_default_pipeline_test_doubles():
         sys.modules['torchvision.transforms.functional'] = functional_stub
         restore_actions.append(lambda: [sys.modules.pop(n, None) for n in stub_names])
 
-    from ldm_patched.modules.model_base import SDXL
-
-    def _fake_load_model(filename, vae_filename=None):
-        return _FakeStableDiffusionModel(
-            unet=_FakeUnet(SDXL.__new__(SDXL)),
-            vae=object(),
-            clip=_FakeClip(),
-            filename=filename,
-            vae_filename=vae_filename,
-        )
-
-    core_stub = types.ModuleType('modules.core')
-    core_stub.StableDiffusionModel = _FakeStableDiffusionModel
-    core_stub.load_model = _fake_load_model
-    original_core = sys.modules.get('modules.core')
-    sys.modules['modules.core'] = core_stub
-    restore_actions.append(
-        lambda: sys.modules.__setitem__('modules.core', original_core)
-        if original_core is not None else sys.modules.pop('modules.core', None)
-    )
-    # 'import modules.core as core' binds the *package attribute* when it
-    # already exists (set by any earlier test importing the real module),
-    # bypassing the sys.modules stub — swap the attribute too.
-    import modules as _modules_pkg
-    _original_core_attr = getattr(_modules_pkg, 'core', None)
-    _modules_pkg.core = core_stub
-    restore_actions.append(
-        lambda: setattr(_modules_pkg, 'core', _original_core_attr)
-        if _original_core_attr is not None else delattr(_modules_pkg, 'core')
-    )
-
-    expansion_stub = types.ModuleType('extras.expansion')
-    expansion_stub.FooocusExpansion = _FakeExpansion
-    original_expansion = sys.modules.get('extras.expansion')
-    sys.modules['extras.expansion'] = expansion_stub
-    restore_actions.append(
-        lambda: sys.modules.__setitem__('extras.expansion', original_expansion)
-        if original_expansion is not None else sys.modules.pop('extras.expansion', None)
-    )
-    try:
-        import extras as _extras_pkg
-    except ImportError:
-        _extras_pkg = None
-    if _extras_pkg is not None:
-        _original_expansion_attr = getattr(_extras_pkg, 'expansion', None)
-        _extras_pkg.expansion = expansion_stub
-        restore_actions.append(
-            lambda: setattr(_extras_pkg, 'expansion', _original_expansion_attr)
-            if _original_expansion_attr is not None else delattr(_extras_pkg, 'expansion')
-        )
-
-    import ldm_patched.modules.model_management as model_management
-    original_load_models_gpu = model_management.load_models_gpu
-    model_management.load_models_gpu = lambda *a, **k: None
-    restore_actions.append(lambda: setattr(model_management, 'load_models_gpu', original_load_models_gpu))
-
     def _restore():
         for action in reversed(restore_actions):
             action()
@@ -336,9 +247,13 @@ def _install_default_pipeline_test_doubles():
 @pytest.fixture(scope='module')
 def default_pipeline():
     """The real modules.default_pipeline, imported with just enough test
-    doubles (see _install_default_pipeline_test_doubles) to survive its
-    module-level bootstrap. clip_encode(), clip_encode_single(), and
-    clone_cond() are the genuine, unmodified production functions."""
+    doubles (see _install_default_pipeline_test_doubles) for the import to
+    succeed. clip_encode(), clip_encode_single(), and clone_cond() are the
+    genuine, unmodified production functions. The module-level
+    refresh_everything(...) bootstrap this fixture used to have to survive
+    no longer runs at import time (FWDF-167) -- initialize_default_pipeline()
+    is never called here, so final_unet/final_clip/final_vae stay at their
+    None defaults unless a test sets them directly."""
     restore = _install_default_pipeline_test_doubles()
     try:
         import modules.default_pipeline as pipeline

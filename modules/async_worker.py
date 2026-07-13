@@ -289,6 +289,7 @@ def worker():
     import copy
     import cv2
     import modules.default_pipeline as pipeline
+    pipeline.initialize_default_pipeline()
     import modules.core as core
     import modules.flags as flags
     import modules.model_family

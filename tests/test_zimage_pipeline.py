@@ -7,11 +7,15 @@ modules.default_pipeline:
 - set_clip_skip(): no-op guard for non-CLIP encoders.
 - refresh_everything(): refiner assembly gated by the capability registry.
 
-modules.default_pipeline is expensive to import as-is (torchvision-only
-inpainting import chain, and a module-level refresh_everything(...) call that
-loads a real checkpoint + GPT-2 prompt expansion model). This file installs
-the same minimum set of test doubles as tests/test_text_encoder.py to let the
-real, unmodified pipeline functions run end-to-end.
+modules.default_pipeline unconditionally imports a torchvision-only
+inpainting architecture chain, which torchvision isn't installed in every
+dev/test environment; this file installs the same torchvision stand-in as
+tests/test_text_encoder.py to let the real, unmodified pipeline functions run
+end-to-end. (It used to also survive a module-level refresh_everything(...)
+call that loaded a real checkpoint + GPT-2 prompt expansion model -- FWDF-167
+moved that into an explicit initialize_default_pipeline(), which this file
+never calls, so importing modules.default_pipeline here no longer touches
+disk for model weights.)
 """
 import sys
 import types
@@ -34,10 +38,9 @@ sys.argv = _original_argv
 
 
 class _FakeStableDiffusionModel:
-    """Stands in for modules.core.StableDiffusionModel: enough surface for
-    modules.default_pipeline's module-level refresh_everything(...) bootstrap
-    to complete without touching any real checkpoint file, and for direct
-    per-test construction of model_base/model_refiner fixtures."""
+    """Stands in for modules.core.StableDiffusionModel: a lightweight
+    surface for direct per-test construction of model_base/model_refiner
+    fixtures, decoupled from real model loading."""
 
     def __init__(self, unet=None, vae=None, clip=None, clip_vision=None,
                  filename=None, vae_filename=None):
@@ -59,21 +62,13 @@ class _FakeUnet:
         self.model = model
 
 
-class _FakeClip:
-    patcher = None
-
-
-class _FakeExpansion:
-    patcher = None
-
-
 def _install_default_pipeline_test_doubles():
-    """Install the minimum set of test doubles needed to import the real
-    modules.default_pipeline without a torchvision install or real model
-    weights. Returns a zero-arg callable that restores the prior state.
+    """Install a torchvision stand-in (when torchvision isn't installed) so
+    the real modules.default_pipeline can be imported. Returns a zero-arg
+    callable that restores the prior state.
 
     Mirrors tests/test_text_encoder.py's helper of the same name -- see that
-    module's docstring for why each stub exists and why ordering matters.
+    module's docstring for why ordering matters.
     """
     import transformers  # noqa: F401  (forces the real torchvision-unavailable check first)
 
@@ -102,59 +97,6 @@ def _install_default_pipeline_test_doubles():
         sys.modules['torchvision.transforms.functional'] = functional_stub
         restore_actions.append(lambda: [sys.modules.pop(n, None) for n in stub_names])
 
-    from ldm_patched.modules.model_base import SDXL
-
-    def _fake_load_model(filename, vae_filename=None):
-        return _FakeStableDiffusionModel(
-            unet=_FakeUnet(SDXL.__new__(SDXL)),
-            vae=object(),
-            clip=_FakeClip(),
-            filename=filename,
-            vae_filename=vae_filename,
-        )
-
-    core_stub = types.ModuleType('modules.core')
-    core_stub.StableDiffusionModel = _FakeStableDiffusionModel
-    core_stub.load_model = _fake_load_model
-    original_core = sys.modules.get('modules.core')
-    sys.modules['modules.core'] = core_stub
-    restore_actions.append(
-        lambda: sys.modules.__setitem__('modules.core', original_core)
-        if original_core is not None else sys.modules.pop('modules.core', None)
-    )
-    import modules as _modules_pkg
-    _original_core_attr = getattr(_modules_pkg, 'core', None)
-    _modules_pkg.core = core_stub
-    restore_actions.append(
-        lambda: setattr(_modules_pkg, 'core', _original_core_attr)
-        if _original_core_attr is not None else delattr(_modules_pkg, 'core')
-    )
-
-    expansion_stub = types.ModuleType('extras.expansion')
-    expansion_stub.FooocusExpansion = _FakeExpansion
-    original_expansion = sys.modules.get('extras.expansion')
-    sys.modules['extras.expansion'] = expansion_stub
-    restore_actions.append(
-        lambda: sys.modules.__setitem__('extras.expansion', original_expansion)
-        if original_expansion is not None else sys.modules.pop('extras.expansion', None)
-    )
-    try:
-        import extras as _extras_pkg
-    except ImportError:
-        _extras_pkg = None
-    if _extras_pkg is not None:
-        _original_expansion_attr = getattr(_extras_pkg, 'expansion', None)
-        _extras_pkg.expansion = expansion_stub
-        restore_actions.append(
-            lambda: setattr(_extras_pkg, 'expansion', _original_expansion_attr)
-            if _original_expansion_attr is not None else delattr(_extras_pkg, 'expansion')
-        )
-
-    from ldm_patched.modules import model_management
-    original_load_models_gpu = model_management.load_models_gpu
-    model_management.load_models_gpu = lambda *a, **k: None
-    restore_actions.append(lambda: setattr(model_management, 'load_models_gpu', original_load_models_gpu))
-
     def _restore():
         for action in reversed(restore_actions):
             action()
@@ -165,7 +107,11 @@ def _install_default_pipeline_test_doubles():
 @pytest.fixture(scope='module')
 def default_pipeline():
     """The real modules.default_pipeline, imported with just enough test
-    doubles to survive its module-level bootstrap."""
+    doubles (see _install_default_pipeline_test_doubles) for the import to
+    succeed. initialize_default_pipeline() is never called here (FWDF-167),
+    so model_base/model_refiner/final_* stay at their None/empty defaults
+    unless a test sets them directly -- pipeline.core is the real
+    modules.core module."""
     restore = _install_default_pipeline_test_doubles()
     try:
         import modules.default_pipeline as pipeline
@@ -511,6 +457,10 @@ class TestRefreshEverythingRefinerCapabilityGate:
         monkeypatch.setattr(pipeline, 'clear_all_caches', MagicMock())
         pipeline.model_base = _FakeStableDiffusionModel(unet=_FakeUnet(object()), clip=object(), vae=object())
         pipeline.model_refiner = _FakeStableDiffusionModel(unet=_FakeUnet(object()), vae=object())
+        # refresh_everything() only constructs FooocusExpansion() when
+        # final_expansion is still None; pin a sentinel so this direct call
+        # doesn't try to load the real GPT-2 prompt-expansion model from disk.
+        monkeypatch.setattr(pipeline, 'final_expansion', object())
 
     def test_refiner_forced_to_none_when_family_does_not_support_it(self, default_pipeline, monkeypatch,
                                                                       z_image_family):
