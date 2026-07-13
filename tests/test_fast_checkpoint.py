@@ -1,7 +1,9 @@
 import os
 import shutil
 import tempfile
+import time
 import unittest
+from unittest.mock import patch
 
 
 class TestResolveCheckpointPath(unittest.TestCase):
@@ -34,19 +36,85 @@ class TestResolveCheckpointPath(unittest.TestCase):
         self.assertEqual(result, expected_fast)
         self.assertTrue(os.path.isfile(expected_fast))
 
-    def test_uses_existing_fast_copy(self):
+    def test_uses_existing_fast_copy_when_unchanged(self):
         from modules.fast_checkpoint import resolve_checkpoint_path
-        # Pre-populate fast drive
+        # Pre-populate fast drive with an up-to-date copy of the source
+        # (same mtime/size, as a real cached copy would have).
         fast_file = os.path.join(self.fast_dir, self.checkpoint_name)
-        with open(fast_file, 'wb') as f:
-            f.write(b'\x01' * 512)  # Different content/size
+        shutil.copy2(self.slow_path, fast_file)
+
+        with patch('modules.fast_checkpoint._copy_to_fast_drive') as mock_copy:
+            result = resolve_checkpoint_path(
+                self.checkpoint_name, [self.slow_dir], fast_path=self.fast_dir
+            )
+
+        self.assertEqual(result, fast_file)
+        mock_copy.assert_not_called()
+
+    def test_revalidates_when_source_mtime_changed(self):
+        from modules.fast_checkpoint import resolve_checkpoint_path
+        fast_file = os.path.join(self.fast_dir, self.checkpoint_name)
+        shutil.copy2(self.slow_path, fast_file)
+
+        # Same size and content, but a newer mtime (e.g. re-downloaded in place).
+        future = time.time() + 100
+        os.utime(self.slow_path, (future, future))
 
         result = resolve_checkpoint_path(
             self.checkpoint_name, [self.slow_dir], fast_path=self.fast_dir
         )
         self.assertEqual(result, fast_file)
-        # Verify it was NOT overwritten (still 512 bytes)
-        self.assertEqual(os.path.getsize(fast_file), 512)
+        self.assertEqual(
+            os.stat(fast_file).st_mtime_ns, os.stat(self.slow_path).st_mtime_ns
+        )
+
+    def test_revalidates_when_source_size_changed(self):
+        from modules.fast_checkpoint import resolve_checkpoint_path
+        fast_file = os.path.join(self.fast_dir, self.checkpoint_name)
+        shutil.copy2(self.slow_path, fast_file)
+
+        new_content = b'\x02' * 2048
+        with open(self.slow_path, 'wb') as f:
+            f.write(new_content)
+
+        result = resolve_checkpoint_path(
+            self.checkpoint_name, [self.slow_dir], fast_path=self.fast_dir
+        )
+        self.assertEqual(result, fast_file)
+        with open(fast_file, 'rb') as f:
+            self.assertEqual(f.read(), new_content)
+
+    def test_source_missing_returns_existing_fast_copy(self):
+        from modules.fast_checkpoint import resolve_checkpoint_path
+        fast_file = os.path.join(self.fast_dir, self.checkpoint_name)
+        shutil.copy2(self.slow_path, fast_file)
+
+        os.remove(self.slow_path)  # Source no longer exists
+
+        result = resolve_checkpoint_path(
+            self.checkpoint_name, [self.slow_dir], fast_path=self.fast_dir
+        )
+        self.assertEqual(result, fast_file)
+        self.assertTrue(os.path.isfile(fast_file))
+
+    def test_rejects_absolute_checkpoint_path(self):
+        from modules.fast_checkpoint import resolve_checkpoint_path
+        abs_evil = os.path.join(self.slow_dir, 'evil.safetensors')
+        with open(abs_evil, 'wb') as f:
+            f.write(b'\x00' * 16)
+
+        result = resolve_checkpoint_path(
+            abs_evil, [self.slow_dir], fast_path=self.fast_dir
+        )
+        self.assertEqual(result, abs_evil)
+        self.assertFalse(result.startswith(self.fast_dir))
+
+    def test_rejects_parent_directory_traversal(self):
+        from modules.fast_checkpoint import resolve_checkpoint_path
+        result = resolve_checkpoint_path(
+            '../evil.safetensors', [self.slow_dir], fast_path=self.fast_dir
+        )
+        self.assertFalse(result.startswith(self.fast_dir))
 
     def test_falls_back_on_copy_failure(self):
         from modules.fast_checkpoint import resolve_checkpoint_path
