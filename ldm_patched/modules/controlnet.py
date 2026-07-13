@@ -695,7 +695,7 @@ class ZImageControlNetPatch:
     _NOISE_REFINER_START = -3
     _DOUBLE_BLOCK_START = -1
 
-    def __init__(self, control_model_patcher, vae, image, strength) -> None:
+    def __init__(self, control_model_patcher, vae, image, strength, unet_patcher=None) -> None:
         # control_model_patcher is a ModelPatcher (load_controlnet_zimage()
         # wraps the raw ZImage_Control the same way load_controlnet()'s SDXL
         # path wraps its control model, above) so the ~6.7GB real Union-2.1
@@ -710,6 +710,14 @@ class ZImageControlNetPatch:
         self.strength = strength
         self._encoded_hint = _encode_zimage_control_hint(vae, image, self.control_model.additional_in_dim)
         self._state = None
+        # unet_patcher is the ModelPatcher this patch is attached to (the one
+        # whose forward pass invokes __call__). __call__ passes its resident
+        # clone(s) to load_models_gpu() so free_memory() cannot evict the
+        # in-flight UNet mid-pass (FWDF-165). Only the production apply path
+        # (modules/core.py:apply_controlnet_zimage) supplies it; isolated unit
+        # construction leaves it None, in which case __call__ falls back to
+        # loading only the control model (its prior behavior).
+        self.unet_patcher = unet_patcher
 
     def __deepcopy__(self, memo):
         """`ModelPatcher.clone()` (`ldm_patched/modules/model_patcher.py`)
@@ -783,7 +791,22 @@ class ZImageControlNetPatch:
             # (FWDF-165): a no-op if already resident, or a real load if a
             # prior generation's VRAM pressure evicted it back to its
             # offload device since.
-            ldm_patched.modules.model_management.load_models_gpu([self.control_model_patcher])
+            #
+            # load_models_gpu() -> free_memory() can pop ANY resident model on
+            # this device that is not in the passed list -- and this branch
+            # runs inside the UNet's own forward pass, so a large control-model
+            # load could otherwise evict the in-flight UNet and crash the
+            # generation. Pass the UNet's resident clone(s) alongside the
+            # control model so free_memory()'s keep_loaded set protects them
+            # (CodeRabbit review, FWDF-165). unet_patcher is None only for
+            # isolated unit construction; the production apply path always
+            # supplies it.
+            mm = ldm_patched.modules.model_management
+            protected_unets = []
+            if self.unet_patcher is not None:
+                protected_unets = [loaded.model for loaded in mm.current_loaded_models
+                                   if self.unet_patcher.is_clone(loaded.model)]
+            mm.load_models_gpu(protected_unets + [self.control_model_patcher])
             start = self._NOISE_REFINER_START if block_type == "noise_refiner" else self._DOUBLE_BLOCK_START
             hint = self._encoded_hint.to(device=img.device, dtype=img.dtype)
             embedded = self.control_model.embed_hint(hint, freqs_cis=pe, adaln_input=vec)

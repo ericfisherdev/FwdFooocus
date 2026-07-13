@@ -20,6 +20,7 @@ from ldm_patched.modules.controlnet import (
     load_controlnet_zimage,
 )
 from ldm_patched.modules.model_patcher import ModelPatcher
+import ldm_patched.modules.model_management as model_management
 
 
 def make_tiny_dit_config():
@@ -822,6 +823,51 @@ class TestZImageControlNetPatchLazyLoad(unittest.TestCase):
                     self.model(x, t, ctx, transformer_options=transformer_options)
 
         self.assertEqual(spy.call_count, 3)
+
+    def test_call_protects_the_resident_unet_from_mid_forward_eviction(self):
+        # FWDF-165 follow-up: load_models_gpu() -> free_memory() can pop any
+        # resident model on the device that is not in the passed list. Since
+        # this patch runs inside the UNet's forward pass, the in-flight UNet
+        # must be in that list or a large control-model load could evict it
+        # mid-pass. When constructed with a unet_patcher, __call__ must pass
+        # that UNet's resident clone(s) alongside the control patcher so
+        # free_memory()'s keep_loaded set protects them.
+        unet_patcher = ModelPatcher(
+            self.model, load_device=torch.device("cpu"), offload_device=torch.device("cpu"),
+        )
+        patch = ZImageControlNetPatch(
+            self.control_patcher, self.vae, self.image, strength=1.0, unet_patcher=unet_patcher,
+        )
+        transformer_options = {"patches": {"double_block": [patch], "noise_refiner": [patch]}}
+        x, t, ctx = self._inputs()
+
+        # A resident clone of the UNet (is_clone() is true -- shares the same
+        # underlying nn.Module), exactly what current_loaded_models holds while
+        # the UNet's forward pass is running.
+        resident_unet = model_management.LoadedModel(unet_patcher.clone())
+        with mock.patch.object(model_management, "current_loaded_models", [resident_unet]):
+            with mock.patch.object(model_management, "load_models_gpu") as spy:
+                with torch.no_grad():
+                    self.model(x, t, ctx, transformer_options=transformer_options)
+
+        spy.assert_called_once()
+        loaded = spy.call_args[0][0]
+        self.assertIn(self.control_patcher, loaded)
+        self.assertIn(resident_unet.model, loaded)
+
+    def test_call_without_unet_patcher_loads_only_the_control_patcher(self):
+        # Isolated construction (no unet_patcher) keeps the prior behavior:
+        # load only the control model, without touching current_loaded_models.
+        patch = ZImageControlNetPatch(self.control_patcher, self.vae, self.image, strength=1.0)
+        transformer_options = {"patches": {"double_block": [patch], "noise_refiner": [patch]}}
+        x, t, ctx = self._inputs()
+
+        with mock.patch.object(model_management, "current_loaded_models", []):
+            with mock.patch.object(model_management, "load_models_gpu") as spy:
+                with torch.no_grad():
+                    self.model(x, t, ctx, transformer_options=transformer_options)
+
+        spy.assert_called_once_with([self.control_patcher])
 
 
 if __name__ == "__main__":

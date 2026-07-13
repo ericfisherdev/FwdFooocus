@@ -179,10 +179,13 @@ def apply_controlnet_zimage(unet, control_model_patcher, vae, image, strength):
     `control_model_patcher` is the ModelPatcher load_controlnet_zimage()
     returns (FWDF-165) -- ZImageControlNetPatch itself is what moves it onto
     the compute device (via model_management.load_models_gpu(), lazily, only
-    when the patch actually runs), so no loading happens here.
+    when the patch actually runs), so no loading happens here. The patch is
+    given `patched_unet` so its lazy load can protect the in-flight UNet from
+    mid-forward eviction (see ZImageControlNetPatch.__call__).
     """
-    patch = ldm_patched.modules.controlnet.ZImageControlNetPatch(control_model_patcher, vae, image, strength)
     patched_unet = unet.clone()
+    patch = ldm_patched.modules.controlnet.ZImageControlNetPatch(
+        control_model_patcher, vae, image, strength, unet_patcher=patched_unet)
     patched_unet.set_model_double_block_patch(patch)
     patched_unet.set_model_noise_refiner_patch(patch)
     return patched_unet
