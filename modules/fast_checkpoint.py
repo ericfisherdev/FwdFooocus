@@ -43,6 +43,12 @@ def resolve_checkpoint_path(
     """
     Resolve the path for a checkpoint, caching it on the fast drive if configured.
 
+    When a fast copy already exists, it is revalidated against the source
+    checkpoint using a cheap (mtime, size) comparison before being served.
+    If the source has changed (re-download, in-place edit), the fast copy is
+    refreshed; if the source no longer exists, the existing fast copy is
+    served as-is rather than treated as an error.
+
     Args:
         checkpoint_name: Checkpoint filename or relative path (e.g. 'model.safetensors').
         checkpoint_folders: List of directories to search for checkpoints.
@@ -68,6 +74,18 @@ def resolve_checkpoint_path(
         return _find_in_folders(checkpoint_name, checkpoint_folders)
 
     if os.path.isfile(fast_file):
+        original_path = _find_in_folders(checkpoint_name, checkpoint_folders)
+
+        if not os.path.isfile(original_path):
+            # Source is gone; the fast copy is all that remains.
+            return fast_file
+
+        if _fast_copy_is_stale(original_path, fast_file):
+            logger.info(
+                f"Fast-cache copy is stale, refreshing: {checkpoint_name}"
+            )
+            return _copy_to_fast_drive(original_path, fast_file)
+
         return fast_file
 
     original_path = _find_in_folders(checkpoint_name, checkpoint_folders)
@@ -76,6 +94,28 @@ def resolve_checkpoint_path(
         return original_path
 
     return _copy_to_fast_drive(original_path, fast_file)
+
+
+def _fast_copy_is_stale(source_path: str, fast_file: str) -> bool:
+    """
+    Check whether a fast-drive copy is out of date relative to its source.
+
+    Uses a cheap stat-based (mtime, size) comparison rather than hashing file
+    contents, keeping the common unchanged-source path fast.
+
+    Args:
+        source_path: Path to the original checkpoint file.
+        fast_file: Path to the cached copy on the fast drive.
+
+    Returns:
+        True if the source's mtime or size differs from the fast copy's.
+    """
+    source_stat = os.stat(source_path)
+    fast_stat = os.stat(fast_file)
+    return (
+        source_stat.st_mtime_ns != fast_stat.st_mtime_ns
+        or source_stat.st_size != fast_stat.st_size
+    )
 
 
 def _copy_to_fast_drive(source_path: str, dest_path: str) -> str:
