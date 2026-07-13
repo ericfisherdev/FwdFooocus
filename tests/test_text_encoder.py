@@ -27,8 +27,11 @@ so importing the module here no longer requires stubbing that out.)
 import os
 import sys
 import tempfile
+import threading
+import time
 import types
 from pathlib import Path
+from unittest import mock
 
 import pytest
 import safetensors.torch
@@ -347,3 +350,83 @@ class TestClipEncodePooledNone:
         cloned = default_pipeline.clone_cond(conds)
         assert cloned[0][1]['pooled_output'] is None
         assert torch.equal(cloned[0][0], torch.ones(1, 1, 4))
+
+
+# ---------------------------------------------------------------------------
+# FWDF-167: initialize_default_pipeline() replaces the old import-time
+# refresh_everything() side effect. It must run the (expensive) model load
+# exactly once, hold the lock across the whole load so a concurrent caller
+# never returns against a half-loaded pipeline, and mark itself done only
+# after refresh_everything() succeeds so a failed load can be retried.
+# ---------------------------------------------------------------------------
+class TestInitializeDefaultPipeline:
+    @pytest.fixture(autouse=True)
+    def _reset_init_flag(self, default_pipeline):
+        """initialize_default_pipeline()'s done-flag is module global state;
+        save/restore it so these tests neither see nor leak a set flag."""
+        saved = default_pipeline._pipeline_initialized
+        default_pipeline._pipeline_initialized = False
+        yield
+        default_pipeline._pipeline_initialized = saved
+
+    def test_repeated_calls_run_the_load_exactly_once(self, default_pipeline):
+        with mock.patch.object(default_pipeline, 'refresh_everything') as refresh:
+            default_pipeline.initialize_default_pipeline()
+            default_pipeline.initialize_default_pipeline()
+            default_pipeline.initialize_default_pipeline()
+
+        refresh.assert_called_once()
+        assert default_pipeline._pipeline_initialized is True
+
+    def test_concurrent_caller_blocks_until_the_load_completes(self, default_pipeline):
+        # The lock is held for the whole load, so a second caller must not
+        # return until refresh_everything() has finished. Under the old
+        # (flag-set-before-load, lock-released-before-load) code the second
+        # caller would see the flag already set and return early -- against a
+        # pipeline whose weights are not loaded yet.
+        first_in_load = threading.Event()
+        load_done = threading.Event()
+        returned_early = threading.Event()
+
+        def slow_refresh(**kwargs):
+            first_in_load.set()
+            time.sleep(0.3)  # widen the window a real race would exploit
+            load_done.set()
+
+        def second_caller():
+            assert first_in_load.wait(timeout=5), 'first caller never entered the load'
+            default_pipeline.initialize_default_pipeline()
+            if not load_done.is_set():
+                returned_early.set()
+
+        with mock.patch.object(default_pipeline, 'refresh_everything', side_effect=slow_refresh):
+            first = threading.Thread(target=default_pipeline.initialize_default_pipeline)
+            second = threading.Thread(target=second_caller)
+            first.start()
+            second.start()
+            first.join(timeout=5)
+            second.join(timeout=5)
+
+        assert not first.is_alive() and not second.is_alive(), 'a caller deadlocked'
+        assert not returned_early.is_set(), 'second caller returned before the load finished'
+        assert default_pipeline._pipeline_initialized is True
+
+    def test_a_failed_load_leaves_the_pipeline_retryable(self, default_pipeline):
+        # refresh_everything() raising must NOT mark the pipeline initialized,
+        # so a later call retries the load rather than skipping it forever.
+        attempts = []
+
+        def fail_then_succeed(**kwargs):
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise RuntimeError('simulated model-load failure')
+
+        with mock.patch.object(default_pipeline, 'refresh_everything', side_effect=fail_then_succeed):
+            with pytest.raises(RuntimeError, match='simulated model-load failure'):
+                default_pipeline.initialize_default_pipeline()
+            assert default_pipeline._pipeline_initialized is False
+
+            default_pipeline.initialize_default_pipeline()  # retry
+
+        assert default_pipeline._pipeline_initialized is True
+        assert len(attempts) == 2
