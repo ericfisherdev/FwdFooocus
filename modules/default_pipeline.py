@@ -1,5 +1,6 @@
 import modules.core as core
 import os
+import threading
 import torch
 import modules.patch
 import modules.config
@@ -31,6 +32,9 @@ final_refiner_unet = None
 final_refiner_vae = None
 
 loaded_ControlNets = {}
+
+_pipeline_init_lock = threading.Lock()
+_pipeline_initialized = False
 
 
 @torch.no_grad()
@@ -339,12 +343,41 @@ def refresh_everything(refiner_model_name, base_model_name, loras,
     return
 
 
-refresh_everything(
-    refiner_model_name=modules.config.default_refiner_model_name,
-    base_model_name=modules.config.default_base_model_name,
-    loras=get_enabled_loras(modules.config.default_loras),
-    vae_name=modules.config.default_vae,
-)
+def initialize_default_pipeline():
+    """Loads the configured default base model, refiner, LoRAs, and
+    prompt-expansion model (FWDF-167).
+
+    Must be called explicitly by an application entrypoint at startup --
+    importing this module no longer has this side effect, so it can be
+    imported cheaply (e.g. by tests) without real checkpoints on disk or a
+    GPU available.
+
+    Idempotent and thread-safe: only the first call performs the load: this
+    is what previously ran once, implicitly, at module import time, and both
+    UIs (modules/async_worker.py's worker thread for Gradio, and the new UI
+    which shares that same worker) call this from a single startup entrypoint,
+    so double-loading is not an expected occurrence -- the guard just makes
+    repeat/concurrent calls safe rather than corrupting or redoing the load.
+
+    The lock is held for the whole load (not just the flag check) so a
+    concurrent caller blocks until the pipeline is actually ready instead of
+    returning early against a half-loaded pipeline, and _pipeline_initialized
+    is set only after refresh_everything() succeeds so a failed load can be
+    retried rather than being permanently marked done.
+    """
+    global _pipeline_initialized
+
+    with _pipeline_init_lock:
+        if _pipeline_initialized:
+            return
+
+        refresh_everything(
+            refiner_model_name=modules.config.default_refiner_model_name,
+            base_model_name=modules.config.default_base_model_name,
+            loras=get_enabled_loras(modules.config.default_loras),
+            vae_name=modules.config.default_vae,
+        )
+        _pipeline_initialized = True
 
 
 @torch.no_grad()
