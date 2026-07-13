@@ -399,7 +399,7 @@ class TestInitializeDefaultPipeline:
             if not load_done.is_set():
                 returned_early.set()
 
-        with mock.patch.object(default_pipeline, 'refresh_everything', side_effect=slow_refresh):
+        with mock.patch.object(default_pipeline, 'refresh_everything', side_effect=slow_refresh) as refresh:
             first = threading.Thread(target=default_pipeline.initialize_default_pipeline)
             second = threading.Thread(target=second_caller)
             first.start()
@@ -407,8 +407,13 @@ class TestInitializeDefaultPipeline:
             first.join(timeout=5)
             second.join(timeout=5)
 
-        assert not first.is_alive() and not second.is_alive(), 'a caller deadlocked'
+        assert not first.is_alive(), 'first caller deadlocked'
+        assert not second.is_alive(), 'second caller deadlocked'
         assert not returned_early.is_set(), 'second caller returned before the load finished'
+        # Exactly one load: a broken impl that released the lock before the
+        # load could run slow_refresh in both callers and still satisfy the
+        # assertions above (both return after load_done), so pin the count.
+        refresh.assert_called_once()
         assert default_pipeline._pipeline_initialized is True
 
     def test_a_failed_load_leaves_the_pipeline_retryable(self, default_pipeline):
