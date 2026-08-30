@@ -104,12 +104,17 @@ class UIPrefs:
         """
         Set and persist the remembered decision for a metadata field.
 
+        Reloads from disk immediately before applying the change so a
+        second UIPrefs instance pointed at the same path (which last
+        loaded before this one's update) does not clobber that update
+        with its own stale cache.
+
         Args:
             field: The metadata field to update.
             decision: The decision to remember for that field.
         """
         with self._lock:
-            self._ensure_loaded()
+            self._cache = self._load()
             self._cache[field] = decision
             self._save()
 

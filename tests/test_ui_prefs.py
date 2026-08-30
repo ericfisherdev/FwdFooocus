@@ -118,6 +118,24 @@ class TestUIPrefs(unittest.TestCase):
             self.assertIn(field.value, group)
             self.assertIn(group[field.value], valid_values)
 
+    def test_set_from_separate_instances_does_not_clobber(self):
+        from modules.ui_prefs import PrefField, RememberDecision, UIPrefs
+
+        instance_a = UIPrefs(self.prefs_path)
+        instance_b = UIPrefs(self.prefs_path)
+
+        # Both instances lazily load the same (empty) on-disk state before
+        # either writes.
+        instance_a.get(PrefField.CHECKPOINT)
+        instance_b.get(PrefField.SAMPLER)
+
+        instance_a.set(PrefField.CHECKPOINT, RememberDecision.USE_METADATA)
+        instance_b.set(PrefField.SAMPLER, RememberDecision.KEEP_CURRENT)
+
+        verifying_instance = UIPrefs(self.prefs_path)
+        self.assertEqual(verifying_instance.get(PrefField.CHECKPOINT), RememberDecision.USE_METADATA)
+        self.assertEqual(verifying_instance.get(PrefField.SAMPLER), RememberDecision.KEEP_CURRENT)
+
     def test_invalid_utf8_degrades_to_ask(self):
         from modules.ui_prefs import PrefField, RememberDecision, UIPrefs
 
