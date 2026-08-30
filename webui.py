@@ -18,6 +18,8 @@ import modules.flags as flags
 import modules.gradio_hijack as grh
 import modules.style_sorter as style_sorter
 import modules.meta_parser
+import modules.meta_confirm
+import modules.ui_prefs
 import modules.lora_presets
 import modules.lora_library
 import modules.lora_metadata
@@ -185,6 +187,15 @@ def _session_default(key, fallback):
     return fallback
 
 
+# Per-load choice labels for the meta_confirm_modal radios, distinct from
+# modules.ui_prefs.DECISION_LABELS (the persistent Config-tab labels).
+META_CONFIRM_CHOICE_USE_LOADED = 'Use loaded value'
+META_CONFIRM_CHOICE_KEEP_CURRENT = 'Keep current'
+META_CONFIRM_CHOICE_TO_DECISION = {
+    META_CONFIRM_CHOICE_USE_LOADED: modules.ui_prefs.RememberDecision.USE_METADATA,
+    META_CONFIRM_CHOICE_KEEP_CURRENT: modules.ui_prefs.RememberDecision.KEEP_CURRENT,
+}
+
 shared.gradio_root = gr.Blocks(title=title).queue()
 
 with shared.gradio_root:
@@ -192,6 +203,36 @@ with shared.gradio_root:
     # because Gradio sanitizes <script> tags in gr.HTML components.
     currentTask = gr.State(worker.AsyncTask(args=[]))
     inpaint_engine_state = gr.State('empty')
+
+    # Fixed field order shared by prepare_parameter_load / meta_confirm_apply so
+    # handler wiring stays positional. Must match modules.meta_confirm.METADATA_KEYS.
+    meta_confirm_field_order = [
+        (modules.ui_prefs.PrefField.CHECKPOINT, 'Checkpoint'),
+        (modules.ui_prefs.PrefField.SAMPLER, 'Sampler'),
+        (modules.ui_prefs.PrefField.SCHEDULER, 'Scheduler'),
+        (modules.ui_prefs.PrefField.VAE, 'VAE'),
+    ]
+
+    pending_metadata = gr.State(None)
+    with gr.Group(visible=False, elem_id='meta_confirm_modal') as meta_confirm_modal:
+        with gr.Column(elem_classes='meta-confirm-panel'):
+            gr.Markdown('### Loading these parameters will change your current model settings')
+            meta_confirm_rows = []
+            meta_confirm_radios = []
+            meta_confirm_remember_boxes = []
+            for field, field_label in meta_confirm_field_order:
+                with gr.Row(visible=False) as field_row:
+                    with gr.Column():
+                        field_radio = gr.Radio(choices=[META_CONFIRM_CHOICE_USE_LOADED, META_CONFIRM_CHOICE_KEEP_CURRENT],
+                                               value=META_CONFIRM_CHOICE_USE_LOADED, label=field_label, show_label=True)
+                        field_remember = gr.Checkbox(label='Remember my decision', value=False)
+                meta_confirm_rows.append(field_row)
+                meta_confirm_radios.append(field_radio)
+                meta_confirm_remember_boxes.append(field_remember)
+            with gr.Row():
+                meta_confirm_cancel = gr.Button(value='Cancel')
+                meta_confirm_apply = gr.Button(value='Apply', elem_classes='type_row')
+
     with gr.Row():
         with gr.Column(scale=2):
             with gr.Row():
@@ -1550,9 +1591,51 @@ with shared.gradio_root:
 
         prompt.input(parse_meta, inputs=[prompt, state_is_generating], outputs=[prompt, generate_button, load_parameter_button], queue=False, show_progress=False)
 
-        load_parameter_button.click(modules.meta_parser.load_parameter_button_click, inputs=[prompt, state_is_generating, inpaint_mode], outputs=load_data_outputs, queue=False, show_progress=False)
+        meta_confirm_outputs = load_data_outputs + [meta_confirm_modal] + meta_confirm_rows + meta_confirm_radios + [pending_metadata]
 
-        def trigger_metadata_import(file, state_is_generating):
+        def prepare_parameter_load(raw_metadata, is_generating, inpaint_mode, current_base_model, current_sampler, current_scheduler, current_vae):
+            metadata = raw_metadata
+            if isinstance(metadata, str):
+                metadata = json.loads(metadata) if metadata else {}
+            assert isinstance(metadata, dict)
+
+            current = {
+                modules.ui_prefs.PrefField.CHECKPOINT: current_base_model,
+                modules.ui_prefs.PrefField.SAMPLER: current_sampler,
+                modules.ui_prefs.PrefField.SCHEDULER: current_scheduler,
+                modules.ui_prefs.PrefField.VAE: current_vae,
+            }
+            diffs = modules.meta_confirm.compute_diffs(metadata, current)
+            resolved, ask_diffs = modules.meta_confirm.resolve(metadata, diffs, modules.ui_prefs.default_prefs)
+
+            if not ask_diffs:
+                result = modules.meta_parser.load_parameter_button_click(resolved, is_generating, inpaint_mode)
+                result += [gr.update(visible=False)]
+                result += [gr.update(visible=False) for _ in meta_confirm_field_order]
+                result += [gr.update() for _ in meta_confirm_field_order]
+                result += [None]
+                return result
+
+            ask_by_field = {diff.field: diff for diff in ask_diffs}
+            result = [gr.update() for _ in load_data_outputs]
+            result += [gr.update(visible=True)]
+            for field, _field_label in meta_confirm_field_order:
+                result.append(gr.update(visible=field in ask_by_field))
+            for field, field_label in meta_confirm_field_order:
+                if field in ask_by_field:
+                    diff = ask_by_field[field]
+                    radio_label = f"{field_label} — loaded: '{diff.metadata_value}' / current: '{diff.current_value}'"
+                    result.append(gr.update(label=radio_label, value=META_CONFIRM_CHOICE_USE_LOADED))
+                else:
+                    result.append(gr.update())
+            result.append(resolved)
+            return result
+
+        load_parameter_button.click(prepare_parameter_load,
+                                    inputs=[prompt, state_is_generating, inpaint_mode, base_model, sampler_name, scheduler_name, vae_name],
+                                    outputs=meta_confirm_outputs, queue=False, show_progress=False)
+
+        def trigger_metadata_import(file, state_is_generating, inpaint_mode, current_base_model, current_sampler, current_scheduler, current_vae):
             parameters, metadata_scheme = modules.meta_parser.read_info_from_image(file)
             if parameters is None:
                 print('Could not find metadata in the image!')
@@ -1561,10 +1644,42 @@ with shared.gradio_root:
                 metadata_parser = modules.meta_parser.get_metadata_parser(metadata_scheme)
                 parsed_parameters = metadata_parser.to_json(parameters)
 
-            return modules.meta_parser.load_parameter_button_click(parsed_parameters, state_is_generating, inpaint_mode)
+            return prepare_parameter_load(parsed_parameters, state_is_generating, inpaint_mode,
+                                          current_base_model, current_sampler, current_scheduler, current_vae)
 
-        metadata_import_button.click(trigger_metadata_import, inputs=[metadata_input_image, state_is_generating], outputs=load_data_outputs, queue=False, show_progress=True) \
+        metadata_import_button.click(trigger_metadata_import,
+                                     inputs=[metadata_input_image, state_is_generating, inpaint_mode, base_model, sampler_name, scheduler_name, vae_name],
+                                     outputs=meta_confirm_outputs, queue=False, show_progress=True) \
             .then(style_sorter.sort_styles, inputs=style_selections, outputs=style_selections, queue=False, show_progress=False)
+
+        def meta_confirm_apply_click(pending_metadata, is_generating, inpaint_mode, *radio_and_remember_values):
+            field_count = len(meta_confirm_field_order)
+            radio_values = radio_and_remember_values[:field_count]
+            remember_values = radio_and_remember_values[field_count:]
+
+            if pending_metadata is None:
+                result = [gr.update() for _ in load_data_outputs]
+                result += [gr.update(visible=False), None]
+                return result
+
+            decisions = {}
+            for (field, _field_label), radio_value, remember in zip(meta_confirm_field_order, radio_values, remember_values):
+                decision = META_CONFIRM_CHOICE_TO_DECISION[radio_value]
+                decisions[field] = decision
+                if remember:
+                    modules.ui_prefs.default_prefs.set(field, decision)
+
+            merged = modules.meta_confirm.apply_decisions(pending_metadata, decisions)
+            result = modules.meta_parser.load_parameter_button_click(merged, is_generating, inpaint_mode)
+            result += [gr.update(visible=False), None]
+            return result
+
+        meta_confirm_apply.click(meta_confirm_apply_click,
+                                 inputs=[pending_metadata, state_is_generating, inpaint_mode] + meta_confirm_radios + meta_confirm_remember_boxes,
+                                 outputs=load_data_outputs + [meta_confirm_modal, pending_metadata], queue=False, show_progress=False) \
+            .then(style_sorter.sort_styles, inputs=style_selections, outputs=style_selections, queue=False, show_progress=False)
+
+        meta_confirm_cancel.click(lambda: (gr.update(visible=False), None), outputs=[meta_confirm_modal, pending_metadata], queue=False, show_progress=False)
 
         generate_button.click(lambda: (gr.update(visible=True, interactive=True), gr.update(visible=True, interactive=True), gr.update(visible=False, interactive=False), [], True),
                               outputs=[stop_button, skip_button, generate_button, gallery, state_is_generating]) \
