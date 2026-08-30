@@ -1591,7 +1591,8 @@ with shared.gradio_root:
 
         prompt.input(parse_meta, inputs=[prompt, state_is_generating], outputs=[prompt, generate_button, load_parameter_button], queue=False, show_progress=False)
 
-        meta_confirm_outputs = load_data_outputs + [meta_confirm_modal] + meta_confirm_rows + meta_confirm_radios + [pending_metadata]
+        meta_confirm_outputs = (load_data_outputs + [meta_confirm_modal] + meta_confirm_rows
+                                + meta_confirm_radios + meta_confirm_remember_boxes + [pending_metadata])
 
         def prepare_parameter_load(raw_metadata, is_generating, inpaint_mode, current_base_model, current_sampler, current_scheduler, current_vae):
             metadata = raw_metadata
@@ -1599,11 +1600,18 @@ with shared.gradio_root:
                 metadata = json.loads(metadata) if metadata else {}
             assert isinstance(metadata, dict)
 
+            # Dropdowns with no selection (e.g. no models installed) pass None;
+            # exclude those fields from diffing rather than comparing against
+            # the literal string 'None', so the loaded value applies directly.
             current = {
-                modules.ui_prefs.PrefField.CHECKPOINT: current_base_model,
-                modules.ui_prefs.PrefField.SAMPLER: current_sampler,
-                modules.ui_prefs.PrefField.SCHEDULER: current_scheduler,
-                modules.ui_prefs.PrefField.VAE: current_vae,
+                field: value
+                for field, value in {
+                    modules.ui_prefs.PrefField.CHECKPOINT: current_base_model,
+                    modules.ui_prefs.PrefField.SAMPLER: current_sampler,
+                    modules.ui_prefs.PrefField.SCHEDULER: current_scheduler,
+                    modules.ui_prefs.PrefField.VAE: current_vae,
+                }.items()
+                if isinstance(value, str)
             }
             diffs = modules.meta_confirm.compute_diffs(metadata, current)
             resolved, ask_diffs = modules.meta_confirm.resolve(metadata, diffs, modules.ui_prefs.default_prefs)
@@ -1613,6 +1621,7 @@ with shared.gradio_root:
                 result += [gr.update(visible=False)]
                 result += [gr.update(visible=False) for _ in meta_confirm_field_order]
                 result += [gr.update() for _ in meta_confirm_field_order]
+                result += [gr.update(value=False) for _ in meta_confirm_field_order]
                 result += [None]
                 return result
 
@@ -1628,7 +1637,11 @@ with shared.gradio_root:
                     result.append(gr.update(label=radio_label, value=META_CONFIRM_CHOICE_USE_LOADED))
                 else:
                     result.append(gr.update())
-            result.append(resolved)
+            # Reset every remember checkbox on open so a field this modal
+            # instance never asks about can't inherit a checked box left over
+            # from a previous (possibly cancelled) invocation.
+            result += [gr.update(value=False) for _ in meta_confirm_field_order]
+            result.append((resolved, frozenset(ask_by_field)))
             return result
 
         load_parameter_button.click(prepare_parameter_load,
@@ -1662,14 +1675,21 @@ with shared.gradio_root:
                 result += [gr.update(visible=False), None]
                 return result
 
+            resolved, asked_fields = pending_metadata
+
+            # Only act on fields this modal instance actually asked about —
+            # hidden rows for other fields may still carry stale radio/remember
+            # values from an earlier (possibly cancelled) invocation.
             decisions = {}
             for (field, _field_label), radio_value, remember in zip(meta_confirm_field_order, radio_values, remember_values):
+                if field not in asked_fields:
+                    continue
                 decision = META_CONFIRM_CHOICE_TO_DECISION[radio_value]
                 decisions[field] = decision
                 if remember:
                     modules.ui_prefs.default_prefs.set(field, decision)
 
-            merged = modules.meta_confirm.apply_decisions(pending_metadata, decisions)
+            merged = modules.meta_confirm.apply_decisions(resolved, decisions)
             result = modules.meta_parser.load_parameter_button_click(merged, is_generating, inpaint_mode)
             result += [gr.update(visible=False), None]
             return result

@@ -428,6 +428,14 @@ div:has(> #positive_prompt) {
     background-color: rgba(20, 20, 20, 0.85);
 }
 
+/* Gradio 3.41.2 toggles visible=False via a scoped `.hide` class
+   (`.hide.svelte-xxxxx { display: none }`, specificity 0-2-0), which the
+   id selector above (1-0-0) would otherwise beat, leaving the overlay
+   permanently visible. Force it to lose. */
+#meta_confirm_modal.hide {
+    display: none !important;
+}
+
 .meta-confirm-panel {
     max-width: 560px;
     width: 90%;
