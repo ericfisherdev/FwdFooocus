@@ -1270,6 +1270,58 @@ with shared.gradio_root:
                     show_progress=False
                 )
 
+            with gr.Tab(label='Config'):
+                # Persistent remember-my-decision preferences (FWDF-180) for the
+                # metadata-load confirmation flow (FWDF-181/182). One radio per
+                # field, choices are the persistent DECISION_LABELS (distinct
+                # from the meta_confirm_modal's per-load "Use loaded value" /
+                # "Keep current" labels).
+                config_pref_decision_labels = list(modules.ui_prefs.DECISION_LABELS.values())
+                config_pref_radio_list = []
+                for field, field_label in meta_confirm_field_order:
+                    config_pref_radio_list.append(gr.Radio(
+                        label=f'{field_label} — remember my decision',
+                        choices=config_pref_decision_labels,
+                        value=modules.ui_prefs.decision_to_label(modules.ui_prefs.default_prefs.get(field)),
+                    ))
+
+                config_pref_reset_button = gr.Button(value='Reset all to Always ask')
+
+                def make_config_pref_change_handler(field):
+                    """
+                    Build a .change handler bound to one PrefField.
+
+                    A factory, not a closure over the loop variable — each
+                    call captures its own `field` argument, avoiding the
+                    late-binding trap where every handler would otherwise
+                    see the loop's final value of `field`.
+                    """
+                    def _handle_config_pref_change(label):
+                        modules.ui_prefs.default_prefs.set(field, modules.ui_prefs.label_to_decision(label))
+
+                    return _handle_config_pref_change
+
+                for (field, _field_label), radio in zip(meta_confirm_field_order, config_pref_radio_list):
+                    radio.change(make_config_pref_change_handler(field), inputs=radio,
+                                queue=False, show_progress=False)
+
+                def config_pref_reset_clicked():
+                    modules.ui_prefs.default_prefs.reset_all()
+                    ask_label = modules.ui_prefs.decision_to_label(modules.ui_prefs.RememberDecision.ASK)
+                    return [gr.update(value=ask_label) for _ in config_pref_radio_list]
+
+                config_pref_reset_button.click(config_pref_reset_clicked, outputs=config_pref_radio_list,
+                                               queue=False, show_progress=False)
+
+                def config_pref_refresh():
+                    return [
+                        gr.update(value=modules.ui_prefs.decision_to_label(modules.ui_prefs.default_prefs.get(field)))
+                        for field, _field_label in meta_confirm_field_order
+                    ]
+
+                shared.gradio_root.load(config_pref_refresh, outputs=config_pref_radio_list,
+                                        queue=False, show_progress=False)
+
         state_is_generating = gr.State(False)
 
         def _capabilities_for_base_model(base_model_filename):
@@ -1665,6 +1717,18 @@ with shared.gradio_root:
                                      outputs=meta_confirm_outputs, queue=False, show_progress=True) \
             .then(style_sorter.sort_styles, inputs=style_selections, outputs=style_selections, queue=False, show_progress=False)
 
+        def _config_pref_updates():
+            """Current Config-tab radio values, sourced from default_prefs.
+
+            Returned alongside every Apply-click result so a "remember my
+            decision" checkbox ticked in the modal is reflected in the
+            Config tab immediately, without a page reload.
+            """
+            return [
+                gr.update(value=modules.ui_prefs.decision_to_label(modules.ui_prefs.default_prefs.get(field)))
+                for field, _field_label in meta_confirm_field_order
+            ]
+
         def meta_confirm_apply_click(pending_metadata, is_generating, inpaint_mode, *radio_and_remember_values):
             field_count = len(meta_confirm_field_order)
             radio_values = radio_and_remember_values[:field_count]
@@ -1673,6 +1737,7 @@ with shared.gradio_root:
             if pending_metadata is None:
                 result = [gr.update() for _ in load_data_outputs]
                 result += [gr.update(visible=False), None]
+                result += _config_pref_updates()
                 return result
 
             resolved, asked_fields = pending_metadata
@@ -1692,11 +1757,13 @@ with shared.gradio_root:
             merged = modules.meta_confirm.apply_decisions(resolved, decisions)
             result = modules.meta_parser.load_parameter_button_click(merged, is_generating, inpaint_mode)
             result += [gr.update(visible=False), None]
+            result += _config_pref_updates()
             return result
 
         meta_confirm_apply.click(meta_confirm_apply_click,
                                  inputs=[pending_metadata, state_is_generating, inpaint_mode] + meta_confirm_radios + meta_confirm_remember_boxes,
-                                 outputs=load_data_outputs + [meta_confirm_modal, pending_metadata], queue=False, show_progress=False) \
+                                 outputs=load_data_outputs + [meta_confirm_modal, pending_metadata] + config_pref_radio_list,
+                                 queue=False, show_progress=False) \
             .then(style_sorter.sort_styles, inputs=style_selections, outputs=style_selections, queue=False, show_progress=False)
 
         meta_confirm_cancel.click(lambda: (gr.update(visible=False), None), outputs=[meta_confirm_modal, pending_metadata], queue=False, show_progress=False)
