@@ -118,6 +118,31 @@ class TestUIPrefs(unittest.TestCase):
             self.assertIn(field.value, group)
             self.assertIn(group[field.value], valid_values)
 
+    def test_invalid_utf8_degrades_to_ask(self):
+        from modules.ui_prefs import PrefField, RememberDecision, UIPrefs
+
+        with open(self.prefs_path, 'wb') as f:
+            f.write(b'\xff\xfe not valid utf-8')
+
+        prefs = UIPrefs(self.prefs_path)
+        for field in PrefField:
+            self.assertEqual(prefs.get(field), RememberDecision.ASK)
+
+    def test_save_preserves_unrelated_top_level_group(self):
+        from modules.ui_prefs import PrefField, RememberDecision, UIPrefs
+
+        with open(self.prefs_path, 'w', encoding='utf-8') as f:
+            json.dump({'other_group': {'some_key': 'some_value'}}, f)
+
+        prefs = UIPrefs(self.prefs_path)
+        prefs.set(PrefField.CHECKPOINT, RememberDecision.USE_METADATA)
+
+        with open(self.prefs_path, 'r', encoding='utf-8') as f:
+            payload = json.load(f)
+
+        self.assertEqual(payload['other_group'], {'some_key': 'some_value'})
+        self.assertEqual(payload['metadata_load']['checkpoint'], 'use_metadata')
+
     def test_on_disk_layout_is_namespaced(self):
         from modules.ui_prefs import PrefField, RememberDecision, UIPrefs
 
