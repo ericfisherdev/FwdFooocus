@@ -416,3 +416,25 @@ div:has(> #positive_prompt) {
 #inpaint_brush_color input[type=color]{
   background: none;
 }
+
+/* metadata-load confirmation modal */
+#meta_confirm_modal {
+    position: fixed;
+    inset: 0;
+    z-index: 1100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: rgba(20, 20, 20, 0.85);
+}
+
+.meta-confirm-panel {
+    max-width: 560px;
+    width: 90%;
+    max-height: 85vh;
+    overflow-y: auto;
+    padding: 1.5em;
+    border-radius: 8px;
+    background-color: var(--background-fill-primary, #1f1f1f);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.6);
+}
