@@ -135,6 +135,32 @@ class UIPrefs:
         if self._cache is None:
             self._cache = self._load()
 
+    def _read_raw_payload(self) -> dict:
+        """
+        Read the raw JSON root object from disk, tolerating any failure.
+
+        Used both to derive this ticket's preferences and, on save, to
+        preserve any other top-level groups already on disk.
+
+        Returns:
+            The parsed root object, or {} on a missing file, malformed
+            JSON, or a payload that is not a JSON object.
+        """
+        try:
+            with open(self._prefs_path, 'r', encoding='utf-8') as f:
+                payload = json.load(f)
+        except FileNotFoundError:
+            return {}
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
+            logger.warning(f"Failed to load UI prefs from {self._prefs_path}: {e}")
+            return {}
+
+        if not isinstance(payload, dict):
+            logger.warning(f"UI prefs file {self._prefs_path} did not contain a JSON object; using defaults")
+            return {}
+
+        return payload
+
     def _load(self) -> dict[PrefField, RememberDecision]:
         """
         Read preferences from the JSON file.
@@ -148,19 +174,7 @@ class UIPrefs:
         """
         defaults = {field: RememberDecision.ASK for field in PrefField}
 
-        try:
-            with open(self._prefs_path, 'r', encoding='utf-8') as f:
-                payload = json.load(f)
-        except FileNotFoundError:
-            return defaults
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning(f"Failed to load UI prefs from {self._prefs_path}: {e}")
-            return defaults
-
-        if not isinstance(payload, dict):
-            logger.warning(f"UI prefs file {self._prefs_path} did not contain a JSON object; using defaults")
-            return defaults
-
+        payload = self._read_raw_payload()
         group = payload.get(_PREFS_GROUP, {})
         if not isinstance(group, dict):
             logger.warning(f"UI prefs group '{_PREFS_GROUP}' was not a JSON object; using defaults")
@@ -184,13 +198,14 @@ class UIPrefs:
         """
         Atomically persist the in-memory preferences to disk.
 
-        Writes to a temp file in the same directory then renames it into
-        place, which is atomic on the same filesystem. On failure, logs a
-        warning and leaves the in-memory state untouched.
+        Preserves any other top-level groups already on disk (only the
+        metadata_load group is owned by this ticket) and writes to a temp
+        file in the same directory then renames it into place, which is
+        atomic on the same filesystem. On failure, logs a warning and
+        leaves the in-memory state untouched.
         """
-        payload = {
-            _PREFS_GROUP: {field.value: decision.value for field, decision in self._cache.items()},
-        }
+        payload = self._read_raw_payload()
+        payload[_PREFS_GROUP] = {field.value: decision.value for field, decision in self._cache.items()}
 
         directory = os.path.dirname(self._prefs_path) or '.'
         tmp_path = self._prefs_path + '.tmp'
