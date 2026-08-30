@@ -136,6 +136,33 @@ class TestUIPrefs(unittest.TestCase):
         self.assertEqual(verifying_instance.get(PrefField.CHECKPOINT), RememberDecision.USE_METADATA)
         self.assertEqual(verifying_instance.get(PrefField.SAMPLER), RememberDecision.KEEP_CURRENT)
 
+    def test_concurrent_writes_from_separate_instances_do_not_clobber(self):
+        from modules.ui_prefs import PrefField, RememberDecision, UIPrefs
+
+        instance_a = UIPrefs(self.prefs_path)
+        instance_b = UIPrefs(self.prefs_path)
+        instance_a.get(PrefField.CHECKPOINT)
+        instance_b.get(PrefField.SAMPLER)
+
+        barrier = threading.Barrier(2)
+
+        def worker(instance, field, decision):
+            barrier.wait()
+            instance.set(field, decision)
+
+        threads = [
+            threading.Thread(target=worker, args=(instance_a, PrefField.CHECKPOINT, RememberDecision.USE_METADATA)),
+            threading.Thread(target=worker, args=(instance_b, PrefField.SAMPLER, RememberDecision.KEEP_CURRENT)),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        verifying_instance = UIPrefs(self.prefs_path)
+        self.assertEqual(verifying_instance.get(PrefField.CHECKPOINT), RememberDecision.USE_METADATA)
+        self.assertEqual(verifying_instance.get(PrefField.SAMPLER), RememberDecision.KEEP_CURRENT)
+
     def test_invalid_utf8_degrades_to_ask(self):
         from modules.ui_prefs import PrefField, RememberDecision, UIPrefs
 

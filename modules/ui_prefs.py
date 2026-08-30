@@ -18,6 +18,30 @@ logger = logging.getLogger(__name__)
 
 _PREFS_GROUP = 'metadata_load'
 
+_path_locks: dict[str, threading.Lock] = {}
+_path_locks_registry_lock = threading.Lock()
+
+
+def _get_path_lock(prefs_path: str) -> threading.Lock:
+    """
+    Get (creating if needed) the process-wide lock for a prefs file path.
+
+    Keyed by the normalized path so any two UIPrefs instances pointed at
+    the same file, not just the same instance, serialize their
+    reload-update-save sequences against each other.
+
+    Args:
+        prefs_path: Path to the JSON file used for persistence.
+
+    Returns:
+        The shared lock for that path.
+    """
+    normalized = os.path.realpath(prefs_path)
+    with _path_locks_registry_lock:
+        if normalized not in _path_locks:
+            _path_locks[normalized] = threading.Lock()
+        return _path_locks[normalized]
+
 
 class PrefField(Enum):
     CHECKPOINT = 'checkpoint'
@@ -83,7 +107,7 @@ class UIPrefs:
                         via the constructor so tests can point at a tmp path.
         """
         self._prefs_path = prefs_path
-        self._lock = threading.Lock()
+        self._lock = _get_path_lock(prefs_path)
         self._cache: dict[PrefField, RememberDecision] | None = None
 
     def get(self, field: PrefField) -> RememberDecision:
