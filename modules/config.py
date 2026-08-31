@@ -840,6 +840,12 @@ def update_files():
     return
 
 
+def update_wildcard_files():
+    global wildcard_filenames
+    wildcard_filenames = get_files_from_folder(path_wildcards, ['.txt'])
+    return
+
+
 def downloading_inpaint_models(v):
     assert v in modules.flags.inpaint_engine_versions
 
