@@ -587,6 +587,30 @@ default_inpaint_method = get_config_item_or_set_default(
     validator=lambda x: x in modules.flags.inpaint_options,
     expected_type=str
 )
+default_inpaint_engines = {}
+default_inpaint_strengths = {}
+default_inpaint_respective_fields = {}
+
+for slug, method, engine_default, strength_default, field_default in [
+    ('default', modules.flags.inpaint_option_default, default_inpaint_engine_version, 1.0, 0.618),
+    ('detail', modules.flags.inpaint_option_detail, 'None', 0.5, 0.0),
+    ('modify', modules.flags.inpaint_option_modify, default_inpaint_engine_version, 1.0, 0.0),
+]:
+    default_inpaint_engines[method] = get_config_item_or_set_default(
+        key=f'default_inpaint_engine_{slug}',
+        default_value=engine_default,
+        validator=lambda x: x in modules.flags.inpaint_engine_versions,
+        expected_type=str)
+    default_inpaint_strengths[method] = float(get_config_item_or_set_default(
+        key=f'default_inpaint_strength_{slug}',
+        default_value=strength_default,
+        validator=lambda x: isinstance(x, numbers.Number) and not isinstance(x, bool) and 0 <= x <= 1,
+        expected_type=float))
+    default_inpaint_respective_fields[method] = float(get_config_item_or_set_default(
+        key=f'default_inpaint_respective_field_{slug}',
+        default_value=field_default,
+        validator=lambda x: isinstance(x, numbers.Number) and not isinstance(x, bool) and 0 <= x <= 1,
+        expected_type=float))
 default_cfg_tsnr = get_config_item_or_set_default(
     key='default_cfg_tsnr',
     default_value=7.0,
