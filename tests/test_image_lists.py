@@ -7,6 +7,7 @@ exercise it directly against tmp_path fixtures -- no heavy dependencies
 tests/test_wildcard_ui.py's approach for the other pure-logic module.
 """
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -102,11 +103,14 @@ class TestSanitizeListName:
     def test_empty_after_sanitization_falls_back_to_default(self):
         assert sanitize_list_name('...') == 'unnamed_list'
 
+    def test_strips_control_characters(self):
+        assert sanitize_list_name('my\nlist\tname\x00') == 'my_list_name_'
+
 
 class TestListDirRoundTrip:
     def test_create_list_then_appears_in_list_image_lists(self, tmp_path, root_dir, source_root):
         src = _make_png(str(Path(source_root) / 'a.png'))
-        success, _ = save_image_to_list('My List', src, root_dir, source_root_dir=source_root)
+        success, _ = save_image_to_list('My List', src, root_dir, source_root_dirs=source_root)
 
         assert success
         assert 'My List' in list_image_lists(root_dir)
@@ -147,7 +151,7 @@ class TestSaveImageToList:
         src = _make_png(str(Path(source_root) / 'a.png'), parameters='{"prompt": "a cat"}')
 
         success, message = save_image_to_list(
-            'cats', src, root_dir, source_root_dir=source_root, metadata=[('Prompt', 'prompt', 'a cat')])
+            'cats', src, root_dir, source_root_dirs=source_root, metadata=[('Prompt', 'prompt', 'a cat')])
 
         assert success, message
         list_dir = get_list_dir('cats', root_dir)
@@ -165,8 +169,8 @@ class TestSaveImageToList:
         src_a = _make_png(str(Path(source_root) / 'a.png'))
         src_b = _make_png(str(Path(source_root) / 'b.png'))
 
-        save_image_to_list('cats', src_a, root_dir, source_root_dir=source_root, metadata=[('Filename', 'filename', 'a.png')])
-        save_image_to_list('cats', src_b, root_dir, source_root_dir=source_root, metadata=[('Filename', 'filename', 'b.png')])
+        save_image_to_list('cats', src_a, root_dir, source_root_dirs=source_root, metadata=[('Filename', 'filename', 'a.png')])
+        save_image_to_list('cats', src_b, root_dir, source_root_dirs=source_root, metadata=[('Filename', 'filename', 'b.png')])
 
         list_dir = get_list_dir('cats', root_dir)
         log_content = open(os.path.join(list_dir, 'log.html'), encoding='utf-8').read()
@@ -180,8 +184,8 @@ class TestSaveImageToList:
     def test_saving_same_filename_twice_overwrites_without_duplicating_log_entry(self, tmp_path, root_dir, source_root):
         src = _make_png(str(Path(source_root) / 'a.png'))
 
-        save_image_to_list('cats', src, root_dir, source_root_dir=source_root, metadata=[('Filename', 'filename', 'a.png')])
-        success, message = save_image_to_list('cats', src, root_dir, source_root_dir=source_root, metadata=[('Filename', 'filename', 'a.png')])
+        save_image_to_list('cats', src, root_dir, source_root_dirs=source_root, metadata=[('Filename', 'filename', 'a.png')])
+        success, message = save_image_to_list('cats', src, root_dir, source_root_dirs=source_root, metadata=[('Filename', 'filename', 'a.png')])
 
         assert success
         assert 'Updated' in message
@@ -197,12 +201,12 @@ class TestSaveImageToList:
         src_a = _make_png(str(Path(source_root) / 'a.png'))
         src_b = _make_png(str(Path(source_root) / 'b.png'))
 
-        save_image_to_list('cats', src_a, root_dir, source_root_dir=source_root, metadata=[('Filename', 'filename', 'a.png')])
+        save_image_to_list('cats', src_a, root_dir, source_root_dirs=source_root, metadata=[('Filename', 'filename', 'a.png')])
 
         # Simulate restart: process-local cache is gone, but the file is not.
         private_logger.log_cache.clear()
 
-        save_image_to_list('cats', src_b, root_dir, source_root_dir=source_root, metadata=[('Filename', 'filename', 'b.png')])
+        save_image_to_list('cats', src_b, root_dir, source_root_dirs=source_root, metadata=[('Filename', 'filename', 'b.png')])
 
         list_dir = get_list_dir('cats', root_dir)
         log_content = open(os.path.join(list_dir, 'log.html'), encoding='utf-8').read()
@@ -212,8 +216,8 @@ class TestSaveImageToList:
     def test_saving_one_image_to_two_lists_produces_copies_and_entries_in_both(self, tmp_path, root_dir, source_root):
         src = _make_png(str(Path(source_root) / 'a.png'))
 
-        save_image_to_list('cats', src, root_dir, source_root_dir=source_root, metadata=[('Filename', 'filename', 'a.png')])
-        save_image_to_list('favorites', src, root_dir, source_root_dir=source_root, metadata=[('Filename', 'filename', 'a.png')])
+        save_image_to_list('cats', src, root_dir, source_root_dirs=source_root, metadata=[('Filename', 'filename', 'a.png')])
+        save_image_to_list('favorites', src, root_dir, source_root_dirs=source_root, metadata=[('Filename', 'filename', 'a.png')])
 
         cats_dir = get_list_dir('cats', root_dir)
         favorites_dir = get_list_dir('favorites', root_dir)
@@ -228,13 +232,13 @@ class TestSaveImageToList:
         src = _make_png(str(Path(source_root) / 'a.png'))
         original_bytes = open(src, 'rb').read()
 
-        save_image_to_list('cats', src, root_dir, source_root_dir=source_root, metadata=[('Filename', 'filename', 'a.png')])
+        save_image_to_list('cats', src, root_dir, source_root_dirs=source_root, metadata=[('Filename', 'filename', 'a.png')])
 
         assert open(src, 'rb').read() == original_bytes
 
     def test_missing_source_file_fails_without_raising(self, root_dir, source_root):
         missing = os.path.join(source_root, 'does_not_exist.png')
-        success, message = save_image_to_list('cats', missing, root_dir, source_root_dir=source_root)
+        success, message = save_image_to_list('cats', missing, root_dir, source_root_dirs=source_root)
         assert not success
         assert 'not found' in message
 
@@ -244,7 +248,7 @@ class TestSaveImageToList:
         os.symlink(str(outside), os.path.join(root_dir, 'escape'))
         src = _make_png(str(Path(source_root) / 'a.png'))
 
-        success, message = save_image_to_list('escape', src, root_dir, source_root_dir=source_root)
+        success, message = save_image_to_list('escape', src, root_dir, source_root_dirs=source_root)
         assert not success
         assert 'Invalid list name' in message
 
@@ -258,7 +262,7 @@ class TestSaveImageToList:
         outside.mkdir()
         src = _make_png(str(outside / 'a.png'))
 
-        success, message = save_image_to_list('cats', src, root_dir, source_root_dir=source_root)
+        success, message = save_image_to_list('cats', src, root_dir, source_root_dirs=source_root)
 
         assert not success
         assert 'outside allowed directory' in message
@@ -271,7 +275,7 @@ class TestSaveImageToList:
         _make_png(str(outside / 'secret.png'))
         traversal_path = os.path.join(source_root, '..', 'elsewhere', 'secret.png')
 
-        success, message = save_image_to_list('cats', traversal_path, root_dir, source_root_dir=source_root)
+        success, message = save_image_to_list('cats', traversal_path, root_dir, source_root_dirs=source_root)
 
         assert not success
         assert 'outside allowed directory' in message
@@ -283,10 +287,91 @@ class TestSaveImageToList:
         symlinked_path = os.path.join(source_root, 'escape.png')
         os.symlink(real_secret, symlinked_path)
 
-        success, message = save_image_to_list('cats', symlinked_path, root_dir, source_root_dir=source_root)
+        success, message = save_image_to_list('cats', symlinked_path, root_dir, source_root_dirs=source_root)
 
         assert not success
         assert 'outside allowed directory' in message
+
+    def test_accepts_source_under_second_allowed_root(self, tmp_path, root_dir, source_root):
+        """source_root_dirs takes a list -- webui.py passes both
+        path_outputs and temp_path since a gallery path can point into
+        either (see private_logger.log's persist_image branch). A source
+        under the *second* root, not the first, must still be accepted."""
+        temp_root = tmp_path / 'temp'
+        temp_root.mkdir()
+        src = _make_png(str(temp_root / 'a.png'))
+
+        success, message = save_image_to_list(
+            'cats', src, root_dir, source_root_dirs=[source_root, str(temp_root)])
+
+        assert success, message
+        list_dir = get_list_dir('cats', root_dir)
+        assert os.path.isfile(os.path.join(list_dir, 'a.png'))
+
+    def test_concurrent_saves_of_different_files_both_persist_log_entries(self, tmp_path, root_dir, source_root):
+        """save_to_list handlers run queue=False in webui.py, so Gradio can
+        invoke them from concurrent request threads -- the module-level
+        _save_lock must serialize the copy-plus-log section so two
+        concurrent saves into the same list cannot lose either entry to
+        the other's log.html rewrite."""
+        import threading
+
+        src_a = _make_png(str(Path(source_root) / 'a.png'))
+        src_b = _make_png(str(Path(source_root) / 'b.png'))
+        results = {}
+
+        def worker(key, src, filename):
+            results[key] = save_image_to_list(
+                'cats', src, root_dir, source_root_dirs=source_root,
+                metadata=[('Filename', 'filename', filename)])
+
+        t_a = threading.Thread(target=worker, args=('a', src_a, 'a.png'))
+        t_b = threading.Thread(target=worker, args=('b', src_b, 'b.png'))
+        t_a.start()
+        t_b.start()
+        t_a.join()
+        t_b.join()
+
+        assert results['a'][0], results['a'][1]
+        assert results['b'][0], results['b'][1]
+        list_dir = get_list_dir('cats', root_dir)
+        log_content = open(os.path.join(list_dir, 'log.html'), encoding='utf-8').read()
+        assert 'a.png' in log_content
+        assert 'b.png' in log_content
+
+    def test_failed_copy_leaves_no_partial_file_and_retry_still_logs(self, tmp_path, root_dir, source_root, monkeypatch):
+        """A copy that fails partway (disk full, crash) must not leave a
+        partial file at the final destination -- an in-place O_TRUNC write
+        would let a retry see already_saved=True from the partial file and
+        permanently skip the log entry. The temp-name-plus-os.replace
+        write means the destination only ever exists fully written."""
+        import modules.image_lists as image_lists_module
+
+        src = _make_png(str(Path(source_root) / 'a.png'))
+        original_copyfileobj = shutil.copyfileobj
+        call_count = {'n': 0}
+
+        def flaky_copyfileobj(fsrc, fdst):
+            call_count['n'] += 1
+            if call_count['n'] == 1:
+                fdst.write(b'partial-bytes')
+                raise OSError('simulated disk full')
+            return original_copyfileobj(fsrc, fdst)
+
+        monkeypatch.setattr(image_lists_module.shutil, 'copyfileobj', flaky_copyfileobj)
+
+        success, message = save_image_to_list('cats', src, root_dir, source_root_dirs=source_root)
+        assert not success
+
+        list_dir = get_list_dir('cats', root_dir)
+        dest = os.path.join(list_dir, 'a.png')
+        assert not os.path.exists(dest)
+        assert not os.path.exists(dest + '.tmp')
+
+        success, message = save_image_to_list('cats', src, root_dir, source_root_dirs=source_root)
+        assert success, message
+        log_content = open(os.path.join(list_dir, 'log.html'), encoding='utf-8').read()
+        assert 'a.png' in log_content
 
 
 class TestMetadataRegistry:
@@ -326,7 +411,7 @@ class TestMetadataRegistry:
         still succeed with a reduced log entry rather than raising."""
         src = _make_png(str(Path(source_root) / 'a.png'))  # no pnginfo, no registry entry
 
-        success, message = save_image_to_list('cats', src, root_dir, source_root_dir=source_root)
+        success, message = save_image_to_list('cats', src, root_dir, source_root_dirs=source_root)
 
         assert success, message
         list_dir = get_list_dir('cats', root_dir)

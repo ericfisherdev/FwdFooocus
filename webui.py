@@ -1945,8 +1945,8 @@ with shared.gradio_root:
 
         meta_confirm_cancel.click(lambda: (gr.update(visible=False), None), outputs=[meta_confirm_modal, pending_metadata], queue=False, show_progress=False)
 
-        generate_button.click(lambda: (gr.update(visible=True, interactive=True), gr.update(visible=True, interactive=True), gr.update(visible=False, interactive=False), [], True, []),
-                              outputs=[stop_button, skip_button, generate_button, gallery, state_is_generating, gallery_paths_state]) \
+        generate_button.click(lambda: (gr.update(visible=True, interactive=True), gr.update(visible=True, interactive=True), gr.update(visible=False, interactive=False), [], True, [], -1),
+                              outputs=[stop_button, skip_button, generate_button, gallery, state_is_generating, gallery_paths_state, selected_gallery_index]) \
             .then(fn=refresh_seed, inputs=[seed_random, image_seed], outputs=image_seed) \
             .then(fn=get_task, inputs=ctrls, outputs=currentTask) \
             .then(fn=generate_clicked, inputs=currentTask, outputs=[progress_html, progress_window, progress_gallery, gallery, gallery_paths_state]) \
@@ -1957,11 +1957,11 @@ with shared.gradio_root:
 
         reset_button.click(lambda: [worker.AsyncTask(args=[]), False, gr.update(visible=True, interactive=True)] +
                                    [gr.update(visible=False)] * 6 +
-                                   [gr.update(visible=True, value=[]), []],
+                                   [gr.update(visible=True, value=[]), [], -1],
                            outputs=[currentTask, state_is_generating, generate_button,
                                     reset_button, stop_button, skip_button,
                                     progress_html, progress_window, progress_gallery, gallery,
-                                    gallery_paths_state],
+                                    gallery_paths_state, selected_gallery_index],
                            queue=False)
 
         # FWDF-188 -- Save to List handlers. Follow the LoRA preset dialog
@@ -2014,9 +2014,14 @@ with shared.gradio_root:
                         gr.update(), gr.update(visible=True))
 
             source_path = gallery_paths[selected_index]
+            # A gallery path normally lives under path_outputs, but lands
+            # under temp_path instead when --disable-image-log is set or a
+            # given image wasn't persisted (see private_logger.log's
+            # persist_image branch) -- both are app-controlled directories,
+            # so either is a legitimate source.
             success, message = modules.image_lists.save_image_to_list(
                 list_name, source_path, modules.config.path_image_lists,
-                source_root_dir=modules.config.path_outputs)
+                source_root_dirs=[modules.config.path_outputs, modules.config.temp_path])
 
             icon = '✅' if success else '❌'
             status_update = gr.update(visible=True, value=f'{icon} {message}')
