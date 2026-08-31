@@ -183,6 +183,7 @@ class AsyncTask:
         self.images_to_enhance_count = 0
         self.enhance_stats = {}
 
+
 def decode_eraser_mask(data_url, width, height):
     """Decode an inpaint-eraser PNG data URL (javascript/inpaint_eraser.js)
     into a binarized uint8 mask of shape (height, width), or None when there
