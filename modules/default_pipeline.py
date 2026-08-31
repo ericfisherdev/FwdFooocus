@@ -1,4 +1,5 @@
 import modules.core as core
+import gc
 import os
 import threading
 import torch
@@ -92,6 +93,43 @@ def assert_model_integrity():
     return True
 
 
+def _release_model(model):
+    """Evicts every patcher owned by `model` (base UNet, LoRA-patched UNet
+    clone, CLIP, CLIP vision, VAE) from ldm_patched's resident-model cache.
+
+    unload_model_clones/free_memory/cleanup_models
+    (ldm_patched/modules/model_management.py) have no other call sites in this
+    fork, so without this, an outgoing checkpoint's sampling clones stay
+    pinned in current_loaded_models: eviction only happens lazily, at the
+    incoming checkpoint's first load, meaning both checkpoints' weights are
+    resident in RAM/VRAM at once during a swap -- causing the swap thrash and
+    multi-minute stall this releases (FWDF-187).
+
+    Call BEFORE loading the replacement checkpoint. This only unloads; the
+    caller must immediately rebind its global to a fresh StableDiffusionModel(),
+    then call gc.collect() followed by soft_empty_cache(), in that order --
+    soft_empty_cache()/torch's empty_cache() only frees blocks with no live
+    references, so clearing the cache before the rebind (and before gc drops
+    any remaining cyclic references) leaves the old weights resident.
+    """
+    clip = model.clip
+    clip_with_lora = model.clip_with_lora
+    clip_vision = model.clip_vision
+    vae = model.vae
+
+    patchers = (
+        model.unet,
+        model.unet_with_lora,
+        clip.patcher if clip is not None else None,
+        clip_with_lora.patcher if clip_with_lora is not None else None,
+        clip_vision.patcher if clip_vision is not None else None,
+        vae.patcher if vae is not None else None,
+    )
+    for patcher in patchers:
+        if patcher is not None:
+            ldm_patched.modules.model_management.unload_model_clones(patcher)
+
+
 @torch.no_grad()
 @torch.inference_mode()
 def refresh_base_model(name, vae_name=None):
@@ -119,6 +157,11 @@ def refresh_base_model(name, vae_name=None):
 
     if family == ModelFamily.Z_IMAGE:
         modules.config.downloading_z_image_vae()
+
+    _release_model(model_base)
+    model_base = core.StableDiffusionModel()
+    gc.collect()
+    ldm_patched.modules.model_management.soft_empty_cache()
 
     model_base = core.load_model(filename, vae_filename)
     model_base.family = family
@@ -148,7 +191,10 @@ def refresh_refiner_model(name):
     if model_refiner.filename == filename:
         return
 
+    _release_model(model_refiner)
     model_refiner = core.StableDiffusionModel()
+    gc.collect()
+    ldm_patched.modules.model_management.soft_empty_cache()
 
     if name == 'None':
         print(f'Refiner unloaded.')
@@ -303,7 +349,7 @@ def prepare_text_encoder(async_call=True):
 @torch.inference_mode()
 def refresh_everything(refiner_model_name, base_model_name, loras,
                        base_model_additional_loras=None, use_synthetic_refiner=False, vae_name=None):
-    global final_unet, final_clip, final_vae, final_refiner_unet, final_refiner_vae, final_expansion
+    global model_refiner, final_unet, final_clip, final_vae, final_refiner_unet, final_refiner_vae, final_expansion
 
     final_unet = None
     final_clip = None
@@ -319,6 +365,18 @@ def refresh_everything(refiner_model_name, base_model_name, loras,
 
     if use_synthetic_refiner and refiner_model_name == 'None':
         print('Synthetic Refiner Activated')
+        # The synthetic refiner (synthesize_refiner_model(), below) aliases
+        # model_base's own patchers rather than owning independent ones, and
+        # is only re-synthesized AFTER refresh_base_model() below swaps
+        # model_base -- so a stale synthetic model_refiner from a previous
+        # request still references the outgoing base model's patchers here.
+        # Release it first so those references don't re-pin the outgoing
+        # checkpoint through refresh_base_model()'s own release/swap.
+        _release_model(model_refiner)
+        model_refiner = core.StableDiffusionModel()
+        gc.collect()
+        ldm_patched.modules.model_management.soft_empty_cache()
+
         refresh_base_model(base_model_name, vae_name)
         synthesize_refiner_model()
     else:
