@@ -2015,7 +2015,8 @@ with shared.gradio_root:
 
             source_path = gallery_paths[selected_index]
             success, message = modules.image_lists.save_image_to_list(
-                list_name, source_path, modules.config.path_image_lists)
+                list_name, source_path, modules.config.path_image_lists,
+                source_root_dir=modules.config.path_outputs)
 
             icon = '✅' if success else '❌'
             status_update = gr.update(visible=True, value=f'{icon} {message}')

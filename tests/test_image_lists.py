@@ -69,6 +69,15 @@ def root_dir(tmp_path):
     return str(lists_dir)
 
 
+@pytest.fixture
+def source_root(tmp_path):
+    """The directory save_image_to_list confines source_image_path to --
+    stands in for modules.config.path_outputs in production."""
+    src_dir = tmp_path / 'outputs'
+    src_dir.mkdir()
+    return str(src_dir)
+
+
 def _make_png(path, parameters=None):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     image = Image.new('RGB', (4, 4), color=(10, 20, 30))
@@ -95,9 +104,9 @@ class TestSanitizeListName:
 
 
 class TestListDirRoundTrip:
-    def test_create_list_then_appears_in_list_image_lists(self, tmp_path, root_dir):
-        src = _make_png(str(tmp_path / 'src' / 'a.png'))
-        success, _ = save_image_to_list('My List', src, root_dir)
+    def test_create_list_then_appears_in_list_image_lists(self, tmp_path, root_dir, source_root):
+        src = _make_png(str(Path(source_root) / 'a.png'))
+        success, _ = save_image_to_list('My List', src, root_dir, source_root_dir=source_root)
 
         assert success
         assert 'My List' in list_image_lists(root_dir)
@@ -106,11 +115,21 @@ class TestListDirRoundTrip:
     def test_list_exists_false_for_missing_list(self, root_dir):
         assert not list_exists('nope', root_dir)
 
-    def test_get_list_dir_rejects_traversal_outside_root(self, root_dir):
+    def test_get_list_dir_rejects_dotdot_traversal(self, root_dir):
         # sanitize_list_name replaces '/' with '_', so a traversal-looking
         # name can't actually escape root_dir -- assert the resolved dir
         # stays inside it rather than expecting an outright rejection.
         resolved = get_list_dir('../../etc', root_dir)
+        assert resolved is not None
+        assert os.path.commonpath([os.path.realpath(root_dir), resolved]) == os.path.realpath(root_dir)
+
+    def test_get_list_dir_rejects_absolute_path_name(self, root_dir):
+        resolved = get_list_dir('/etc/passwd', root_dir)
+        assert resolved is not None
+        assert os.path.commonpath([os.path.realpath(root_dir), resolved]) == os.path.realpath(root_dir)
+
+    def test_get_list_dir_rejects_name_containing_separator(self, root_dir):
+        resolved = get_list_dir('a/b/../../c', root_dir)
         assert resolved is not None
         assert os.path.commonpath([os.path.realpath(root_dir), resolved]) == os.path.realpath(root_dir)
 
@@ -124,11 +143,11 @@ class TestListDirRoundTrip:
 
 
 class TestSaveImageToList:
-    def test_copies_file_byte_identical_and_writes_log_entry(self, tmp_path, root_dir):
-        src = _make_png(str(tmp_path / 'src' / 'a.png'), parameters='{"prompt": "a cat"}')
+    def test_copies_file_byte_identical_and_writes_log_entry(self, tmp_path, root_dir, source_root):
+        src = _make_png(str(Path(source_root) / 'a.png'), parameters='{"prompt": "a cat"}')
 
         success, message = save_image_to_list(
-            'cats', src, root_dir, metadata=[('Prompt', 'prompt', 'a cat')])
+            'cats', src, root_dir, source_root_dir=source_root, metadata=[('Prompt', 'prompt', 'a cat')])
 
         assert success, message
         list_dir = get_list_dir('cats', root_dir)
@@ -142,12 +161,12 @@ class TestSaveImageToList:
         assert 'a.png' in log_content
         assert 'a cat' in log_content
 
-    def test_second_save_appends_newest_first(self, tmp_path, root_dir):
-        src_a = _make_png(str(tmp_path / 'src' / 'a.png'))
-        src_b = _make_png(str(tmp_path / 'src' / 'b.png'))
+    def test_second_save_appends_newest_first(self, tmp_path, root_dir, source_root):
+        src_a = _make_png(str(Path(source_root) / 'a.png'))
+        src_b = _make_png(str(Path(source_root) / 'b.png'))
 
-        save_image_to_list('cats', src_a, root_dir, metadata=[('Filename', 'filename', 'a.png')])
-        save_image_to_list('cats', src_b, root_dir, metadata=[('Filename', 'filename', 'b.png')])
+        save_image_to_list('cats', src_a, root_dir, source_root_dir=source_root, metadata=[('Filename', 'filename', 'a.png')])
+        save_image_to_list('cats', src_b, root_dir, source_root_dir=source_root, metadata=[('Filename', 'filename', 'b.png')])
 
         list_dir = get_list_dir('cats', root_dir)
         log_content = open(os.path.join(list_dir, 'log.html'), encoding='utf-8').read()
@@ -158,11 +177,11 @@ class TestSaveImageToList:
         assert os.path.isfile(os.path.join(list_dir, 'a.png'))
         assert os.path.isfile(os.path.join(list_dir, 'b.png'))
 
-    def test_saving_same_filename_twice_overwrites_without_duplicating_log_entry(self, tmp_path, root_dir):
-        src = _make_png(str(tmp_path / 'src' / 'a.png'))
+    def test_saving_same_filename_twice_overwrites_without_duplicating_log_entry(self, tmp_path, root_dir, source_root):
+        src = _make_png(str(Path(source_root) / 'a.png'))
 
-        save_image_to_list('cats', src, root_dir, metadata=[('Filename', 'filename', 'a.png')])
-        success, message = save_image_to_list('cats', src, root_dir, metadata=[('Filename', 'filename', 'a.png')])
+        save_image_to_list('cats', src, root_dir, source_root_dir=source_root, metadata=[('Filename', 'filename', 'a.png')])
+        success, message = save_image_to_list('cats', src, root_dir, source_root_dir=source_root, metadata=[('Filename', 'filename', 'a.png')])
 
         assert success
         assert 'Updated' in message
@@ -170,31 +189,31 @@ class TestSaveImageToList:
         log_content = open(os.path.join(list_dir, 'log.html'), encoding='utf-8').read()
         assert log_content.count('a.png') == 1  # one <div id="a_png"> container, not two
 
-    def test_append_survives_log_cache_being_cleared_cold_start(self, tmp_path, root_dir):
+    def test_append_survives_log_cache_being_cleared_cold_start(self, tmp_path, root_dir, source_root):
         """Simulates a server restart: the module-level log_cache in
         private_logger is empty, but log.html already exists on disk from a
         prior save -- appending must recover and preserve the existing
         entry, not clobber it."""
-        src_a = _make_png(str(tmp_path / 'src' / 'a.png'))
-        src_b = _make_png(str(tmp_path / 'src' / 'b.png'))
+        src_a = _make_png(str(Path(source_root) / 'a.png'))
+        src_b = _make_png(str(Path(source_root) / 'b.png'))
 
-        save_image_to_list('cats', src_a, root_dir, metadata=[('Filename', 'filename', 'a.png')])
+        save_image_to_list('cats', src_a, root_dir, source_root_dir=source_root, metadata=[('Filename', 'filename', 'a.png')])
 
         # Simulate restart: process-local cache is gone, but the file is not.
         private_logger.log_cache.clear()
 
-        save_image_to_list('cats', src_b, root_dir, metadata=[('Filename', 'filename', 'b.png')])
+        save_image_to_list('cats', src_b, root_dir, source_root_dir=source_root, metadata=[('Filename', 'filename', 'b.png')])
 
         list_dir = get_list_dir('cats', root_dir)
         log_content = open(os.path.join(list_dir, 'log.html'), encoding='utf-8').read()
         assert 'a.png' in log_content
         assert 'b.png' in log_content
 
-    def test_saving_one_image_to_two_lists_produces_copies_and_entries_in_both(self, tmp_path, root_dir):
-        src = _make_png(str(tmp_path / 'src' / 'a.png'))
+    def test_saving_one_image_to_two_lists_produces_copies_and_entries_in_both(self, tmp_path, root_dir, source_root):
+        src = _make_png(str(Path(source_root) / 'a.png'))
 
-        save_image_to_list('cats', src, root_dir, metadata=[('Filename', 'filename', 'a.png')])
-        save_image_to_list('favorites', src, root_dir, metadata=[('Filename', 'filename', 'a.png')])
+        save_image_to_list('cats', src, root_dir, source_root_dir=source_root, metadata=[('Filename', 'filename', 'a.png')])
+        save_image_to_list('favorites', src, root_dir, source_root_dir=source_root, metadata=[('Filename', 'filename', 'a.png')])
 
         cats_dir = get_list_dir('cats', root_dir)
         favorites_dir = get_list_dir('favorites', root_dir)
@@ -203,30 +222,71 @@ class TestSaveImageToList:
         assert os.path.isfile(os.path.join(cats_dir, 'log.html'))
         assert os.path.isfile(os.path.join(favorites_dir, 'log.html'))
 
-    def test_default_output_copy_untouched(self, tmp_path, root_dir):
+    def test_default_output_copy_untouched(self, tmp_path, root_dir, source_root):
         """save_image_to_list only ever writes under root_dir -- the
         original file at its default-output location is a pure read."""
-        src = _make_png(str(tmp_path / 'src' / 'a.png'))
+        src = _make_png(str(Path(source_root) / 'a.png'))
         original_bytes = open(src, 'rb').read()
 
-        save_image_to_list('cats', src, root_dir, metadata=[('Filename', 'filename', 'a.png')])
+        save_image_to_list('cats', src, root_dir, source_root_dir=source_root, metadata=[('Filename', 'filename', 'a.png')])
 
         assert open(src, 'rb').read() == original_bytes
 
-    def test_missing_source_file_fails_without_raising(self, root_dir):
-        success, message = save_image_to_list('cats', '/does/not/exist.png', root_dir)
+    def test_missing_source_file_fails_without_raising(self, root_dir, source_root):
+        missing = os.path.join(source_root, 'does_not_exist.png')
+        success, message = save_image_to_list('cats', missing, root_dir, source_root_dir=source_root)
         assert not success
         assert 'not found' in message
 
-    def test_invalid_list_name_that_escapes_root_fails_gracefully(self, tmp_path, root_dir):
+    def test_invalid_list_name_that_escapes_root_fails_gracefully(self, tmp_path, root_dir, source_root):
         outside = tmp_path / 'outside'
         outside.mkdir()
         os.symlink(str(outside), os.path.join(root_dir, 'escape'))
-        src = _make_png(str(tmp_path / 'src' / 'a.png'))
+        src = _make_png(str(Path(source_root) / 'a.png'))
 
-        success, message = save_image_to_list('escape', src, root_dir)
+        success, message = save_image_to_list('escape', src, root_dir, source_root_dir=source_root)
         assert not success
         assert 'Invalid list name' in message
+
+    def test_source_path_outside_source_root_is_rejected(self, tmp_path, root_dir, source_root):
+        """A source_image_path pointing outside source_root_dir (the
+        modules.config.path_outputs stand-in) must be rejected before any
+        filesystem operation touches it -- this is the confinement CodeQL's
+        py/path-injection check requires at every sink, not just for the
+        list name."""
+        outside = tmp_path / 'elsewhere'
+        outside.mkdir()
+        src = _make_png(str(outside / 'a.png'))
+
+        success, message = save_image_to_list('cats', src, root_dir, source_root_dir=source_root)
+
+        assert not success
+        assert 'outside allowed directory' in message
+        # nothing should have been created under root_dir
+        assert list_image_lists(root_dir) == []
+
+    def test_source_path_with_dotdot_traversal_is_rejected(self, tmp_path, root_dir, source_root):
+        outside = tmp_path / 'elsewhere'
+        outside.mkdir()
+        _make_png(str(outside / 'secret.png'))
+        traversal_path = os.path.join(source_root, '..', 'elsewhere', 'secret.png')
+
+        success, message = save_image_to_list('cats', traversal_path, root_dir, source_root_dir=source_root)
+
+        assert not success
+        assert 'outside allowed directory' in message
+
+    def test_source_path_via_symlink_escape_is_rejected(self, tmp_path, root_dir, source_root):
+        outside = tmp_path / 'elsewhere'
+        outside.mkdir()
+        real_secret = _make_png(str(outside / 'secret.png'))
+        symlinked_path = os.path.join(source_root, 'escape.png')
+        os.symlink(real_secret, symlinked_path)
+
+        success, message = save_image_to_list('cats', symlinked_path, root_dir, source_root_dir=source_root)
+
+        assert not success
+        assert 'outside allowed directory' in message
 
 
 class TestMetadataRegistry:
@@ -261,12 +321,12 @@ class TestMetadataRegistry:
         assert metadata is None
         assert task is None
 
-    def test_save_image_to_list_falls_back_to_reduced_entry_when_metadata_missing(self, tmp_path, root_dir):
+    def test_save_image_to_list_falls_back_to_reduced_entry_when_metadata_missing(self, tmp_path, root_dir, source_root):
         """With no recorded metadata and no embedded metadata, saving must
         still succeed with a reduced log entry rather than raising."""
-        src = _make_png(str(tmp_path / 'src' / 'a.png'))  # no pnginfo, no registry entry
+        src = _make_png(str(Path(source_root) / 'a.png'))  # no pnginfo, no registry entry
 
-        success, message = save_image_to_list('cats', src, root_dir)
+        success, message = save_image_to_list('cats', src, root_dir, source_root_dir=source_root)
 
         assert success, message
         list_dir = get_list_dir('cats', root_dir)
