@@ -84,6 +84,13 @@ def scan_prompt(prompt: str, wildcard_dir: str, filenames: list[str]) -> Wildcar
 
 def read_wildcard(name: str, wildcard_dir: str, filenames: list[str] | None = None) -> str:
     if filenames is None:
+        # name may be arbitrary caller input here (no filenames list to match
+        # against), so gate the join the same way write_wildcard gates its
+        # own join -- otherwise a name like '../../secrets' escapes the
+        # wildcard dir. When filenames is provided, target is chosen from
+        # that injected, already-trusted list by basename match instead.
+        if not WILDCARD_NAME_PATTERN.match(name):
+            return ''
         target = os.path.join(wildcard_dir, f'{name}.txt')
     else:
         matches = [f for f in filenames if os.path.splitext(os.path.basename(f))[0] == name]
@@ -94,8 +101,14 @@ def read_wildcard(name: str, wildcard_dir: str, filenames: list[str] | None = No
     if not os.path.isfile(target):
         return ''
 
-    with open(target, encoding='utf-8') as f:
-        return f.read()
+    # Mirrors apply_wildcards' tolerant handling of unreadable/undecodable
+    # wildcard files (modules/util.py's try/except around the file read):
+    # a bad file degrades to empty content rather than crashing the scan.
+    try:
+        with open(target, encoding='utf-8') as f:
+            return f.read()
+    except (OSError, UnicodeDecodeError):
+        return ''
 
 
 def write_wildcard(name: str, content: str, wildcard_dir: str) -> str:
@@ -112,7 +125,18 @@ def write_wildcard(name: str, content: str, wildcard_dir: str) -> str:
         raise InvalidWildcardNameError(f'Invalid wildcard name: {name!r}')
 
     os.makedirs(wildcard_dir, exist_ok=True)
-    with open(target, 'w', encoding='utf-8') as f:
+
+    # The realpath check above and this write are two separate syscalls, so
+    # a symlink dropped at target in between would otherwise be followed
+    # (TOCTOU). O_NOFOLLOW makes symlink-rejection atomic with the open
+    # itself instead of just advisory.
+    open_flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, 'O_NOFOLLOW', 0)
+    try:
+        fd = os.open(target, open_flags, 0o644)
+    except OSError as error:
+        raise InvalidWildcardNameError(f'Invalid wildcard name: {name!r}') from error
+
+    with open(fd, 'w', encoding='utf-8') as f:
         f.write(content)
 
     return target

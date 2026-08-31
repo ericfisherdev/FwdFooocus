@@ -45,6 +45,17 @@ class TestScanPrompt:
         assert result.missing == ('vehicle',)
         assert result.nested == ()
 
+    def test_does_not_raise_when_a_top_level_file_is_not_utf8(self, wildcard_dir):
+        filenames = [_write(wildcard_dir, 'animal.txt', 'cat\ndog\n')]
+        with open(os.path.join(wildcard_dir, 'animal.txt'), 'wb') as f:
+            f.write(b'\xff\xfe not valid utf-8')
+
+        result = scan_prompt('a __animal__', wildcard_dir, filenames)
+
+        assert result.top_level == ('animal',)
+        assert result.nested == ()
+        assert result.missing == ()
+
     def test_ignores_non_wildcard_underscores(self, wildcard_dir):
         result = scan_prompt('snake_case_variable and _not_a_wildcard', wildcard_dir, [])
 
@@ -107,6 +118,21 @@ class TestReadWildcard:
         filenames = [_write(wildcard_dir, 'animal.txt', 'cat\ndog\n')]
 
         assert read_wildcard('animal', wildcard_dir, filenames) == 'cat\ndog\n'
+
+    def test_traversal_name_returns_empty_when_filenames_is_none(self, tmp_path, wildcard_dir):
+        secret_dir = tmp_path.parent
+        secret_file = secret_dir / 'evil.txt'
+        secret_file.write_text('leaked secret', encoding='utf-8')
+
+        assert read_wildcard('../evil', wildcard_dir, None) == ''
+
+    def test_non_utf8_file_returns_empty_instead_of_raising(self, wildcard_dir):
+        target = os.path.join(wildcard_dir, 'binary.txt')
+        with open(target, 'wb') as f:
+            f.write(b'\xff\xfe\x00garbage')
+        filenames = ['binary.txt']
+
+        assert read_wildcard('binary', wildcard_dir, filenames) == ''
 
 
 class TestWriteWildcard:
