@@ -204,6 +204,11 @@ path_safety_checker = get_dir_or_set_default('path_safety_checker', '../models/s
 path_sam = get_dir_or_set_default('path_sam', '../models/sam/')
 path_outputs = get_path_output()
 path_lora_presets = get_dir_or_set_default('path_lora_presets', '../lora_presets/', make_directory=True)
+# Defaults under path_outputs (not relative to modules/, like the other
+# get_dir_or_set_default defaults above) so Gradio's existing
+# allowed_paths=[modules.config.path_outputs] already serves saved-list
+# images without extra wiring.
+path_image_lists = get_dir_or_set_default('path_image_lists', os.path.join(path_outputs, 'lists'), make_directory=True)
 
 
 def get_config_item_or_set_default(key, default_value, validator, disable_empty_as_none=False, expected_type=None):

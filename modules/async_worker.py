@@ -305,6 +305,7 @@ def worker():
     from extras.censor import default_censor
     from modules.sdxl_styles import apply_style, get_random_style, fooocus_expansion, apply_arrays, random_style_name
     from modules.private_logger import log
+    import modules.image_lists
     from extras.expansion import safe_str
     from modules.util import (remove_empty_str, HWC3, resize_image, get_image_shape_ceil, set_image_shape_ceil,
                               get_shape_ceil, resample_image, erode_or_dilate, parse_lora_references_from_prompt,
@@ -514,7 +515,12 @@ def worker():
             d.append(('Metadata Scheme', 'metadata_scheme',
                       async_task.metadata_scheme.value if async_task.save_metadata_to_images else async_task.save_metadata_to_images))
             d.append(('Version', 'version', 'FwdFooocus v' + fooocus_version.version))
-            img_paths.append(log(x, d, metadata_parser, async_task.output_format, task, persist_image))
+            saved_path = log(x, d, metadata_parser, async_task.output_format, task, persist_image)
+            img_paths.append(saved_path)
+            # FWDF-188: record this image's metadata/task so a later
+            # "Save to List" click can write a full log entry without
+            # re-deriving anything -- the numpy array x is gone by then.
+            modules.image_lists.record_metadata(saved_path, d, task)
 
         return img_paths
 

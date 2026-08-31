@@ -22,6 +22,7 @@ import modules.meta_confirm
 import modules.ui_prefs
 import modules.lora_presets
 import modules.lora_library
+import modules.image_lists
 import modules.lora_metadata
 import modules.wildcard_ui
 import modules.wildcard_ui_helpers
@@ -60,7 +61,8 @@ def generate_clicked(task: worker.AsyncTask):
     yield gr.update(visible=True, value=modules.html.make_progress_html(1, 'Waiting for task to start ...')), \
         gr.update(visible=True, value=None), \
         gr.update(visible=False, value=None), \
-        gr.update(visible=False)
+        gr.update(visible=False), \
+        gr.update()
 
     worker.async_tasks.append(task)
 
@@ -80,12 +82,14 @@ def generate_clicked(task: worker.AsyncTask):
                 yield gr.update(visible=True, value=modules.html.make_progress_html(percentage, title)), \
                     gr.update(visible=True, value=image) if image is not None else gr.update(), \
                     gr.update(), \
-                    gr.update(visible=False)
+                    gr.update(visible=False), \
+                    gr.update()
             if flag == 'results':
                 yield gr.update(visible=True), \
                     gr.update(visible=True), \
                     gr.update(visible=True, value=product), \
-                    gr.update(visible=False)
+                    gr.update(visible=False), \
+                    gr.update()
             if flag == 'finish':
                 if not args_manager.args.disable_enhance_output_sorting:
                     product = sort_enhance_images(product, task)
@@ -93,7 +97,8 @@ def generate_clicked(task: worker.AsyncTask):
                 yield gr.update(visible=False), \
                     gr.update(visible=False), \
                     gr.update(visible=False), \
-                    gr.update(visible=True, value=product)
+                    gr.update(visible=True, value=product), \
+                    product
                 finished = True
 
                 # delete Fooocus temp images, only keep gradio temp images
@@ -247,6 +252,35 @@ with shared.gradio_root:
             gallery = gr.Gallery(label='Gallery', show_label=False, object_fit='contain', visible=True, height=768,
                                  elem_classes=['resizable_area', 'main_view', 'final_gallery', 'image_gallery'],
                                  elem_id='final_gallery')
+
+            # FWDF-188: original (non-temp-cache) output paths for the
+            # images currently shown in `gallery`, ordered to match it --
+            # Gradio 3.41.2's gallery.select SelectData.value points at
+            # Gradio's own temp cache, not the original file, so the real
+            # paths have to ride this State instead. Filled by
+            # generate_clicked's 'finish' yield; cleared at the start of a
+            # new generation.
+            gallery_paths_state = gr.State([])
+            selected_gallery_index = gr.State(-1)
+
+            with gr.Row():
+                save_to_list_button = gr.Button(value='💾 Save to List', variant='secondary', size='sm',
+                                                elem_id='save_to_list_button')
+
+            # Save to List dialog (hidden by default) -- mirrors the LoRA
+            # preset name dialog's hidden gr.Column idiom below
+            # (preset_name_dialog), since Gradio 3.41.2 has no gr.Modal.
+            with gr.Column(visible=False) as save_to_list_dialog:
+                image_list_dropdown = gr.Dropdown(label='Save to List', choices=modules.image_lists.list_image_lists(modules.config.path_image_lists),
+                                                  value=None, allow_custom_value=False,
+                                                  info='Select an existing list, or type a new name below')
+                new_image_list_name = gr.Textbox(label='Or create a new list', placeholder='Enter new list name...',
+                                                 max_lines=1)
+                with gr.Row():
+                    save_to_list_confirm = gr.Button(value='Save', variant='primary', scale=1)
+                    save_to_list_cancel = gr.Button(value='Cancel', variant='secondary', scale=1)
+                save_to_list_status = gr.Textbox(label='Status', interactive=False, visible=False)
+
             with gr.Row():
                 with gr.Column(scale=17):
                     prompt = gr.Textbox(show_label=False, placeholder="Type prompt here or paste parameters.", elem_id='positive_prompt',
@@ -1911,11 +1945,11 @@ with shared.gradio_root:
 
         meta_confirm_cancel.click(lambda: (gr.update(visible=False), None), outputs=[meta_confirm_modal, pending_metadata], queue=False, show_progress=False)
 
-        generate_button.click(lambda: (gr.update(visible=True, interactive=True), gr.update(visible=True, interactive=True), gr.update(visible=False, interactive=False), [], True),
-                              outputs=[stop_button, skip_button, generate_button, gallery, state_is_generating]) \
+        generate_button.click(lambda: (gr.update(visible=True, interactive=True), gr.update(visible=True, interactive=True), gr.update(visible=False, interactive=False), [], True, []),
+                              outputs=[stop_button, skip_button, generate_button, gallery, state_is_generating, gallery_paths_state]) \
             .then(fn=refresh_seed, inputs=[seed_random, image_seed], outputs=image_seed) \
             .then(fn=get_task, inputs=ctrls, outputs=currentTask) \
-            .then(fn=generate_clicked, inputs=currentTask, outputs=[progress_html, progress_window, progress_gallery, gallery]) \
+            .then(fn=generate_clicked, inputs=currentTask, outputs=[progress_html, progress_window, progress_gallery, gallery, gallery_paths_state]) \
             .then(lambda: (gr.update(visible=True, interactive=True), gr.update(visible=False, interactive=False), gr.update(visible=False, interactive=False), False),
                   outputs=[generate_button, stop_button, skip_button, state_is_generating]) \
             .then(fn=update_history_link, outputs=history_link) \
@@ -1923,11 +1957,90 @@ with shared.gradio_root:
 
         reset_button.click(lambda: [worker.AsyncTask(args=[]), False, gr.update(visible=True, interactive=True)] +
                                    [gr.update(visible=False)] * 6 +
-                                   [gr.update(visible=True, value=[])],
+                                   [gr.update(visible=True, value=[]), []],
                            outputs=[currentTask, state_is_generating, generate_button,
                                     reset_button, stop_button, skip_button,
-                                    progress_html, progress_window, progress_gallery, gallery],
+                                    progress_html, progress_window, progress_gallery, gallery,
+                                    gallery_paths_state],
                            queue=False)
+
+        # FWDF-188 -- Save to List handlers. Follow the LoRA preset dialog
+        # idiom above (save_preset_button et al.): open/confirm/cancel all
+        # wired queue=False, show_progress=False, since Gradio 3.41.2 has
+        # no gr.Modal.
+        def gallery_selected(evt: gr.SelectData):
+            """Record which gallery thumbnail the user clicked. A named
+            function (not a loop-closure lambda) since gallery.select is
+            wired once here, not per-item in a loop."""
+            return evt.index
+
+        gallery.select(gallery_selected, outputs=selected_gallery_index, queue=False, show_progress=False)
+
+        def save_to_list_open_clicked(selected_index, gallery_paths):
+            """Show the Save to List dialog, refreshing the list dropdown
+            and clearing any stale status/new-name text from a previous
+            open, but only when the stored selection still resolves to a
+            real path -- gallery_paths_state is reset to [] at the start
+            of every generation, so a stale index (nothing selected yet,
+            or a selection from a gallery that has since been cleared)
+            must not open the dialog. The status textbox lives inside the
+            hidden dialog Column, so there is nowhere to surface an error
+            while it stays closed -- leave everything untouched instead."""
+            if not isinstance(gallery_paths, list) or not (0 <= selected_index < len(gallery_paths)):
+                return gr.update(), gr.update(), gr.update(), gr.update()
+            return (gr.update(visible=True),
+                    gr.update(choices=modules.image_lists.list_image_lists(modules.config.path_image_lists), value=None),
+                    gr.update(value=''),
+                    gr.update(visible=False))
+
+        save_to_list_button.click(
+            save_to_list_open_clicked,
+            inputs=[selected_gallery_index, gallery_paths_state],
+            outputs=[save_to_list_dialog, image_list_dropdown, new_image_list_name, save_to_list_status],
+            queue=False,
+            show_progress=False
+        )
+
+        def save_to_list_confirm_clicked(selected_index, gallery_paths, list_dropdown_value, new_list_name):
+            """Resolve the selected image's original path from the two
+            States, create the list if a new name was typed, then delegate
+            the actual copy-plus-log-entry to modules.image_lists."""
+            if not isinstance(gallery_paths, list) or not (0 <= selected_index < len(gallery_paths)):
+                return (gr.update(visible=True, value='No image selected.'), gr.update(), gr.update(visible=True))
+
+            list_name = new_list_name.strip() if new_list_name and new_list_name.strip() else list_dropdown_value
+            if not list_name:
+                return (gr.update(visible=True, value='Choose an existing list or enter a new list name.'),
+                        gr.update(), gr.update(visible=True))
+
+            source_path = gallery_paths[selected_index]
+            success, message = modules.image_lists.save_image_to_list(
+                list_name, source_path, modules.config.path_image_lists)
+
+            icon = '✅' if success else '❌'
+            status_update = gr.update(visible=True, value=f'{icon} {message}')
+            if not success:
+                return status_update, gr.update(), gr.update(visible=True)
+
+            dropdown_update = gr.update(
+                choices=modules.image_lists.list_image_lists(modules.config.path_image_lists),
+                value=modules.image_lists.sanitize_list_name(list_name))
+            return status_update, dropdown_update, gr.update(visible=False)
+
+        save_to_list_confirm.click(
+            save_to_list_confirm_clicked,
+            inputs=[selected_gallery_index, gallery_paths_state, image_list_dropdown, new_image_list_name],
+            outputs=[save_to_list_status, image_list_dropdown, save_to_list_dialog],
+            queue=False,
+            show_progress=False
+        )
+
+        save_to_list_cancel.click(
+            lambda: (gr.update(visible=False), gr.update(visible=False)),
+            outputs=[save_to_list_dialog, save_to_list_status],
+            queue=False,
+            show_progress=False
+        )
 
         for notification_file in ['notification.ogg', 'notification.mp3']:
             if os.path.exists(notification_file):
