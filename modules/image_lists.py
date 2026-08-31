@@ -15,6 +15,7 @@ ticket) can call it directly. The output root is injected as a parameter
 so callers own config lookups and tests never need modules.config.
 """
 import contextlib
+import json
 import os
 import re
 import shutil
@@ -97,6 +98,53 @@ def _confine(target: str, base_dir: str) -> Optional[str]:
         return None
 
     return full_path
+
+
+def resolve_checked_gallery_paths(gallery_paths: list, checked_json: str) -> list[str]:
+    """Resolve the JSON index array javascript/gallery_checkboxes.js writes
+    into #gallery_checked_data into the subset of gallery_paths the user
+    actually checked, preserving gallery order (FWDF-191).
+
+    UI-agnostic and defensive on purpose: checked_json is untrusted input
+    from the browser, and gallery_paths is task.results verbatim (webui.py's
+    generate_clicked 'finish' yield) rather than something already filtered
+    to image paths -- it can carry non-str numpy entries such as the
+    build_image_wall collage tile (modules/async_worker.py) or an
+    enhance/debug intermediate. This function never raises: invalid JSON, a
+    non-list payload, non-int/bool entries, out-of-range indices, duplicate
+    indices, and indices resolving to a non-str gallery_paths entry are all
+    silently ignored rather than surfaced as an error. Callers are
+    responsible for treating an empty result as "nothing valid was
+    checked" and surfacing the nothing-checked notice themselves.
+    """
+    if not isinstance(gallery_paths, list):
+        return []
+
+    try:
+        checked_indices = json.loads(checked_json)
+    except (TypeError, ValueError):
+        return []
+
+    if not isinstance(checked_indices, list):
+        return []
+
+    valid_indices = set()
+    for index in checked_indices:
+        # bool is a subclass of int in Python -- explicitly excluded so a
+        # stray `true`/`false` in the JSON payload isn't silently treated
+        # as index 1/0.
+        if isinstance(index, bool) or not isinstance(index, int):
+            continue
+        if not 0 <= index < len(gallery_paths):
+            continue
+        if not isinstance(gallery_paths[index], str):
+            continue
+        valid_indices.add(index)
+
+    # Sorted so the result always follows gallery order regardless of the
+    # order indices happened to arrive in the JSON payload -- duplicates
+    # collapse for free via the set.
+    return [gallery_paths[index] for index in sorted(valid_indices)]
 
 
 def get_list_dir(name: str, root_dir: str) -> Optional[str]:
