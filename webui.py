@@ -94,6 +94,16 @@ def generate_clicked(task: worker.AsyncTask):
                 if not args_manager.args.disable_enhance_output_sorting:
                     product = sort_enhance_images(product, task)
 
+                # FWDF-191: `product` (-> gallery_paths_state) can contain
+                # non-str numpy entries (the build_image_wall collage tile,
+                # enhance/debug intermediates) alongside str paths. Do NOT
+                # filter those out here -- the gallery display order and
+                # gallery_paths_state order must stay identical, or a
+                # checkbox index recorded by javascript/gallery_checkboxes.js
+                # desyncs from the path it's meant to resolve to. Filtering
+                # non-path entries happens only in
+                # modules.image_lists.resolve_checked_gallery_paths, at the
+                # point a checked index is actually resolved to a path.
                 yield gr.update(visible=False), \
                     gr.update(visible=False), \
                     gr.update(visible=False), \
@@ -261,7 +271,15 @@ with shared.gradio_root:
             # generate_clicked's 'finish' yield; cleared at the start of a
             # new generation.
             gallery_paths_state = gr.State([])
-            selected_gallery_index = gr.State(-1)
+
+            # FWDF-191: JS-to-Python transport for the per-thumbnail
+            # checkbox overlay javascript/gallery_checkboxes.js renders over
+            # #final_gallery. Holds a JSON array of checked indices into
+            # gallery -- and therefore into gallery_paths_state, since both
+            # are filled in the same DOM/value order. CSS-hidden (not
+            # visible=False) so the DOM textarea still exists for the JS to
+            # write into, mirroring #inpaint_eraser_data's precedent.
+            gallery_checked_data = gr.Textbox(value='[]', elem_id='gallery_checked_data')
 
             with gr.Row():
                 save_to_list_button = gr.Button(value='💾 Save to List', variant='secondary', size='sm',
@@ -1957,8 +1975,8 @@ with shared.gradio_root:
 
         meta_confirm_cancel.click(lambda: (gr.update(visible=False), None), outputs=[meta_confirm_modal, pending_metadata], queue=False, show_progress=False)
 
-        generate_button.click(lambda: (gr.update(visible=True, interactive=True), gr.update(visible=True, interactive=True), gr.update(visible=False, interactive=False), [], True, [], -1),
-                              outputs=[stop_button, skip_button, generate_button, gallery, state_is_generating, gallery_paths_state, selected_gallery_index]) \
+        generate_button.click(lambda: (gr.update(visible=True, interactive=True), gr.update(visible=True, interactive=True), gr.update(visible=False, interactive=False), [], True, [], '[]'),
+                              outputs=[stop_button, skip_button, generate_button, gallery, state_is_generating, gallery_paths_state, gallery_checked_data]) \
             .then(fn=refresh_seed, inputs=[seed_random, image_seed], outputs=image_seed) \
             .then(fn=get_task, inputs=ctrls, outputs=currentTask) \
             .then(fn=generate_clicked, inputs=currentTask, outputs=[progress_html, progress_window, progress_gallery, gallery, gallery_paths_state]) \
@@ -1969,36 +1987,32 @@ with shared.gradio_root:
 
         reset_button.click(lambda: [worker.AsyncTask(args=[]), False, gr.update(visible=True, interactive=True)] +
                                    [gr.update(visible=False)] * 6 +
-                                   [gr.update(visible=True, value=[]), [], -1],
+                                   [gr.update(visible=True, value=[]), [], '[]'],
                            outputs=[currentTask, state_is_generating, generate_button,
                                     reset_button, stop_button, skip_button,
                                     progress_html, progress_window, progress_gallery, gallery,
-                                    gallery_paths_state, selected_gallery_index],
+                                    gallery_paths_state, gallery_checked_data],
                            queue=False)
 
-        # FWDF-188 -- Save to List handlers. Follow the LoRA preset dialog
-        # idiom above (save_preset_button et al.): open/confirm/cancel all
-        # wired queue=False, show_progress=False, since Gradio 3.41.2 has
-        # no gr.Modal.
-        def gallery_selected(evt: gr.SelectData):
-            """Record which gallery thumbnail the user clicked. A named
-            function (not a loop-closure lambda) since gallery.select is
-            wired once here, not per-item in a loop."""
-            return evt.index
-
-        gallery.select(gallery_selected, outputs=selected_gallery_index, queue=False, show_progress=False)
-
-        def save_to_list_open_clicked(selected_index, gallery_paths):
+        # FWDF-188/191 -- Save to List handlers. Follow the LoRA preset
+        # dialog idiom above (save_preset_button et al.) for the dialog
+        # itself, since Gradio 3.41.2 has no gr.Modal. The single-select
+        # gallery.select wiring FWDF-188 used is gone: which images are
+        # targeted now comes entirely from gallery_checked_data, the JSON
+        # index array javascript/gallery_checkboxes.js maintains.
+        def save_to_list_open_clicked(checked_json, gallery_paths):
             """Show the Save to List dialog, refreshing the list dropdown
             and clearing any stale status/new-name text from a previous
-            open, but only when the stored selection still resolves to a
-            real path -- gallery_paths_state is reset to [] at the start
-            of every generation, so a stale index (nothing selected yet,
-            or a selection from a gallery that has since been cleared)
-            must not open the dialog. The status textbox lives inside the
-            hidden dialog Column, so there is nowhere to surface an error
-            while it stays closed -- leave everything untouched instead."""
-            if not isinstance(gallery_paths, list) or not (0 <= selected_index < len(gallery_paths)):
+            open -- but only when at least one checked index still resolves
+            to a real path. Nothing checked (or a stale checked set from a
+            gallery that's since been cleared) surfaces a gr.Warning toast
+            instead and leaves the dialog closed. This click MUST run
+            through the queue (no queue=False on this event, unlike the
+            confirm/cancel events below) -- gr.Warning is only delivered to
+            the browser via Gradio's queue in this pinned version."""
+            resolved = modules.image_lists.resolve_checked_gallery_paths(gallery_paths, checked_json)
+            if not resolved:
+                gr.Warning('No images checked -- tick one or more images first.')
                 return gr.update(), gr.update(), gr.update(), gr.update()
             return (gr.update(visible=True),
                     gr.update(choices=modules.image_lists.list_image_lists(modules.config.path_image_lists), value=None),
@@ -2007,37 +2021,59 @@ with shared.gradio_root:
 
         save_to_list_button.click(
             save_to_list_open_clicked,
-            inputs=[selected_gallery_index, gallery_paths_state],
+            inputs=[gallery_checked_data, gallery_paths_state],
             outputs=[save_to_list_dialog, image_list_dropdown, new_image_list_name, save_to_list_status],
-            queue=False,
             show_progress=False
         )
 
-        def save_to_list_confirm_clicked(selected_index, gallery_paths, list_dropdown_value, new_list_name):
-            """Resolve the selected image's original path from the two
-            States, create the list if a new name was typed, then delegate
-            the actual copy-plus-log-entry to modules.image_lists."""
-            if not isinstance(gallery_paths, list) or not (0 <= selected_index < len(gallery_paths)):
-                return (gr.update(visible=True, value='No image selected.'), gr.update(), gr.update(visible=True))
+        def save_to_list_confirm_clicked(checked_json, gallery_paths, list_dropdown_value, new_list_name):
+            """Resolve every checked image's original path, create the list
+            if a new name was typed, then delegate each image's
+            copy-plus-log-entry to modules.image_lists individually,
+            reporting an aggregate status. Stays queue=False like the
+            original FWDF-188 handler -- unlike the open handler above, this
+            one only ever needs the plain status textbox, never a toast."""
+            resolved_paths = modules.image_lists.resolve_checked_gallery_paths(gallery_paths, checked_json)
+            if not resolved_paths:
+                return (gr.update(visible=True, value='No images checked.'), gr.update(), gr.update(visible=True))
 
             list_name = new_list_name.strip() if new_list_name and new_list_name.strip() else list_dropdown_value
             if not list_name:
                 return (gr.update(visible=True, value='Choose an existing list or enter a new list name.'),
                         gr.update(), gr.update(visible=True))
 
-            source_path = gallery_paths[selected_index]
-            # A gallery path normally lives under path_outputs, but lands
-            # under temp_path instead when --disable-image-log is set or a
-            # given image wasn't persisted (see private_logger.log's
-            # persist_image branch) -- both are app-controlled directories,
-            # so either is a legitimate source.
-            success, message = modules.image_lists.save_image_to_list(
-                list_name, source_path, modules.config.path_image_lists,
-                source_root_dirs=[modules.config.path_outputs, modules.config.temp_path])
+            saved_count = 0
+            updated_count = 0
+            failures = []
+            for source_path in resolved_paths:
+                # A gallery path normally lives under path_outputs, but
+                # lands under temp_path instead when --disable-image-log is
+                # set or a given image wasn't persisted (see
+                # private_logger.log's persist_image branch) -- both are
+                # app-controlled directories, so either is a legitimate
+                # source.
+                success, message = modules.image_lists.save_image_to_list(
+                    list_name, source_path, modules.config.path_image_lists,
+                    source_root_dirs=[modules.config.path_outputs, modules.config.temp_path])
+                if not success:
+                    failures.append(f'{os.path.basename(source_path)}: {message}')
+                elif message.startswith('Updated'):
+                    updated_count += 1
+                else:
+                    saved_count += 1
 
-            icon = '✅' if success else '❌'
-            status_update = gr.update(visible=True, value=f'{icon} {message}')
-            if not success:
+            status_parts = []
+            if saved_count:
+                status_parts.append(f'{saved_count} saved')
+            if updated_count:
+                status_parts.append(f'{updated_count} updated')
+            if failures:
+                status_parts.append(f'{len(failures)} failed ({"; ".join(failures)})')
+            icon = '❌' if failures and not (saved_count or updated_count) else ('⚠️' if failures else '✅')
+            status_message = f'{icon} {", ".join(status_parts)}' if status_parts else '❌ Nothing was saved.'
+            status_update = gr.update(visible=True, value=status_message)
+
+            if not (saved_count or updated_count):
                 return status_update, gr.update(), gr.update(visible=True)
 
             dropdown_update = gr.update(
@@ -2047,7 +2083,7 @@ with shared.gradio_root:
 
         save_to_list_confirm.click(
             save_to_list_confirm_clicked,
-            inputs=[selected_gallery_index, gallery_paths_state, image_list_dropdown, new_image_list_name],
+            inputs=[gallery_checked_data, gallery_paths_state, image_list_dropdown, new_image_list_name],
             outputs=[save_to_list_status, image_list_dropdown, save_to_list_dialog],
             queue=False,
             show_progress=False

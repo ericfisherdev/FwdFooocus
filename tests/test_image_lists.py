@@ -34,6 +34,7 @@ try:
         list_exists,
         list_image_lists,
         record_metadata,
+        resolve_checked_gallery_paths,
         sanitize_list_name,
         save_image_to_list,
     )
@@ -42,6 +43,7 @@ except ImportError as e:  # pragma: no cover - exercised only without gradio ins
     private_logger = None
     get_list_dir = get_metadata = list_exists = list_image_lists = None
     record_metadata = sanitize_list_name = save_image_to_list = None
+    resolve_checked_gallery_paths = None
     _import_error = e
 finally:
     sys.argv = _original_argv
@@ -437,3 +439,98 @@ class TestMetadataRegistry:
         list_dir = get_list_dir('cats', root_dir)
         log_content = open(os.path.join(list_dir, 'log.html'), encoding='utf-8').read()
         assert 'a.png' in log_content
+
+
+class TestResolveCheckedGalleryPaths:
+    """FWDF-191: resolve_checked_gallery_paths() decodes the JSON index
+    array javascript/gallery_checkboxes.js writes into #gallery_checked_data
+    into the checked subset of gallery_paths. It must never raise -- the
+    JSON payload comes from the browser, and gallery_paths is task.results
+    verbatim (webui.py's 'finish' yield), which can carry non-str numpy
+    entries such as the build_image_wall collage tile."""
+
+    def test_multi_pick_preserves_gallery_order_regardless_of_json_order(self):
+        gallery_paths = ['/out/a.png', '/out/b.png', '/out/c.png', '/out/d.png']
+        # JSON payload arrives out of order -- result must still follow
+        # gallery order, not JSON order.
+        resolved = resolve_checked_gallery_paths(gallery_paths, '[3,1]')
+        assert resolved == ['/out/b.png', '/out/d.png']
+
+    def test_empty_checked_array_returns_empty_list(self):
+        assert resolve_checked_gallery_paths(['/out/a.png'], '[]') == []
+
+    def test_invalid_json_returns_empty_list_without_raising(self):
+        assert resolve_checked_gallery_paths(['/out/a.png'], 'not json') == []
+
+    def test_non_list_json_returns_empty_list_without_raising(self):
+        assert resolve_checked_gallery_paths(['/out/a.png'], '{"0": true}') == []
+
+    def test_bool_entries_are_ignored_not_treated_as_0_or_1(self):
+        gallery_paths = ['/out/a.png', '/out/b.png']
+        assert resolve_checked_gallery_paths(gallery_paths, '[true, false]') == []
+
+    def test_float_entries_are_ignored(self):
+        gallery_paths = ['/out/a.png', '/out/b.png']
+        assert resolve_checked_gallery_paths(gallery_paths, '[0.5, 1.0]') == []
+
+    def test_out_of_range_indices_are_ignored(self):
+        gallery_paths = ['/out/a.png', '/out/b.png']
+        assert resolve_checked_gallery_paths(gallery_paths, '[-1, 2, 5]') == []
+
+    def test_duplicate_indices_collapse_to_one_entry(self):
+        gallery_paths = ['/out/a.png', '/out/b.png']
+        assert resolve_checked_gallery_paths(gallery_paths, '[0,0,0]') == ['/out/a.png']
+
+    def test_non_str_gallery_paths_entry_is_skipped(self):
+        """A checked index pointing at a non-str gallery_paths entry (the
+        build_image_wall collage tile, an enhance/debug intermediate --
+        represented here as a numpy-like stand-in) is silently skipped
+        rather than raising."""
+        import numpy as np
+
+        collage_tile = np.zeros((2, 2, 3), dtype=np.uint8)
+        gallery_paths = ['/out/a.png', collage_tile, '/out/b.png']
+
+        resolved = resolve_checked_gallery_paths(gallery_paths, '[0,1,2]')
+
+        assert resolved == ['/out/a.png', '/out/b.png']
+
+    def test_non_list_gallery_paths_returns_empty_list_without_raising(self):
+        assert resolve_checked_gallery_paths('not a list', '[0]') == []
+
+
+class TestMultiSaveAggregation:
+    """FWDF-191: the save_to_list_confirm handler in webui.py loops
+    save_image_to_list over resolve_checked_gallery_paths' result. These
+    tests exercise that same loop pattern directly against
+    modules.image_lists to verify N checked images produce exactly N new
+    files and N new log.html entries, each independently guarded."""
+
+    def test_checking_two_of_four_saves_exactly_those_two(self, tmp_path, root_dir, source_root):
+        paths = [
+            _make_png(str(Path(source_root) / f'{name}.png'))
+            for name in ('a', 'b', 'c', 'd')
+        ]
+        checked = resolve_checked_gallery_paths(paths, '[1,3]')
+        assert checked == [paths[1], paths[3]]
+
+        results = [
+            save_image_to_list('picks', path, root_dir, source_root_dirs=source_root,
+                                metadata=[('Filename', 'filename', os.path.basename(path))])
+            for path in checked
+        ]
+
+        assert all(success for success, _ in results), results
+
+        list_dir = get_list_dir('picks', root_dir)
+        saved_files = sorted(f for f in os.listdir(list_dir) if f.endswith('.png'))
+        assert saved_files == ['b.png', 'd.png']
+
+        for path in checked:
+            saved_bytes = open(os.path.join(list_dir, os.path.basename(path)), 'rb').read()
+            assert saved_bytes == open(path, 'rb').read()
+
+        log_content = open(os.path.join(list_dir, 'log.html'), encoding='utf-8').read()
+        assert log_content.count('<div id=') == 2
+        assert 'b.png' in log_content and 'd.png' in log_content
+        assert 'a.png' not in log_content and 'c.png' not in log_content

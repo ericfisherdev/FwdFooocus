@@ -32,6 +32,7 @@ def javascript_html():
     image_viewer_js_path = webpath('javascript/imageviewer.js')
     wildcards_js_path = webpath('javascript/wildcards.js')
     inpaint_eraser_js_path = webpath('javascript/inpaint_eraser.js')
+    gallery_checkboxes_js_path = webpath('javascript/gallery_checkboxes.js')
     samples_path = webpath(os.path.abspath('./sdxl_styles/samples/fooocus_v2.jpg'))
     head = f'<script type="text/javascript">{localization_js(args_manager.args.language)}</script>\n'
     head += f'<script type="text/javascript" src="{script_js_path}"></script>\n'
@@ -43,6 +44,7 @@ def javascript_html():
     head += f'<script type="text/javascript" src="{image_viewer_js_path}"></script>\n'
     head += f'<script type="text/javascript" src="{wildcards_js_path}"></script>\n'
     head += f'<script type="text/javascript" src="{inpaint_eraser_js_path}"></script>\n'
+    head += f'<script type="text/javascript" src="{gallery_checkboxes_js_path}"></script>\n'
     head += '<script type="text/javascript">setInterval(()=>fetch("/heartbeat",{method:"POST"}).catch(()=>{}),5000);</script>\n'
     head += f'<meta name="samples-path" content="{samples_path}">\n'
 
