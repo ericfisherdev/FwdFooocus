@@ -38,6 +38,12 @@ def install_default_pipeline_test_doubles():
     """Install a torchvision stand-in (when torchvision isn't installed) so
     the real modules.default_pipeline can be imported. Returns a zero-arg
     callable that restores the prior state.
+
+    Order matters: `transformers` must finish its own (real) import before a
+    torchvision stand-in is registered, because transformers decides once, at
+    import time, whether torchvision is available and caches that decision --
+    if a spec-less stand-in is already in sys.modules when that decision is
+    made, the probe itself raises.
     """
     import transformers  # noqa: F401  (forces the real torchvision-unavailable check first)
 
