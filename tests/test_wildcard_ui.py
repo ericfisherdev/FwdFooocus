@@ -146,6 +146,16 @@ class TestReadWildcard:
 
         assert read_wildcard('evil', wildcard_dir, ['evil.txt']) == ''
 
+    def test_duplicate_basename_resolves_to_first_filenames_entry(self, wildcard_dir):
+        # apply_wildcards (modules/util.py:477) resolves a duplicate
+        # basename via matches[0] -- first entry in filenames order. The
+        # editor must agree, or a user edits the file generation ignores.
+        _write(wildcard_dir, 'colors.txt', 'red\n')
+        _write(wildcard_dir, os.path.join('styles', 'colors.txt'), 'blue\n')
+        filenames = ['colors.txt', os.path.join('styles', 'colors.txt')]
+
+        assert read_wildcard('colors', wildcard_dir, filenames) == 'red\n'
+
 
 class TestWriteWildcard:
     def test_creates_file_and_returns_path(self, wildcard_dir):
@@ -159,6 +169,26 @@ class TestWriteWildcard:
     def test_rejects_unsafe_names(self, wildcard_dir, bad_name):
         with pytest.raises(InvalidWildcardNameError):
             write_wildcard(bad_name, 'content', wildcard_dir)
+
+    def test_overwrites_existing_subfolder_entry_when_filenames_given(self, wildcard_dir):
+        # Without filenames, an edit to a subfolder wildcard would fork:
+        # this file (read by read_wildcard via the same filenames list)
+        # must be the one write_wildcard overwrites, not a new top-level
+        # '<name>.txt'.
+        relative = os.path.join('animals', 'dog.txt')
+        _write(wildcard_dir, relative, 'labrador\n')
+        filenames = [relative]
+
+        target = write_wildcard('dog', 'poodle\n', wildcard_dir, filenames)
+
+        assert target == os.path.join(wildcard_dir, relative)
+        assert not os.path.isfile(os.path.join(wildcard_dir, 'dog.txt'))
+        assert read_wildcard('dog', wildcard_dir, filenames) == 'poodle\n'
+
+    def test_creates_new_top_level_file_when_name_not_in_filenames(self, wildcard_dir):
+        target = write_wildcard('animal', 'cat\n', wildcard_dir, filenames=[])
+
+        assert target == os.path.join(wildcard_dir, 'animal.txt')
 
     def test_symlink_inside_wildcard_dir_pointing_outside_is_rejected(self, tmp_path, wildcard_dir):
         # A symlink physically inside wildcard_dir (name 'evil.txt', so the

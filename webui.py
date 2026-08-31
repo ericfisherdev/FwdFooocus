@@ -332,21 +332,50 @@ with shared.gradio_root:
                 return results
 
             wildcard_scan_outputs = [wildcard_slots] + wildcard_button_pool + [wildcard_button_row, nested_wildcard_group]
+            # Queued (not queue=False): successive debounced scans are
+            # independent concurrent requests otherwise, and a slow earlier
+            # scan (scan_prompt reads every referenced top-level file for
+            # nested detection) can resolve after a newer one and overwrite
+            # fresher button state/slots with stale results. The shared
+            # queue (shared.gradio_root = gr.Blocks(...).queue()) applies
+            # events in submission order, closing that window.
             wildcard_scan_trigger.click(scan_wildcards, inputs=prompt, outputs=wildcard_scan_outputs,
-                                        queue=False, show_progress=False)
+                                        show_progress=False)
             shared.gradio_root.load(scan_wildcards, inputs=prompt, outputs=wildcard_scan_outputs,
-                                    queue=False, show_progress=False)
+                                    show_progress=False)
 
             def open_wildcard_editor(slots, index):
                 slot = slots[index] if slots and index < len(slots) else None
                 if slot is None:
-                    return gr.update(visible=True), gr.update(value='### Wildcard'), gr.update(value=''), ''
+                    # Keep the modal closed rather than opening one with no
+                    # resolvable target: save_wildcard's `if name:` guard
+                    # would otherwise make Save a silent no-op that
+                    # discards whatever the user typed.
+                    return gr.update(visible=False), gr.update(), gr.update(), ''
 
                 name = slot['name']
-                content = ''
-                if slot['exists']:
-                    content = modules.wildcard_ui.read_wildcard(
-                        name, modules.config.path_wildcards, modules.config.wildcard_filenames)
+                wildcard_dir = modules.config.path_wildcards
+                filenames = modules.config.wildcard_filenames
+                # Re-read unconditionally rather than trusting slot['exists']:
+                # that flag is from the last scan and can be stale by the
+                # time this handler runs (another tab/session's save, or a
+                # file dropped into the wildcards dir since). read_wildcard
+                # returns '' for a still-missing name either way.
+                content = modules.wildcard_ui.read_wildcard(name, wildcard_dir, filenames)
+
+                if content == '':
+                    fullpath = modules.wildcard_ui.resolve_wildcard_path(name, wildcard_dir, filenames)
+                    if fullpath is not None and os.path.getsize(fullpath) > 0:
+                        # The file exists and has bytes, but read_wildcard
+                        # tolerantly degraded it to '' (non-UTF-8 content or
+                        # a transient OSError) -- indistinguishable from a
+                        # genuinely empty file otherwise. Disable Save
+                        # (wildcard_editing_name='') so O_TRUNC can't
+                        # irreversibly discard the original bytes.
+                        return (gr.update(visible=True),
+                                gr.update(value=f'### {name} (could not be read; editing disabled)'),
+                                gr.update(value=''), '')
+
                 return gr.update(visible=True), gr.update(value=f'### {name}'), gr.update(value=content), name
 
             def make_wildcard_button_handler(index):
@@ -372,7 +401,13 @@ with shared.gradio_root:
 
             def save_wildcard(name, content):
                 if name:
-                    modules.wildcard_ui.write_wildcard(name, content, modules.config.path_wildcards)
+                    # Pass filenames so an existing subfolder entry (e.g.
+                    # 'animals/dog.txt') is overwritten in place instead of
+                    # forking a new top-level '<name>.txt' that generation
+                    # may or may not pick up (modules/util.py:477 resolves
+                    # duplicate basenames by matches[0] / directory order).
+                    modules.wildcard_ui.write_wildcard(
+                        name, content, modules.config.path_wildcards, modules.config.wildcard_filenames)
                     modules.config.update_wildcard_files()
                 return gr.update(visible=False)
 
