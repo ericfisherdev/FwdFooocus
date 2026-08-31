@@ -17,10 +17,15 @@
 // resyncAfterRedraw was written against. An overlay attached to button i
 // can silently end up positioned over a different image after a redraw.
 // To guard against that, every overlay stamps the img src it was built
-// for, and any observed mutation batch that leaves a stamped src
-// mismatched against its button's live thumbnail forces a full rebuild of
-// every overlay plus a checked-state reset -- never a partial resync that
-// could carry stale checked state onto a different image.
+// for, and any observed mutation batch that leaves an already-stamped src
+// mismatched against its button's live thumbnail (a VALUE drift -- see
+// detectDrift() below) forces a full rebuild of every overlay plus a
+// checked-state reset -- never a partial resync that could carry stale
+// checked state onto a different image. A batch that only adds or removes
+// buttons while every existing stamp still matches (a STRUCTURE drift --
+// entering/leaving preview mode adds/removes the preview-strip buttons for
+// the SAME unchanged gallery value) rebuilds the overlays but preserves the
+// checked set instead.
 //
 // Checked state reaches Python through a CSS-hidden gr.Textbox
 // (#gallery_checked_data), written as a JSON array of checked indices and
@@ -61,6 +66,12 @@ onUiLoaded(function() {
         // WeakMap so overlay bookkeeping never leaks once Gradio actually
         // discards a button node (as opposed to reusing it in place).
         var stampedSrcByButton = new WeakMap();
+        // Every live overlay checkbox input, as {input, index} pairs, across
+        // BOTH the grid and the preview strip. Rebuilt alongside the
+        // overlays themselves in rebuildAllOverlays(). Needed so a toggle in
+        // one container can push its new state into the other container's
+        // checkbox for the same index -- see onToggle below.
+        var builtInputs = [];
 
         function checkedIndexArray() {
             return Object.keys(checkedIndices).map(Number).sort(function(a, b) { return a - b; });
@@ -82,6 +93,19 @@ onUiLoaded(function() {
             overlayInput.checked = isChecked(index);
         }
 
+        // Pushes the current checked state for `index` into every live
+        // overlay input for that index -- the grid and preview-strip
+        // checkboxes are separate DOM nodes sharing the same index space,
+        // so toggling one does not update the other's `checked` property on
+        // its own.
+        function syncAllOverlaysForIndex(index) {
+            for (var i = 0; i < builtInputs.length; i++) {
+                if (builtInputs[i].index === index) {
+                    syncOverlayCheckedState(builtInputs[i].input, index);
+                }
+            }
+        }
+
         function buildOverlay(thumbnailButton, index) {
             var overlay = document.createElement('label');
             overlay.className = 'gallery-checkbox-overlay';
@@ -99,6 +123,7 @@ onUiLoaded(function() {
             function onToggle(event) {
                 event.stopPropagation();
                 setChecked(index, input.checked);
+                syncAllOverlaysForIndex(index);
                 writeCheckedIndices(checkedIndexArray());
             }
             input.addEventListener('pointerdown', function(event) { event.stopPropagation(); });
@@ -108,6 +133,7 @@ onUiLoaded(function() {
             thumbnailButton.style.position = thumbnailButton.style.position || 'relative';
             thumbnailButton.appendChild(overlay);
             stampedSrcByButton.set(thumbnailButton, getThumbnailImgSrc(thumbnailButton));
+            builtInputs.push({input: input, index: index});
             return input;
         }
 
@@ -116,6 +142,7 @@ onUiLoaded(function() {
             for (var i = 0; i < overlays.length; i++) {
                 overlays[i].remove();
             }
+            builtInputs = [];
         }
 
         function resetCheckedState() {
@@ -127,7 +154,8 @@ onUiLoaded(function() {
         // (thumbnail-lg) and the preview strip (thumbnail-small), which
         // share the same underlying gallery value order and therefore the
         // same index space -- toggling either keeps them in sync because
-        // they read/write the same checkedIndices set.
+        // onToggle above pushes the new state into every built input for
+        // that index, not just the one the user clicked.
         function rebuildAllOverlays() {
             removeAllOverlays();
             var thumbnailButtons = galleryRoot.querySelectorAll(THUMBNAIL_SELECTOR);
@@ -155,33 +183,46 @@ onUiLoaded(function() {
             return 0;
         }
 
-        // Detects drift: any live thumbnail button whose current img src no
-        // longer matches the src its overlay was stamped against, or any
-        // thumbnail button with no overlay at all (a genuinely new button),
-        // or an overlay whose button is no longer in the DOM (fewer
-        // thumbnails than before). Any of these forces a full rebuild --
-        // never a partial resync -- because the reused-button identity race
-        // means a partial resync could stamp stale checked state onto a
-        // different image (the exact FWDF-189 lesson this mirrors).
-        function hasDrifted() {
+        // Distinguishes two kinds of drift, since a naive "any structural
+        // change means the gallery value changed" check is wrong: entering
+        // or leaving preview mode adds/removes the whole preview-strip
+        // button set for the SAME unchanged gallery value (see this file's
+        // header comment), which must not wipe the checked selection.
+        //
+        // VALUE drift: a button that already has a stamp now shows a
+        // different img src -- the gallery's actual value changed under
+        // that button (the FWDF-189 reused-button identity race), so the
+        // checked set is meaningless and must reset.
+        //
+        // STRUCTURE drift: the thumbnail count changed, or a button has no
+        // stamp at all (newly mounted, e.g. the preview strip appearing),
+        // but every ALREADY-stamped button's src still matches -- overlays
+        // still need rebuilding (new buttons need their own checkbox), but
+        // the checked set itself is still valid and must survive.
+        //
+        // Returns 'value', 'structure', or null (no drift at all).
+        function detectDrift() {
             var thumbnailButtons = galleryRoot.querySelectorAll(THUMBNAIL_SELECTOR);
             var overlaidCount = galleryRoot.querySelectorAll('.gallery-checkbox-overlay').length;
-            if (thumbnailButtons.length !== overlaidCount) {
-                return true;
-            }
+            var structuralDrift = thumbnailButtons.length !== overlaidCount;
             for (var i = 0; i < thumbnailButtons.length; i++) {
                 var button = thumbnailButtons[i];
                 var stampedSrc = stampedSrcByButton.get(button);
-                if (stampedSrc === undefined || stampedSrc !== getThumbnailImgSrc(button)) {
-                    return true;
+                if (stampedSrc === undefined) {
+                    structuralDrift = true;
+                } else if (stampedSrc !== getThumbnailImgSrc(button)) {
+                    return 'value';
                 }
             }
-            return false;
+            return structuralDrift ? 'structure' : null;
         }
 
         function reconcile() {
-            if (hasDrifted()) {
+            var drift = detectDrift();
+            if (drift === 'value') {
                 resetCheckedState();
+                rebuildAllOverlays();
+            } else if (drift === 'structure') {
                 rebuildAllOverlays();
             }
         }
