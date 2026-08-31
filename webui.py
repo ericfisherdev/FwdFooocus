@@ -512,6 +512,16 @@ with shared.gradio_root:
                         with gr.Row():
                             with gr.Column():
                                 inpaint_input_image = grh.Image(label='Image', source='upload', type='numpy', tool='sketch', height=500, brush_color="#FFFFFF", elem_id='inpaint_canvas', show_label=False)
+                                inpaint_brush_mode = gr.Radio(choices=['Draw', 'Erase'], value='Draw',
+                                                              label='Brush mode', elem_id='inpaint_brush_mode',
+                                                              info='Erase removes previously painted mask areas '
+                                                                   'with the same brush size. Undo only reverts '
+                                                                   'draw strokes, not erases, and erasing resets '
+                                                                   'when the image changes.')
+                                # CSS-hidden (css/style.css), not visible=False, so the DOM
+                                # textarea exists for javascript/inpaint_eraser.js to write into.
+                                inpaint_eraser_data = gr.Textbox(value='', elem_id='inpaint_eraser_data')
+                                inpaint_mask_eraser_data = gr.Textbox(value='', elem_id='inpaint_mask_eraser_data')
                                 inpaint_advanced_masking_checkbox = gr.Checkbox(label='Enable Advanced Masking Features', value=modules.config.default_inpaint_advanced_masking_checkbox)
                                 inpaint_mode = gr.Dropdown(choices=modules.flags.inpaint_options, value=modules.config.default_inpaint_method, label='Method')
                                 inpaint_additional_prompt = gr.Textbox(placeholder="Describe what you want to inpaint.", elem_id='inpaint_additional_prompt', label='Inpaint Additional Prompt', visible=False)
@@ -1795,6 +1805,7 @@ with shared.gradio_root:
         ctrls += [input_image_checkbox, current_tab]
         ctrls += [uov_method, uov_input_image]
         ctrls += [outpaint_selections, inpaint_input_image, inpaint_additional_prompt, inpaint_mask_image]
+        ctrls += [inpaint_eraser_data, inpaint_mask_eraser_data]
         ctrls += [disable_preview, disable_intermediate_results, disable_seed_increment, black_out_nsfw]
         ctrls += [adm_scaler_positive, adm_scaler_negative, adm_scaler_end, adaptive_cfg, clip_skip]
         ctrls += [sampler_name, scheduler_name, vae_name]
