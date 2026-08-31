@@ -87,6 +87,16 @@ onUiLoaded(function() {
         var offscreen = document.createElement('canvas');
         var offscreenCtx = offscreen.getContext('2d');
         var activeStroke = null;
+        // Previous stamp point of the CURRENT stroke, in the same canvas
+        // pixel space as eraseAt/uneraseAt's `point` argument. pointermove
+        // arrives at roughly frame rate, so a fast flick moves farther per
+        // event than the brush diameter at small radii; without stroking a
+        // segment back to this point, isolated per-sample circles leave
+        // gaps between them -- invisible ones on the unerase path, where
+        // Gradio paints the Draw stroke as one continuous line but the
+        // offscreen eraser mask keeps thin unerased bands inside it that
+        // apply_eraser_mask() then re-erases at generation time.
+        var previousPoint = null;
 
         function resetSession() {
             offscreenCtx.clearRect(0, 0, offscreen.width, offscreen.height);
@@ -101,35 +111,45 @@ onUiLoaded(function() {
             }
         }
 
-        function eraseAt(maskCanvas, point, radius) {
-            var maskCtx = maskCanvas.getContext('2d');
-            maskCtx.save();
-            maskCtx.globalCompositeOperation = 'destination-out';
-            maskCtx.beginPath();
-            maskCtx.arc(point.x, point.y, radius, 0, Math.PI * 2);
-            maskCtx.fill();
-            maskCtx.restore();
-
-            offscreenCtx.save();
-            offscreenCtx.globalCompositeOperation = 'source-over';
-            offscreenCtx.fillStyle = '#fff';
-            offscreenCtx.beginPath();
-            offscreenCtx.arc(point.x, point.y, radius, 0, Math.PI * 2);
-            offscreenCtx.fill();
-            offscreenCtx.restore();
+        // Stamps `point` (and, when `prev` is given, the round-capped
+        // segment from `prev` to `point`, closing sampling gaps) onto ctx
+        // under the given composite operation.
+        function stampSegment(ctx, point, radius, prev, compositeOperation, fillStyle) {
+            ctx.save();
+            ctx.globalCompositeOperation = compositeOperation;
+            if (fillStyle) {
+                ctx.fillStyle = fillStyle;
+                ctx.strokeStyle = fillStyle;
+            }
+            if (prev) {
+                ctx.lineWidth = radius * 2;
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.beginPath();
+                ctx.moveTo(prev.x, prev.y);
+                ctx.lineTo(point.x, point.y);
+                ctx.stroke();
+            }
+            ctx.beginPath();
+            ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
         }
 
-        // Draw mode: remove this point from the offscreen eraser mask only.
-        // The visible mask canvas is Gradio's own responsibility here (plain
+        function eraseAt(maskCanvas, point, radius) {
+            stampSegment(maskCanvas.getContext('2d'), point, radius, previousPoint, 'destination-out', null);
+            stampSegment(offscreenCtx, point, radius, previousPoint, 'source-over', '#fff');
+            previousPoint = point;
+        }
+
+        // Draw mode: remove this point (and the segment back to the
+        // previous one) from the offscreen eraser mask only. The visible
+        // mask canvas is Gradio's own responsibility here (plain
         // source-over white, Sketch.svelte) -- painting it ourselves would
         // fight that compositing.
         function uneraseAt(point, radius) {
-            offscreenCtx.save();
-            offscreenCtx.globalCompositeOperation = 'destination-out';
-            offscreenCtx.beginPath();
-            offscreenCtx.arc(point.x, point.y, radius, 0, Math.PI * 2);
-            offscreenCtx.fill();
-            offscreenCtx.restore();
+            stampSegment(offscreenCtx, point, radius, previousPoint, 'destination-out', null);
+            previousPoint = point;
         }
 
         function replayOntoMask(maskCanvas) {
@@ -158,8 +178,8 @@ onUiLoaded(function() {
             replayOntoMask: replayOntoMask,
             commit: commit,
             activeStroke: function() { return activeStroke; },
-            beginStroke: function(mode) { activeStroke = mode; },
-            endStroke: function() { activeStroke = null; }
+            beginStroke: function(mode) { activeStroke = mode; previousPoint = null; },
+            endStroke: function() { activeStroke = null; previousPoint = null; }
         };
     }
 
@@ -202,6 +222,11 @@ onUiLoaded(function() {
 
         var session = createEraserSession(textareaElemId);
         var lastCursor = null;
+        // Declared before resyncAfterRedraw (which reads and updates it) so
+        // a Gradio-originated repaint scheduled via rAF can re-assert canvas
+        // identity against the same value the observer maintains, not stamp
+        // stale holes onto a canvas that was swapped out from under it.
+        var lastMaskCanvas = getMaskCanvas(componentRoot);
 
         function handlePointerDown(event) {
             if (event.button !== 0) {
@@ -209,11 +234,27 @@ onUiLoaded(function() {
                 // contacts report button 0 and are unaffected.
                 return;
             }
+            if (!(event.target instanceof HTMLCanvasElement)) {
+                // Toolbar buttons, the brush-radius slider, etc. live inside
+                // componentRoot too (Gradio floats them over the image
+                // area) -- strokes only start when the pointer goes down on
+                // one of the sketch's own canvases.
+                return;
+            }
             var maskCanvas = getMaskCanvas(componentRoot);
             if (!maskCanvas) {
                 return;
             }
             session.ensureSized(maskCanvas);
+
+            // Capture so pointermove/pointerup keep targeting this canvas
+            // for the rest of the gesture even if the cursor drifts under a
+            // floating toolbar control mid-drag -- without capture, a plain
+            // per-event target re-check in handlePointerMove would drop
+            // samples there and reopen the sampling-gap issue fixed above.
+            if (event.target.setPointerCapture) {
+                event.target.setPointerCapture(event.pointerId);
+            }
 
             if (isErasingActive()) {
                 event.preventDefault();
@@ -233,6 +274,16 @@ onUiLoaded(function() {
             var maskCanvas = getMaskCanvas(componentRoot);
             var interfaceCanvas = getInterfaceCanvas(componentRoot);
             if (!maskCanvas || !interfaceCanvas) {
+                return;
+            }
+            if (!(event.target instanceof HTMLCanvasElement)) {
+                // Plain hover over the toolbar (not a captured drag, which
+                // keeps reporting the captured canvas as the target
+                // regardless of what's under the cursor): no stroke
+                // sampling, and clear any leftover cursor circle so it
+                // doesn't get stuck floating over the controls.
+                clearCursor(interfaceCanvas, lastCursor);
+                lastCursor = null;
                 return;
             }
 
@@ -283,11 +334,27 @@ onUiLoaded(function() {
             lastCursor = null;
         }
 
+        // Re-asserts canvas identity at replay time rather than trusting the
+        // premise that scheduled it: a single MutationObserver batch during
+        // an image swap can carry the outgoing canvas's 'style' mutation at
+        // a lower index than the childList swap, so the observer's style
+        // branch fires (and returns) before its childList branch would have
+        // reset the session -- by the time this rAF callback actually runs,
+        // getMaskCanvas() already returns the NEW image's canvas. Stamping
+        // the previous image's holes onto that would be the same drift bug
+        // this eraser exists to prevent, just triggered from the resync
+        // path instead of the observer.
         function resyncAfterRedraw() {
             var maskCanvas = getMaskCanvas(componentRoot);
-            if (maskCanvas) {
-                session.replayOntoMask(maskCanvas);
+            if (!maskCanvas) {
+                return;
             }
+            if (maskCanvas !== lastMaskCanvas) {
+                lastMaskCanvas = maskCanvas;
+                session.reset();
+                return;
+            }
+            session.replayOntoMask(maskCanvas);
         }
 
         // Capture-phase so we intercept before Svelte's own bubble-phase
@@ -331,8 +398,9 @@ onUiLoaded(function() {
         //    or a same-size image replacing the previous one via drag-and-
         //    drop (which fires no 'change' event on the file input): treat
         //    as a new image and reset the eraser instead of resyncing stale
-        //    holes onto it.
-        var lastMaskCanvas = getMaskCanvas(componentRoot);
+        //    holes onto it. lastMaskCanvas is declared above, alongside the
+        //    other per-component session state, since resyncAfterRedraw
+        //    reads and updates it too.
         var observer = new MutationObserver(function(mutations) {
             for (var i = 0; i < mutations.length; i++) {
                 var mutation = mutations[i];
