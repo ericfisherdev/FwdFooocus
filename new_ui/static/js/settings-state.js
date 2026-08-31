@@ -23,7 +23,7 @@ function settingsState() {
         clipSkip: 2,
         vae: 'Default (model)',
         saveMetadata: true,
-        metadataScheme: 'fooocus',
+        metadataScheme: 'a1111',
 
         // Global sampler/scheduler lists (loaded from API), used as a
         // fallback until $store.model.capabilities resolves — see the
@@ -42,6 +42,8 @@ function settingsState() {
             this.sharpness = cfg.defaultSampleSharpness ?? 2.0;
             this.sampler = cfg.defaultSampler || 'dpmpp_2m_sde_gpu';
             this.scheduler = cfg.defaultScheduler || 'karras';
+            this.saveMetadata = cfg.defaultSaveMetadata ?? true;
+            this.metadataScheme = cfg.defaultMetadataScheme || 'a1111';
 
             this._loadSamplers();
 

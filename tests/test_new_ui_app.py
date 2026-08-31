@@ -131,6 +131,20 @@ class TestConfigAPI:
         assert "default_loras_max_weight" in data
         assert "default_max_lora_number" in data
 
+    def test_config_exposes_metadata_defaults(self):
+        r = client.get("/api/config")
+        data = r.json()
+        assert data["default_save_metadata_to_images"] == config.default_save_metadata_to_images
+        assert data["default_metadata_scheme"] == config.default_metadata_scheme
+
+    def test_metadata_defaults_are_png_a1111(self):
+        # FWDF-184: new installs should default to saving a1111-scheme
+        # metadata rather than opting out of metadata entirely.
+        r = client.get("/api/config")
+        data = r.json()
+        assert data["default_save_metadata_to_images"] is True
+        assert data["default_metadata_scheme"] == "a1111"
+
 
 class TestModelsAPI:
     def test_returns_model_lists(self):
@@ -274,6 +288,9 @@ class TestBuildGenerateArgsFamilyAware:
     IDX_VAE_NAME = 34
     IDX_OVERWRITE_STEP = 35
     IDX_FREEU_ENABLED = 49
+    IDX_OUTPUT_FORMAT = 7
+    IDX_SAVE_METADATA_TO_IMAGES = 63
+    IDX_METADATA_SCHEME = 64
 
     def _zero_length_padding_patches(self) -> list:
         return [
@@ -402,6 +419,26 @@ class TestBuildGenerateArgsFamilyAware:
         assert args[self.IDX_PERFORMANCE_SELECTION] == "Speed"
         assert args[self.IDX_OVERWRITE_STEP] == 20
         assert args[self.IDX_ASPECT_RATIOS_SELECTION] == "512*512"
+
+    def test_omitted_metadata_fields_fall_back_to_config_defaults(self):
+        # FWDF-184: these three fields used to fall back to hardcoded
+        # literals ("png", True, "fooocus") instead of the configured
+        # defaults, so a config.txt override had no effect on the new UI.
+        args = self._build({}, family=ModelFamily.SDXL)
+        assert args[self.IDX_OUTPUT_FORMAT] == config.default_output_format
+        assert args[self.IDX_SAVE_METADATA_TO_IMAGES] == config.default_save_metadata_to_images
+        assert args[self.IDX_METADATA_SCHEME] == config.default_metadata_scheme
+
+    def test_explicit_metadata_fields_override_config_defaults(self):
+        body = {
+            "output_format": "jpeg",
+            "save_metadata_to_images": False,
+            "metadata_scheme": "fooocus",
+        }
+        args = self._build(body, family=ModelFamily.SDXL)
+        assert args[self.IDX_OUTPUT_FORMAT] == "jpeg"
+        assert args[self.IDX_SAVE_METADATA_TO_IMAGES] is False
+        assert args[self.IDX_METADATA_SCHEME] == "fooocus"
 
     def test_z_image_family_never_resolves_accel_lora_performance_labels(self):
         """FWDF-153: the real Z-Image capability registry (modules/model_family.py)

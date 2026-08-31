@@ -46,6 +46,8 @@ document.addEventListener('alpine:init', () => {
         defaultLorasMinWeight: -2,
         defaultLorasMaxWeight: 5,
         defaultMaxLoraNumber: 5,
+        defaultSaveMetadata: true,
+        defaultMetadataScheme: 'a1111',
 
         async load() {
             try {
@@ -72,6 +74,8 @@ document.addEventListener('alpine:init', () => {
                 this.defaultLorasMinWeight = data.default_loras_min_weight ?? -2;
                 this.defaultLorasMaxWeight = data.default_loras_max_weight ?? 5;
                 this.defaultMaxLoraNumber = data.default_max_lora_number ?? 5;
+                this.defaultSaveMetadata = data.default_save_metadata_to_images ?? true;
+                this.defaultMetadataScheme = data.default_metadata_scheme || 'a1111';
                 this.loaded = true;
             } catch (e) {
                 console.error('[store.config] Failed to load:', e);
