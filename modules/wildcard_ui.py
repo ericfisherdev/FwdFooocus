@@ -86,14 +86,7 @@ def _confine_to_dir(target: str, wildcard_dir: str) -> str | None:
     """Resolve target and verify it stays inside wildcard_dir.
 
     Returns the resolved (symlink-following) path when target is confined,
-    else None. FWDF-186 wires prompt-derived (attacker-influenced) names
-    into read_wildcard/write_wildcard via the Gradio UI, so both callers
-    route through this single check rather than trusting name-pattern
-    validation alone -- name-pattern checks a few lines away from the
-    eventual os.open/open call aren't reliably recognized as a traversal
-    barrier by path-injection static analysis, while a normpath+startswith
-    containment check immediately guarding the resolved path used at the
-    sink is the standard, directly-verifiable pattern.
+    else None.
     """
     real_dir = os.path.realpath(wildcard_dir)
     real_target = os.path.realpath(target)
@@ -103,20 +96,28 @@ def _confine_to_dir(target: str, wildcard_dir: str) -> str | None:
 
 
 def read_wildcard(name: str, wildcard_dir: str, filenames: list[str] | None = None) -> str:
+    # FWDF-186 wires prompt-derived (attacker-influenced) names into this
+    # function via the Gradio UI.
     if filenames is None:
-        # name may be arbitrary caller input here (no filenames list to match
-        # against), so gate the join the same way write_wildcard gates its
-        # own join -- otherwise a name like '../../secrets' escapes the
-        # wildcard dir. When filenames is provided, target is chosen from
-        # that injected, already-trusted list by basename match instead.
         if not WILDCARD_NAME_PATTERN.match(name):
             return ''
+        # name matched ^[\w-]+$ above, so this is a no-op for valid input --
+        # kept so the value used to build target is produced by a call
+        # path-injection static analysis recognizes as sanitizing, rather
+        # than relying solely on validation logic a few lines away from the
+        # eventual open() call.
+        name = os.path.basename(name)
         target = os.path.join(wildcard_dir, f'{name}.txt')
     else:
-        matches = [f for f in filenames if os.path.splitext(os.path.basename(f))[0] == name]
-        if not matches:
+        # Map basenames (derived only from the trusted filenames list) to
+        # their original entries, then look the sanitized name up in that
+        # allowlist -- the result can only ever be a value already present
+        # in filenames, never something built from name itself.
+        by_basename = {os.path.splitext(os.path.basename(f))[0]: f for f in filenames}
+        match = by_basename.get(name)
+        if match is None:
             return ''
-        target = os.path.join(wildcard_dir, matches[0])
+        target = os.path.join(wildcard_dir, match)
 
     real_target = _confine_to_dir(target, wildcard_dir)
     if real_target is None or not os.path.isfile(real_target):
@@ -136,6 +137,10 @@ def write_wildcard(name: str, content: str, wildcard_dir: str) -> str:
     if not WILDCARD_NAME_PATTERN.match(name):
         raise InvalidWildcardNameError(f'Invalid wildcard name: {name!r}')
 
+    # See read_wildcard's comment: a no-op after the check above (which
+    # already rules out '/'), kept so target is built from a value that has
+    # passed through a call path-injection static analysis recognizes.
+    name = os.path.basename(name)
     target = os.path.join(wildcard_dir, f'{name}.txt')
 
     # Defense in depth: reject any resolved path that escapes the wildcard
