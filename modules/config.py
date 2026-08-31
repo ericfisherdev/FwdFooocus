@@ -831,11 +831,11 @@ def get_model_filenames(folder_paths, extensions=None, name_filter=None):
 
 
 def update_files():
-    global model_filenames, lora_filenames, vae_filenames, wildcard_filenames, available_presets
+    global model_filenames, lora_filenames, vae_filenames, available_presets
     model_filenames = get_model_filenames(paths_checkpoints)
     lora_filenames = get_model_filenames(paths_loras)
     vae_filenames = get_model_filenames(path_vae)
-    wildcard_filenames = get_files_from_folder(path_wildcards, ['.txt'])
+    update_wildcard_files()
     available_presets = get_presets()
     return
 
