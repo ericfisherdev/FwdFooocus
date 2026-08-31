@@ -106,7 +106,7 @@ def read_wildcard(name: str, wildcard_dir: str, filenames: list[str] | None = No
     # (github.com/github/codeql query help for py/path-injection).
     base_path = os.path.normpath(wildcard_dir)
     fullpath = os.path.normpath(target)
-    if fullpath != base_path and not fullpath.startswith(base_path + os.sep):
+    if not fullpath.startswith(base_path + os.sep):
         return ''
 
     if not os.path.isfile(fullpath):
@@ -132,7 +132,7 @@ def write_wildcard(name: str, content: str, wildcard_dir: str) -> str:
     # containment check, immediately guarding fullpath before it is used.
     base_path = os.path.normpath(wildcard_dir)
     fullpath = os.path.normpath(target)
-    if fullpath != base_path and not fullpath.startswith(base_path + os.sep):
+    if not fullpath.startswith(base_path + os.sep):
         raise InvalidWildcardNameError(f'Invalid wildcard name: {name!r}')
 
     os.makedirs(wildcard_dir, exist_ok=True)
