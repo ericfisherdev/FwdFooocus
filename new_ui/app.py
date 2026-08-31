@@ -129,6 +129,8 @@ async def get_config():
         "default_loras_min_weight": config.default_loras_min_weight,
         "default_loras_max_weight": config.default_loras_max_weight,
         "default_max_lora_number": config.default_max_lora_number,
+        "default_save_metadata_to_images": config.default_save_metadata_to_images,
+        "default_metadata_scheme": config.default_metadata_scheme,
     }
 
 
@@ -384,7 +386,7 @@ def _build_generate_args(body: dict) -> list:
         performance_selection,
         aspect_ratios_selection,
         max(1, min(int(body.get("image_number", config.default_image_number)), config.default_max_image_number)),
-        body.get("output_format", "png"),
+        body.get("output_format", config.default_output_format),
         int(body.get("seed", -1)),
         body.get("read_wildcards_in_order", False),
         sharpness,
@@ -442,8 +444,8 @@ def _build_generate_args(body: dict) -> list:
         body.get("invert_mask_checkbox", False),
         int(body.get("inpaint_erode_or_dilate", 0)),
         body.get("save_final_enhanced_image_only", False),
-        body.get("save_metadata_to_images", True),
-        body.get("metadata_scheme", "fooocus"),
+        body.get("save_metadata_to_images", config.default_save_metadata_to_images),
+        body.get("metadata_scheme", config.default_metadata_scheme),
         *cn_args,
         # DINO / enhance
         body.get("debugging_dino", False),
