@@ -23,6 +23,8 @@ import modules.ui_prefs
 import modules.lora_presets
 import modules.lora_library
 import modules.lora_metadata
+import modules.wildcard_ui
+import modules.wildcard_ui_helpers
 import args_manager
 import copy
 import launch
@@ -277,6 +279,110 @@ with shared.gradio_root:
 
                     stop_button.click(stop_clicked, inputs=currentTask, outputs=currentTask, queue=False, show_progress=False, _js='cancelGenerateForever')
                     skip_button.click(skip_clicked, inputs=currentTask, outputs=currentTask, queue=False, show_progress=False)
+
+            # FWDF-186: wildcard prompt controls. wildcard_scan_trigger is a
+            # rendered-but-hidden button (display:none via css/style.css) so
+            # javascript/wildcards.js's debounced input listener can click it
+            # -- a visible=False button cannot be JS-clicked in Gradio.
+            wildcard_scan_trigger = gr.Button(value='', elem_id='wildcard_scan_trigger')
+            # Last scan result as a list of {'name', 'exists'} dicts (or None
+            # for unused slots), length 2 * WILDCARD_BUTTON_POOL_SIZE: the
+            # first half maps to wildcard_top_buttons, the second half to
+            # wildcard_nested_buttons (see modules.wildcard_ui_helpers).
+            wildcard_slots = gr.State([])
+
+            with gr.Row(visible=False) as wildcard_button_row:
+                wildcard_top_buttons = [
+                    gr.Button(visible=False, size='sm', elem_classes='wildcard_btn')
+                    for _ in range(modules.wildcard_ui_helpers.WILDCARD_BUTTON_POOL_SIZE)
+                ]
+            with gr.Group(visible=False) as nested_wildcard_group:
+                gr.Markdown('### Nested Wildcards')
+                with gr.Row():
+                    wildcard_nested_buttons = [
+                        gr.Button(visible=False, size='sm', elem_classes='wildcard_btn')
+                        for _ in range(modules.wildcard_ui_helpers.WILDCARD_BUTTON_POOL_SIZE)
+                    ]
+            wildcard_button_pool = wildcard_top_buttons + wildcard_nested_buttons
+
+            wildcard_editing_name = gr.State('')
+            with gr.Group(visible=False, elem_id='wildcard_editor_modal') as wildcard_editor_modal:
+                with gr.Column(elem_classes='meta-confirm-panel'):
+                    wildcard_editor_title = gr.Markdown('### Wildcard')
+                    wildcard_editor_content = gr.Textbox(lines=12, label='One option per line')
+                    with gr.Row():
+                        wildcard_editor_save = gr.Button(value='Save', variant='primary')
+                        wildcard_editor_cancel = gr.Button(value='Cancel', variant='secondary')
+
+            def scan_wildcards(prompt_text):
+                # Refresh the known file list first so a wildcard file added
+                # on disk after startup is recognized on this scan.
+                modules.config.update_wildcard_files()
+                scan = modules.wildcard_ui.scan_prompt(
+                    prompt_text, modules.config.path_wildcards, modules.config.wildcard_filenames)
+                slots = modules.wildcard_ui_helpers.build_wildcard_slots(scan)
+                button_updates = modules.wildcard_ui_helpers.build_button_updates(slots)
+
+                results = [slots]
+                results += [gr.update(value=u['label'], visible=u['visible']) for u in button_updates]
+                results += [
+                    gr.update(visible=modules.wildcard_ui_helpers.top_level_section_visible(slots)),
+                    gr.update(visible=modules.wildcard_ui_helpers.nested_section_visible(slots)),
+                ]
+                return results
+
+            wildcard_scan_outputs = [wildcard_slots] + wildcard_button_pool + [wildcard_button_row, nested_wildcard_group]
+            wildcard_scan_trigger.click(scan_wildcards, inputs=prompt, outputs=wildcard_scan_outputs,
+                                        queue=False, show_progress=False)
+            shared.gradio_root.load(scan_wildcards, inputs=prompt, outputs=wildcard_scan_outputs,
+                                    queue=False, show_progress=False)
+
+            def open_wildcard_editor(slots, index):
+                slot = slots[index] if slots and index < len(slots) else None
+                if slot is None:
+                    return gr.update(visible=True), gr.update(value='### Wildcard'), gr.update(value=''), ''
+
+                name = slot['name']
+                content = ''
+                if slot['exists']:
+                    content = modules.wildcard_ui.read_wildcard(
+                        name, modules.config.path_wildcards, modules.config.wildcard_filenames)
+                return gr.update(visible=True), gr.update(value=f'### {name}'), gr.update(value=content), name
+
+            def make_wildcard_button_handler(index):
+                """
+                Build a .click handler bound to one pool button's index.
+
+                A factory, not a closure over the loop variable -- each call
+                captures its own `index` argument, avoiding the late-binding
+                trap where every handler would otherwise see the loop's
+                final value of `index` (see make_config_pref_change_handler).
+                """
+                def _handle_wildcard_button_click(slots):
+                    return open_wildcard_editor(slots, index)
+
+                return _handle_wildcard_button_click
+
+            for button_index, wildcard_button in enumerate(wildcard_button_pool):
+                wildcard_button.click(
+                    make_wildcard_button_handler(button_index),
+                    inputs=[wildcard_slots],
+                    outputs=[wildcard_editor_modal, wildcard_editor_title, wildcard_editor_content, wildcard_editing_name],
+                    queue=False, show_progress=False)
+
+            def save_wildcard(name, content):
+                if name:
+                    modules.wildcard_ui.write_wildcard(name, content, modules.config.path_wildcards)
+                    modules.config.update_wildcard_files()
+                return gr.update(visible=False)
+
+            wildcard_editor_save.click(save_wildcard, inputs=[wildcard_editing_name, wildcard_editor_content],
+                                       outputs=[wildcard_editor_modal], queue=False, show_progress=False).then(
+                scan_wildcards, inputs=prompt, outputs=wildcard_scan_outputs, queue=False, show_progress=False)
+
+            wildcard_editor_cancel.click(lambda: gr.update(visible=False), outputs=[wildcard_editor_modal],
+                                         queue=False, show_progress=False)
+
             with gr.Row(elem_classes='advanced_check_row'):
                 input_image_checkbox = gr.Checkbox(label='Input Image', value=modules.config.default_image_prompt_checkbox, container=False, elem_classes='min_check')
                 enhance_checkbox = gr.Checkbox(label='Enhance', value=modules.config.default_enhance_checkbox, container=False, elem_classes='min_check')
