@@ -152,23 +152,29 @@ def inpaint_mode_change(mode, inpaint_engine_version):
         return [
             gr.update(visible=True), gr.update(visible=False, value=[]),
             gr.Dataset.update(visible=True, samples=modules.config.example_inpaint_prompts),
-            False, 'None', 0.5, 0.0
+            False, modules.config.default_inpaint_engines[mode],
+            modules.config.default_inpaint_strengths[mode],
+            modules.config.default_inpaint_respective_fields[mode]
         ]
 
     if inpaint_engine_version == 'empty':
-        inpaint_engine_version = modules.config.default_inpaint_engine_version
+        inpaint_engine_version = modules.config.default_inpaint_engines[mode]
 
     if mode == modules.flags.inpaint_option_modify:
         return [
             gr.update(visible=True), gr.update(visible=False, value=[]),
             gr.Dataset.update(visible=False, samples=modules.config.example_inpaint_prompts),
-            True, inpaint_engine_version, 1.0, 0.0
+            True, inpaint_engine_version,
+            modules.config.default_inpaint_strengths[mode],
+            modules.config.default_inpaint_respective_fields[mode]
         ]
 
     return [
         gr.update(visible=False, value=''), gr.update(visible=True),
         gr.Dataset.update(visible=False, samples=modules.config.example_inpaint_prompts),
-        False, inpaint_engine_version, 1.0, 0.618
+        False, inpaint_engine_version,
+        modules.config.default_inpaint_strengths[mode],
+        modules.config.default_inpaint_respective_fields[mode]
     ]
 
 
@@ -1755,13 +1761,13 @@ with shared.gradio_root:
 
 
             def inpaint_engine_state_change(inpaint_engine_version, *args):
-                if inpaint_engine_version == 'empty':
-                    inpaint_engine_version = modules.config.default_inpaint_engine_version
-
                 result = []
                 for inpaint_mode in args:
                     if inpaint_mode != modules.flags.inpaint_option_detail:
-                        result.append(gr.update(value=inpaint_engine_version))
+                        mode_engine_version = inpaint_engine_version
+                        if mode_engine_version == 'empty':
+                            mode_engine_version = modules.config.default_inpaint_engines[inpaint_mode]
+                        result.append(gr.update(value=mode_engine_version))
                     else:
                         result.append(gr.update())
 
