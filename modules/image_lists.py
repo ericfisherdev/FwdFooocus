@@ -243,10 +243,21 @@ def save_image_to_list(name: str, source_image_path: str, root_dir: str,
             # replaces (rather than follows) a symlink at the destination.
             #
             # mode/timestamps are applied through the still-open fd
-            # (os.fchmod/os.utime), not by path afterwards -- a by-path
-            # shutil.copystat call here would re-resolve real_dest_path
-            # and could follow a symlink swapped in after the fd write,
-            # reopening the exact TOCTOU window O_NOFOLLOW below closes.
+            # (os.fchmod/os.utime) where the platform supports it, rather
+            # than by path afterwards -- a by-path shutil.copystat call
+            # here would re-resolve real_dest_path and could follow a
+            # symlink swapped in after the fd write, reopening the exact
+            # TOCTOU window O_NOFOLLOW below closes. os.fchmod and
+            # fd-based os.utime are Unix-only (absent / unsupported on
+            # Windows under the project's pinned Python 3.10, a documented
+            # first-class target via run.bat), so both are capability-
+            # guarded and treated as best-effort: preserving mode/mtime is
+            # a nicety, never allowed to turn a successful copy into a
+            # failed save. The Windows fallback applies mtime by path on
+            # tmp_dest_path (not yet the public name) before the replace;
+            # planting a symlink there requires elevated privileges on
+            # Windows, so the by-path window the fd approach closes on
+            # Unix is not a practical concern there.
             #
             # O_NOFOLLOW makes symlink-rejection atomic with the open
             # itself instead of just advisory, mirroring
@@ -259,9 +270,14 @@ def save_image_to_list(name: str, source_image_path: str, root_dir: str,
                 with open(real_source_path, 'rb') as src_file, open(dest_fd, 'wb') as dest_file:
                     shutil.copyfileobj(src_file, dest_file)
                     source_stat = os.stat(real_source_path)
-                    os.fchmod(dest_file.fileno(), stat.S_IMODE(source_stat.st_mode))
+                    if hasattr(os, 'fchmod'):
+                        os.fchmod(dest_file.fileno(), stat.S_IMODE(source_stat.st_mode))
                     dest_file.flush()
-                    os.utime(dest_file.fileno(),
+                    if os.utime in os.supports_fd:
+                        os.utime(dest_file.fileno(),
+                                 ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
+                if os.utime not in os.supports_fd:
+                    os.utime(tmp_dest_path,
                              ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
                 os.replace(tmp_dest_path, real_dest_path)
             except OSError:
