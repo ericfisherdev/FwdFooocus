@@ -134,6 +134,18 @@ class TestReadWildcard:
 
         assert read_wildcard('binary', wildcard_dir, filenames) == ''
 
+    def test_symlink_inside_wildcard_dir_pointing_outside_is_rejected(self, tmp_path, wildcard_dir):
+        # A symlink physically inside wildcard_dir, but resolving outside
+        # it, must not be followed to leak content from elsewhere on disk.
+        # os.path.normpath alone would not catch this -- only realpath
+        # resolution (see _resolve_confined) does.
+        secret_file = tmp_path.parent / 'secret.txt'
+        secret_file.write_text('leaked secret', encoding='utf-8')
+        symlink_path = os.path.join(wildcard_dir, 'evil.txt')
+        os.symlink(secret_file, symlink_path)
+
+        assert read_wildcard('evil', wildcard_dir, ['evil.txt']) == ''
+
 
 class TestWriteWildcard:
     def test_creates_file_and_returns_path(self, wildcard_dir):
@@ -147,6 +159,21 @@ class TestWriteWildcard:
     def test_rejects_unsafe_names(self, wildcard_dir, bad_name):
         with pytest.raises(InvalidWildcardNameError):
             write_wildcard(bad_name, 'content', wildcard_dir)
+
+    def test_symlink_inside_wildcard_dir_pointing_outside_is_rejected(self, tmp_path, wildcard_dir):
+        # A symlink physically inside wildcard_dir (name 'evil.txt', so the
+        # WILDCARD_NAME_PATTERN check on 'evil' passes) resolving outside
+        # it must not be written through -- that would let an attacker
+        # overwrite an arbitrary file elsewhere on disk.
+        secret_file = tmp_path.parent / 'secret.txt'
+        secret_file.write_text('original', encoding='utf-8')
+        symlink_path = os.path.join(wildcard_dir, 'evil.txt')
+        os.symlink(secret_file, symlink_path)
+
+        with pytest.raises(InvalidWildcardNameError):
+            write_wildcard('evil', 'malicious', wildcard_dir)
+
+        assert secret_file.read_text(encoding='utf-8') == 'original'
 
 
 class TestUpdateWildcardFiles:
