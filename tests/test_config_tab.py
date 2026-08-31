@@ -9,10 +9,12 @@ rather than importing it). Instead these tests parse webui.py's AST and
 assert on the specific structures the Config tab depends on:
 
 - the Config tab is a sibling of the Advanced tab inside advanced_column
-- the per-field radios are wired through a handler *factory* (a function
-  called with `field` as an argument inside the loop), not a lambda that
-  closes over the loop variable directly (the late-binding trap called out
-  in the ticket)
+- the per-field radios persist via `.input` (user interaction only, not
+  `.change`, which also fires on the programmatic gr.update() renders from
+  page load / reset / modal Apply) wired through a handler *factory* (a
+  function called with `field` as an argument inside the loop), not a
+  lambda that closes over the loop variable directly (the late-binding trap
+  called out in the ticket)
 - the FWDF-182 modal's merged Apply handler outputs are extended with the
   Config tab's radios, and its handler updates them from default_prefs in
   both the "no pending metadata" and normal-completion branches
@@ -61,9 +63,9 @@ class TestConfigTabStructure(unittest.TestCase):
         self.assertIn('gr.Radio', body_src)
         self.assertIn('modules.ui_prefs.DECISION_LABELS', body_src)
 
-    def test_change_handler_uses_a_factory_not_a_loop_closure(self):
+    def test_input_handler_uses_a_factory_not_a_loop_closure(self):
         """
-        Guard against the late-binding trap: the .change handler must come
+        Guard against the late-binding trap: the .input handler must come
         from calling a factory function with `field` as an argument at each
         loop iteration, not from a lambda that reads the loop variable
         `field` directly from the enclosing scope (which would make every
@@ -77,10 +79,24 @@ class TestConfigTabStructure(unittest.TestCase):
         self.assertIn('make_config_pref_change_handler(field)', body_src)
         self.assertNotRegex(
             body_src,
-            r'radio\.change\(\s*lambda',
-            "radio.change should be wired via make_config_pref_change_handler(field), "
+            r'radio\.(change|input)\(\s*lambda',
+            "radio.input should be wired via make_config_pref_change_handler(field), "
             "not an inline lambda over the loop variable",
         )
+
+    def test_persistence_is_wired_to_input_not_change(self):
+        """
+        .change fires on programmatic gr.update() renders too (page-load
+        refresh, reset button, modal Apply all render these radios), so
+        wiring persistence to .change would re-save a stale value on every
+        such render. .input only fires for genuine user interaction.
+        """
+        config_tab = self._find_with_gr_tab_config()
+        self.assertIsNotNone(config_tab)
+        body_src = ast.unparse(config_tab)
+
+        self.assertIn('radio.input(make_config_pref_change_handler(field)', body_src)
+        self.assertNotIn('radio.change(', body_src)
 
     def test_reset_button_restores_ask_for_every_field(self):
         config_tab = self._find_with_gr_tab_config()
@@ -108,17 +124,26 @@ class TestConfigTabStructure(unittest.TestCase):
         self.assertIsNotNone(handler, 'Expected meta_confirm_apply_click to still be defined')
         src = ast.unparse(handler)
         self.assertEqual(
-            src.count('_config_pref_updates()'), 2,
-            'Expected _config_pref_updates() appended to result on both the '
+            src.count('config_pref_refresh()'), 2,
+            'Expected config_pref_refresh() appended to result on both the '
             'early-return (no pending_metadata) and normal-completion branches',
         )
+        self.assertNotIn(
+            '_config_pref_updates', src,
+            'meta_confirm_apply_click should reuse config_pref_refresh() rather than '
+            'a separate duplicate helper',
+        )
 
-    def test_config_pref_updates_reads_current_default_prefs(self):
-        helper = self._find_function('_config_pref_updates')
-        self.assertIsNotNone(helper, 'Expected a _config_pref_updates() helper')
-        src = ast.unparse(helper)
-        self.assertIn('modules.ui_prefs.default_prefs.get(field)', src)
-        self.assertIn('meta_confirm_field_order', src)
+    def test_config_pref_refresh_reads_current_default_prefs(self):
+        config_tab = self._find_with_gr_tab_config()
+        self.assertIsNotNone(config_tab)
+        for node in ast.walk(config_tab):
+            if isinstance(node, ast.FunctionDef) and node.name == 'config_pref_refresh':
+                src = ast.unparse(node)
+                self.assertIn('modules.ui_prefs.default_prefs.get(field)', src)
+                self.assertIn('meta_confirm_field_order', src)
+                return
+        self.fail('Expected a config_pref_refresh() function inside the Config tab block')
 
     def test_meta_confirm_apply_outputs_include_config_pref_radios(self):
         found = False
