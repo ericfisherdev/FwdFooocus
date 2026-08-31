@@ -1,4 +1,9 @@
+import base64
+import io
 import threading
+
+import numpy as np
+from PIL import Image
 
 from extras.inpaint_mask import generate_mask_from_image, SAMOptions
 from modules.heartbeat import is_browser_connected
@@ -73,6 +78,8 @@ class AsyncTask:
         self.inpaint_input_image = args.pop()
         self.inpaint_additional_prompt = args.pop()
         self.inpaint_mask_image_upload = args.pop()
+        self.inpaint_eraser_data = args.pop()
+        self.inpaint_mask_eraser_data = args.pop()
 
         self.disable_preview = args.pop()
         self.disable_intermediate_results = args.pop()
@@ -175,6 +182,48 @@ class AsyncTask:
         self.should_enhance = self.enhance_checkbox and (self.enhance_uov_method != disabled.casefold() or len(self.enhance_ctrls) > 0)
         self.images_to_enhance_count = 0
         self.enhance_stats = {}
+
+def decode_eraser_mask(data_url, width, height):
+    """Decode an inpaint-eraser PNG data URL (javascript/inpaint_eraser.js)
+    into a binarized uint8 mask of shape (height, width), or None when there
+    is nothing to erase.
+
+    The eraser layer is exported as its alpha channel -- matching how
+    Gradio 3.41.2 itself derives a sketch mask from stroke alpha rather than
+    stroke color (gradio/components/image.py preprocess) -- then resized to
+    match the canvas the eraser applies to and binarized at >127, the same
+    hardening apply_image_input() already applies to every other mask
+    source. data_url is browser-supplied, so any decode failure returns
+    None (nothing erased) instead of raising and aborting generation.
+    """
+    if not data_url:
+        return None
+
+    try:
+        _, _, encoded = data_url.partition(',')
+        raw = base64.b64decode(encoded)
+        with Image.open(io.BytesIO(raw)) as im:
+            resized = im.convert('RGBA').resize(
+                (int(width), int(height)), resample=Image.Resampling.LANCZOS)
+            alpha = np.array(resized)[:, :, 3]
+    except Exception:
+        return None
+
+    return (alpha > 127).astype(np.uint8) * 255
+
+
+def apply_eraser_mask(mask, eraser_mask):
+    """Zero mask wherever eraser_mask is set (>127); a no-op when
+    eraser_mask is None (nothing was erased, or decode_eraser_mask() could
+    not decode the browser-supplied data). Mutates and returns mask so
+    apply_image_input() can chain this the same way it chains the
+    surrounding np.maximum()/binarize calls at each of the eraser's two call
+    sites (main canvas, advanced masking canvas).
+    """
+    if eraser_mask is not None:
+        mask[eraser_mask > 127] = 0
+    return mask
+
 
 async_tasks = []
 current_task = None
@@ -1038,6 +1087,11 @@ def worker():
                 and isinstance(async_task.inpaint_input_image, dict):
             inpaint_image = async_task.inpaint_input_image['image']
             inpaint_mask = async_task.inpaint_input_image['mask'][:, :, 0]
+            inpaint_mask = (inpaint_mask > 127).astype(np.uint8) * 255
+
+            main_eraser_mask = decode_eraser_mask(
+                async_task.inpaint_eraser_data, width=inpaint_image.shape[1], height=inpaint_image.shape[0])
+            inpaint_mask = apply_eraser_mask(inpaint_mask, main_eraser_mask)
 
             if async_task.inpaint_advanced_masking_checkbox:
                 if isinstance(async_task.inpaint_mask_image_upload, dict):
@@ -1055,6 +1109,15 @@ def worker():
                     async_task.inpaint_mask_image_upload = np.mean(async_task.inpaint_mask_image_upload, axis=2)
                     async_task.inpaint_mask_image_upload = (async_task.inpaint_mask_image_upload > 127).astype(
                         np.uint8) * 255
+
+                    # Subtract the advanced-canvas eraser from the advanced mask ONLY,
+                    # before combining -- erasing on one canvas must not remove strokes
+                    # drawn on the other.
+                    advanced_eraser_mask = decode_eraser_mask(
+                        async_task.inpaint_mask_eraser_data, width=W, height=H)
+                    async_task.inpaint_mask_image_upload = apply_eraser_mask(
+                        async_task.inpaint_mask_image_upload, advanced_eraser_mask)
+
                     inpaint_mask = np.maximum(inpaint_mask, async_task.inpaint_mask_image_upload)
 
             if int(async_task.inpaint_erode_or_dilate) != 0:

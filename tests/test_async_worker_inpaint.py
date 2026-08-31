@@ -13,11 +13,15 @@ the actual new decision logic -- directly. See tests/test_patch_inpaint_masking.
 for direct verification of the mechanism that keeps masking correct once that
 patch() call is skipped.
 """
+import base64
+import io
 import sys
 import types
 from pathlib import Path
 
+import numpy as np
 import pytest
+from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -117,6 +121,107 @@ class TestInpaintFamilyLacksEngineHead:
         fake_family['family'] = ModelFamily.UNKNOWN
 
         assert async_worker._inpaint_family_lacks_engine_head('mystery.safetensors') is False
+
+
+def _eraser_data_url(alpha):
+    """Build a data:image/png;base64,... string whose alpha channel is
+    `alpha` (a 2D uint8 array), matching what javascript/inpaint_eraser.js's
+    offscreen-canvas toDataURL('image/png') export produces."""
+    rgb = np.zeros(alpha.shape + (3,), dtype=np.uint8)
+    rgba = np.dstack([rgb, alpha]).astype(np.uint8)
+    buf = io.BytesIO()
+    Image.fromarray(rgba, mode='RGBA').save(buf, format='PNG')
+    encoded = base64.b64encode(buf.getvalue()).decode('ascii')
+    return f'data:image/png;base64,{encoded}'
+
+
+class TestDecodeEraserMask:
+    def test_empty_string_returns_none(self):
+        assert async_worker.decode_eraser_mask('', width=4, height=4) is None
+
+    def test_none_input_returns_none(self):
+        assert async_worker.decode_eraser_mask(None, width=4, height=4) is None
+
+    def test_malformed_base64_returns_none(self):
+        assert async_worker.decode_eraser_mask('data:image/png;base64,not-valid-base64!!', width=4, height=4) is None
+
+    def test_valid_alpha_decodes_to_binarized_mask_of_requested_size(self):
+        alpha = np.zeros((4, 4), dtype=np.uint8)
+        alpha[1:3, 1:3] = 255
+        data_url = _eraser_data_url(alpha)
+
+        decoded = async_worker.decode_eraser_mask(data_url, width=4, height=4)
+
+        assert decoded.shape == (4, 4)
+        assert decoded.dtype == np.uint8
+        assert np.array_equal(decoded, alpha)
+
+    def test_partial_alpha_binarizes_at_127(self):
+        alpha = np.full((2, 2), 100, dtype=np.uint8)  # below the >127 threshold
+        alpha[0, 0] = 200  # above it
+        data_url = _eraser_data_url(alpha)
+
+        decoded = async_worker.decode_eraser_mask(data_url, width=2, height=2)
+
+        assert decoded[0, 0] == 255
+        assert decoded[0, 1] == 0
+        assert decoded[1, 0] == 0
+        assert decoded[1, 1] == 0
+
+    def test_resizes_to_requested_dimensions(self):
+        alpha = np.full((4, 4), 255, dtype=np.uint8)
+        data_url = _eraser_data_url(alpha)
+
+        decoded = async_worker.decode_eraser_mask(data_url, width=8, height=2)
+
+        assert decoded.shape == (2, 8)
+
+
+class TestApplyEraserMask:
+    def test_no_eraser_mask_leaves_mask_untouched(self):
+        mask = np.full((3, 3), 255, dtype=np.uint8)
+
+        result = async_worker.apply_eraser_mask(mask, None)
+
+        assert np.array_equal(result, np.full((3, 3), 255, dtype=np.uint8))
+
+    def test_erased_pixels_become_zero_others_untouched(self):
+        mask = np.full((3, 3), 255, dtype=np.uint8)
+        eraser = np.zeros((3, 3), dtype=np.uint8)
+        eraser[1, 1] = 255
+
+        result = async_worker.apply_eraser_mask(mask, eraser)
+
+        assert result[1, 1] == 0
+        assert np.array_equal(result[eraser == 0], np.full(8, 255, dtype=np.uint8))
+
+    def test_advanced_canvas_eraser_does_not_affect_main_canvas_mask(self):
+        # Mirrors apply_image_input(): the main-canvas mask and the
+        # advanced-canvas mask are separate arrays until np.maximum combines
+        # them, so erasing one must never mutate the other.
+        main_mask = np.full((3, 3), 255, dtype=np.uint8)
+        advanced_mask = np.full((3, 3), 255, dtype=np.uint8)
+        advanced_eraser = np.full((3, 3), 255, dtype=np.uint8)
+
+        advanced_mask = async_worker.apply_eraser_mask(advanced_mask, advanced_eraser)
+        combined = np.maximum(main_mask, advanced_mask)
+
+        assert np.array_equal(main_mask, np.full((3, 3), 255, dtype=np.uint8))
+        assert np.array_equal(advanced_mask, np.zeros((3, 3), dtype=np.uint8))
+        # The main canvas's own strokes still select the combined mask even
+        # though the advanced canvas was fully erased.
+        assert np.array_equal(combined, np.full((3, 3), 255, dtype=np.uint8))
+
+    def test_invert_after_erase_selects_the_erased_region(self):
+        mask = np.full((3, 3), 255, dtype=np.uint8)
+        eraser = np.zeros((3, 3), dtype=np.uint8)
+        eraser[1, 1] = 255
+
+        mask = async_worker.apply_eraser_mask(mask, eraser)
+        inverted = 255 - mask
+
+        assert inverted[1, 1] == 255
+        assert np.array_equal(inverted[eraser == 0], np.zeros(8, dtype=np.uint8))
 
 
 if __name__ == '__main__':
