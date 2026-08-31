@@ -19,6 +19,11 @@
 // CSS-hidden Textbox (#inpaint_eraser_data / #inpaint_mask_eraser_data),
 // the same JS-to-Python hidden-trigger transport FWDF-186 established for
 // #wildcard_scan_trigger; modules/async_worker.py decodes and subtracts it.
+//
+// Draw-mode strokes carve the same point back OUT of the offscreen eraser
+// mask (without touching the visible canvas or intercepting the event --
+// Gradio's own Sketch.svelte still owns painting Draw strokes), so a
+// redrawn area is not silently re-erased by Python at generation time.
 onUiLoaded(function() {
     var BRUSH_RADIUS_SELECTOR = "input[aria-label='Brush radius']";
     var DEFAULT_BRUSH_RADIUS = 20;
@@ -74,11 +79,14 @@ onUiLoaded(function() {
 
     // One eraser "session" per sketch component: its own offscreen mask
     // state and its own textarea transport, sized to the visible mask
-    // canvas's current pixel dimensions.
+    // canvas's current pixel dimensions. A stroke is tracked by mode
+    // ('erase' | 'unerase' | null) rather than a boolean so pointerup can
+    // always finish the stroke it actually started, regardless of what the
+    // mode radio says at release time.
     function createEraserSession(textareaElemId) {
         var offscreen = document.createElement('canvas');
         var offscreenCtx = offscreen.getContext('2d');
-        var drawing = false;
+        var activeStroke = null;
 
         function resetSession() {
             offscreenCtx.clearRect(0, 0, offscreen.width, offscreen.height);
@@ -111,6 +119,19 @@ onUiLoaded(function() {
             offscreenCtx.restore();
         }
 
+        // Draw mode: remove this point from the offscreen eraser mask only.
+        // The visible mask canvas is Gradio's own responsibility here (plain
+        // source-over white, Sketch.svelte) -- painting it ourselves would
+        // fight that compositing.
+        function uneraseAt(point, radius) {
+            offscreenCtx.save();
+            offscreenCtx.globalCompositeOperation = 'destination-out';
+            offscreenCtx.beginPath();
+            offscreenCtx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+            offscreenCtx.fill();
+            offscreenCtx.restore();
+        }
+
         function replayOntoMask(maskCanvas) {
             if (offscreen.width === 0 || offscreen.height === 0) {
                 return;
@@ -133,10 +154,12 @@ onUiLoaded(function() {
             ensureSized: ensureSized,
             reset: resetSession,
             eraseAt: eraseAt,
+            uneraseAt: uneraseAt,
             replayOntoMask: replayOntoMask,
             commit: commit,
-            isDrawing: function() { return drawing; },
-            setDrawing: function(value) { drawing = value; }
+            activeStroke: function() { return activeStroke; },
+            beginStroke: function(mode) { activeStroke = mode; },
+            endStroke: function() { activeStroke = null; }
         };
     }
 
@@ -181,43 +204,77 @@ onUiLoaded(function() {
         var lastCursor = null;
 
         function handlePointerDown(event) {
-            var maskCanvas = getMaskCanvas(componentRoot);
-            if (!isErasingActive() || !maskCanvas) {
+            if (event.button !== 0) {
+                // Ignore right-/middle-click -- touch and pen primary
+                // contacts report button 0 and are unaffected.
                 return;
             }
-            event.preventDefault();
-            event.stopPropagation();
+            var maskCanvas = getMaskCanvas(componentRoot);
+            if (!maskCanvas) {
+                return;
+            }
             session.ensureSized(maskCanvas);
-            session.setDrawing(true);
-            var point = canvasPoint(maskCanvas, event);
-            session.eraseAt(maskCanvas, point, getBrushRadius(componentRoot));
+
+            if (isErasingActive()) {
+                event.preventDefault();
+                event.stopPropagation();
+                session.beginStroke('erase');
+                session.eraseAt(maskCanvas, canvasPoint(maskCanvas, event), getBrushRadius(componentRoot));
+            } else {
+                // Draw mode: do NOT intercept the event -- Gradio must still
+                // receive and paint the stroke itself. We only carve this
+                // point back out of our own offscreen eraser mask.
+                session.beginStroke('unerase');
+                session.uneraseAt(canvasPoint(maskCanvas, event), getBrushRadius(componentRoot));
+            }
         }
 
         function handlePointerMove(event) {
             var maskCanvas = getMaskCanvas(componentRoot);
             var interfaceCanvas = getInterfaceCanvas(componentRoot);
-            if (!isErasingActive() || !maskCanvas || !interfaceCanvas) {
+            if (!maskCanvas || !interfaceCanvas) {
                 return;
             }
-            event.preventDefault();
-            event.stopPropagation();
-            var radius = getBrushRadius(componentRoot);
-            var point = canvasPoint(interfaceCanvas, event);
-            drawCursor(interfaceCanvas, point, radius, lastCursor);
-            lastCursor = {x: point.x, y: point.y, radius: radius};
 
-            if (session.isDrawing()) {
-                session.eraseAt(maskCanvas, canvasPoint(maskCanvas, event), radius);
+            if (isErasingActive()) {
+                event.preventDefault();
+                event.stopPropagation();
+                var radius = getBrushRadius(componentRoot);
+                var point = canvasPoint(interfaceCanvas, event);
+                drawCursor(interfaceCanvas, point, radius, lastCursor);
+                lastCursor = {x: point.x, y: point.y, radius: radius};
+
+                if (session.activeStroke() === 'erase') {
+                    session.eraseAt(maskCanvas, canvasPoint(maskCanvas, event), radius);
+                }
+            } else {
+                clearCursor(interfaceCanvas, lastCursor);
+                lastCursor = null;
+
+                if (session.activeStroke() === 'unerase') {
+                    session.uneraseAt(canvasPoint(maskCanvas, event), getBrushRadius(componentRoot));
+                }
             }
         }
 
+        // Bound to window (capture phase), not componentRoot: a stroke that
+        // already punched holes must always finish and commit, even when
+        // the pointer is released outside the component (drag off-canvas)
+        // or the mode radio flips between pointerdown and pointerup. Gating
+        // on the stroke recorded at pointerdown -- not a fresh
+        // isErasingActive() read here -- makes that immune to a mode change
+        // mid-stroke. pointercancel (touch/pen interruption) gets the same
+        // treatment so a stuck "drawing" state can't survive it.
         function handlePointerUp(event) {
-            if (!isErasingActive() || !session.isDrawing()) {
+            var stroke = session.activeStroke();
+            if (!stroke) {
                 return;
             }
-            event.preventDefault();
-            event.stopPropagation();
-            session.setDrawing(false);
+            if (stroke === 'erase') {
+                event.preventDefault();
+                event.stopPropagation();
+            }
+            session.endStroke();
             session.commit();
         }
 
@@ -237,34 +294,45 @@ onUiLoaded(function() {
         // interface-canvas handlers see the event.
         componentRoot.addEventListener('pointerdown', handlePointerDown, true);
         componentRoot.addEventListener('pointermove', handlePointerMove, true);
-        componentRoot.addEventListener('pointerup', handlePointerUp, true);
+        window.addEventListener('pointerup', handlePointerUp, true);
+        window.addEventListener('pointercancel', handlePointerUp, true);
         componentRoot.addEventListener('pointerleave', handlePointerLeave, true);
 
-        var undoBtn = componentRoot.querySelector("button[aria-label='Undo']");
-        if (undoBtn) {
-            undoBtn.addEventListener('click', function() {
+        // Delegated (not bound to Undo/Remove Image at attach time): Gradio
+        // only renders those buttons after an image is loaded, so they do
+        // not exist yet when attachEraser() runs at onUiLoaded, and Svelte
+        // tears down/recreates the file input on every clear+reupload. A
+        // listener on componentRoot survives all of that.
+        componentRoot.addEventListener('click', function(event) {
+            var btn = event.target.closest ? event.target.closest('button[aria-label]') : null;
+            if (!btn) {
+                return;
+            }
+            var label = btn.getAttribute('aria-label');
+            if (label === 'Undo') {
                 requestAnimationFrame(resyncAfterRedraw);
-            });
-        }
-
-        var clearBtn = componentRoot.querySelector("button[aria-label='Remove Image']");
-        if (clearBtn) {
-            clearBtn.addEventListener('click', function() {
+            } else if (label === 'Remove Image') {
                 session.reset();
-            });
-        }
+            }
+        }, true);
 
-        var fileInput = componentRoot.querySelector("input[type='file']");
-        if (fileInput) {
-            fileInput.addEventListener('change', function() {
+        componentRoot.addEventListener('change', function(event) {
+            if (event.target && event.target.matches && event.target.matches("input[type='file']")) {
                 session.reset();
-            });
-        }
+            }
+        }, true);
 
-        // Fallback: any Gradio-originated canvas repaint (a style mutation
-        // on a <canvas>, the same signal zoom.js's observer keys off of for
-        // resize/redraw) gets our destination-out holes re-applied a frame
-        // later, after Gradio's own repaint has settled.
+        // Gradio-originated canvas repaints come in two shapes, distinguished
+        // by mutation type (observed the same way zoom.js's own observer
+        // keys off style mutations for resize/redraw):
+        //  - attribute 'style' change on the SAME <canvas> node: an in-place
+        //    repaint (undo, resize) -- re-apply our offscreen holes.
+        //  - childList change that swaps in a different mask <canvas> node,
+        //    or a same-size image replacing the previous one via drag-and-
+        //    drop (which fires no 'change' event on the file input): treat
+        //    as a new image and reset the eraser instead of resyncing stale
+        //    holes onto it.
+        var lastMaskCanvas = getMaskCanvas(componentRoot);
         var observer = new MutationObserver(function(mutations) {
             for (var i = 0; i < mutations.length; i++) {
                 var mutation = mutations[i];
@@ -272,6 +340,14 @@ onUiLoaded(function() {
                         mutation.target.tagName && mutation.target.tagName.toLowerCase() === 'canvas') {
                     requestAnimationFrame(resyncAfterRedraw);
                     return;
+                }
+                if (mutation.type === 'childList') {
+                    var currentMaskCanvas = getMaskCanvas(componentRoot);
+                    if (currentMaskCanvas !== lastMaskCanvas) {
+                        lastMaskCanvas = currentMaskCanvas;
+                        session.reset();
+                        return;
+                    }
                 }
             }
         });
