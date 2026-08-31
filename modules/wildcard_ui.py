@@ -99,27 +99,47 @@ def _resolve_confined(target: str, wildcard_dir: str) -> str | None:
     return real_target
 
 
-def read_wildcard(name: str, wildcard_dir: str, filenames: list[str] | None = None) -> str:
+def _first_match_by_basename(name: str, filenames: list[str]) -> str | None:
+    """Resolve name to the first filenames entry whose basename (without
+    extension) equals it -- first match wins, mirroring apply_wildcards'
+    own matches[0] (modules/util.py:477), so the editor and runtime
+    expansion always agree on which file a duplicate basename resolves to
+    (e.g. both 'colors.txt' and 'styles/colors.txt' present)."""
+    by_basename = {}
+    for f in filenames:
+        key = os.path.splitext(os.path.basename(f))[0]
+        by_basename.setdefault(key, f)
+    return by_basename.get(name)
+
+
+def resolve_wildcard_path(name: str, wildcard_dir: str, filenames: list[str] | None = None) -> str | None:
+    """Resolve name to an existing, confined wildcard file's absolute path,
+    or None if it doesn't resolve to a real, in-bounds file.
+
+    Shares target-resolution and containment logic with read_wildcard, but
+    returns the path itself rather than file content -- callers that need
+    to check existence/size (e.g. to detect a read that degraded to '' due
+    to a decoding error, as opposed to a genuinely empty file) can do so
+    without going through read_wildcard's tolerant fallback.
+    """
     # FWDF-186 wires prompt-derived (attacker-influenced) names into this
     # function via the Gradio UI.
     if filenames is None:
         if not WILDCARD_NAME_PATTERN.match(name):
-            return ''
+            return None
         target = os.path.join(wildcard_dir, f'{name}.txt')
     else:
-        # Map basenames (derived only from the trusted filenames list) to
-        # their original entries, then look the (attacker-influenced) name
-        # up in that allowlist -- the result can only ever be a value
+        # First-match-wins lookup in an allowlist built only from the
+        # trusted filenames list -- the result can only ever be a value
         # already present in filenames, never something built from name.
-        by_basename = {os.path.splitext(os.path.basename(f))[0]: f for f in filenames}
-        match = by_basename.get(name)
+        match = _first_match_by_basename(name, filenames)
         if match is None:
-            return ''
+            return None
         target = os.path.join(wildcard_dir, match)
 
     real_target = _resolve_confined(target, wildcard_dir)
     if real_target is None:
-        return ''
+        return None
 
     # CodeQL's py/path-injection recognized containment pattern (normalize,
     # then verify the startswith-prefix), applied to the already
@@ -130,9 +150,14 @@ def read_wildcard(name: str, wildcard_dir: str, filenames: list[str] | None = No
     base_path = os.path.normpath(os.path.realpath(wildcard_dir))
     fullpath = os.path.normpath(real_target)
     if not fullpath.startswith(base_path + os.sep):
-        return ''
+        return None
 
-    if not os.path.isfile(fullpath):
+    return fullpath if os.path.isfile(fullpath) else None
+
+
+def read_wildcard(name: str, wildcard_dir: str, filenames: list[str] | None = None) -> str:
+    fullpath = resolve_wildcard_path(name, wildcard_dir, filenames)
+    if fullpath is None:
         return ''
 
     # Mirrors apply_wildcards' tolerant handling of unreadable/undecodable
@@ -145,11 +170,21 @@ def read_wildcard(name: str, wildcard_dir: str, filenames: list[str] | None = No
         return ''
 
 
-def write_wildcard(name: str, content: str, wildcard_dir: str) -> str:
+def write_wildcard(name: str, content: str, wildcard_dir: str, filenames: list[str] | None = None) -> str:
     if not WILDCARD_NAME_PATTERN.match(name):
         raise InvalidWildcardNameError(f'Invalid wildcard name: {name!r}')
 
-    target = os.path.join(wildcard_dir, f'{name}.txt')
+    # When filenames is given and name already resolves to an existing
+    # entry (possibly in a subfolder), overwrite that same file -- the one
+    # read_wildcard would have returned -- rather than always creating a
+    # new top-level '<name>.txt' that forks silently from it.
+    relative = f'{name}.txt'
+    if filenames:
+        existing = _first_match_by_basename(name, filenames)
+        if existing is not None:
+            relative = existing
+
+    target = os.path.join(wildcard_dir, relative)
 
     real_target = _resolve_confined(target, wildcard_dir)
     if real_target is None:
