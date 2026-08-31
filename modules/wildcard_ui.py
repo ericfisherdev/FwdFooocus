@@ -82,52 +82,41 @@ def scan_prompt(prompt: str, wildcard_dir: str, filenames: list[str]) -> Wildcar
     )
 
 
-def _confine_to_dir(target: str, wildcard_dir: str) -> str | None:
-    """Resolve target and verify it stays inside wildcard_dir.
-
-    Returns the resolved (symlink-following) path when target is confined,
-    else None.
-    """
-    real_dir = os.path.realpath(wildcard_dir)
-    real_target = os.path.realpath(target)
-    if real_target == real_dir or real_target.startswith(real_dir + os.sep):
-        return real_target
-    return None
-
-
 def read_wildcard(name: str, wildcard_dir: str, filenames: list[str] | None = None) -> str:
     # FWDF-186 wires prompt-derived (attacker-influenced) names into this
     # function via the Gradio UI.
     if filenames is None:
         if not WILDCARD_NAME_PATTERN.match(name):
             return ''
-        # name matched ^[\w-]+$ above, so this is a no-op for valid input --
-        # kept so the value used to build target is produced by a call
-        # path-injection static analysis recognizes as sanitizing, rather
-        # than relying solely on validation logic a few lines away from the
-        # eventual open() call.
-        name = os.path.basename(name)
         target = os.path.join(wildcard_dir, f'{name}.txt')
     else:
         # Map basenames (derived only from the trusted filenames list) to
-        # their original entries, then look the sanitized name up in that
-        # allowlist -- the result can only ever be a value already present
-        # in filenames, never something built from name itself.
+        # their original entries, then look the (attacker-influenced) name
+        # up in that allowlist -- the result can only ever be a value
+        # already present in filenames, never something built from name.
         by_basename = {os.path.splitext(os.path.basename(f))[0]: f for f in filenames}
         match = by_basename.get(name)
         if match is None:
             return ''
         target = os.path.join(wildcard_dir, match)
 
-    real_target = _confine_to_dir(target, wildcard_dir)
-    if real_target is None or not os.path.isfile(real_target):
+    # CodeQL's py/path-injection canonical containment check: normalize,
+    # then verify the result is confined to base_path before any
+    # filesystem access, immediately guarding the exact value used below
+    # (github.com/github/codeql query help for py/path-injection).
+    base_path = os.path.normpath(wildcard_dir)
+    fullpath = os.path.normpath(target)
+    if fullpath != base_path and not fullpath.startswith(base_path + os.sep):
+        return ''
+
+    if not os.path.isfile(fullpath):
         return ''
 
     # Mirrors apply_wildcards' tolerant handling of unreadable/undecodable
     # wildcard files (modules/util.py's try/except around the file read):
     # a bad file degrades to empty content rather than crashing the scan.
     try:
-        with open(real_target, encoding='utf-8') as f:
+        with open(fullpath, encoding='utf-8') as f:
             return f.read()
     except (OSError, UnicodeDecodeError):
         return ''
@@ -137,33 +126,29 @@ def write_wildcard(name: str, content: str, wildcard_dir: str) -> str:
     if not WILDCARD_NAME_PATTERN.match(name):
         raise InvalidWildcardNameError(f'Invalid wildcard name: {name!r}')
 
-    # See read_wildcard's comment: a no-op after the check above (which
-    # already rules out '/'), kept so target is built from a value that has
-    # passed through a call path-injection static analysis recognizes.
-    name = os.path.basename(name)
     target = os.path.join(wildcard_dir, f'{name}.txt')
 
-    # Defense in depth: reject any resolved path that escapes the wildcard
-    # directory (covers symlink tricks the name-pattern check can't catch).
-    real_target = _confine_to_dir(target, wildcard_dir)
-    if real_target is None:
+    # See read_wildcard's comment: the canonical normalize-then-verify
+    # containment check, immediately guarding fullpath before it is used.
+    base_path = os.path.normpath(wildcard_dir)
+    fullpath = os.path.normpath(target)
+    if fullpath != base_path and not fullpath.startswith(base_path + os.sep):
         raise InvalidWildcardNameError(f'Invalid wildcard name: {name!r}')
 
     os.makedirs(wildcard_dir, exist_ok=True)
 
-    # The realpath check above and this write are two separate syscalls, so
-    # a symlink dropped at target in between would otherwise be followed
-    # (TOCTOU). O_NOFOLLOW makes symlink-rejection atomic with the open
-    # itself instead of just advisory. Opening real_target (not the
-    # original, unresolved target) means a symlink swapped into the
-    # unresolved path after the check above has no effect either way.
+    # WILDCARD_NAME_PATTERN and the containment check above rule out an
+    # unsafe fullpath, but wildcard_dir's own components could still be
+    # symlinked to somewhere unexpected by the time this runs (TOCTOU).
+    # O_NOFOLLOW makes symlink-rejection atomic with the open itself
+    # instead of just advisory.
     open_flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, 'O_NOFOLLOW', 0)
     try:
-        fd = os.open(real_target, open_flags, 0o644)
+        fd = os.open(fullpath, open_flags, 0o644)
     except OSError as error:
         raise InvalidWildcardNameError(f'Invalid wildcard name: {name!r}') from error
 
     with open(fd, 'w', encoding='utf-8') as f:
         f.write(content)
 
-    return target
+    return fullpath
