@@ -373,6 +373,26 @@ class TestSaveImageToList:
         log_content = open(os.path.join(list_dir, 'log.html'), encoding='utf-8').read()
         assert 'a.png' in log_content
 
+    def test_save_succeeds_without_fchmod_or_fd_utime_support(self, tmp_path, root_dir, source_root, monkeypatch):
+        """os.fchmod and fd-based os.utime don't exist / aren't supported
+        on Windows under the project's pinned Python 3.10 (a documented
+        first-class target via run.bat) -- simulate that absence and
+        assert the save still succeeds via the by-path os.utime fallback,
+        rather than raising AttributeError partway through the copy."""
+        import modules.image_lists as image_lists_module
+
+        monkeypatch.delattr(image_lists_module.os, 'fchmod', raising=False)
+        monkeypatch.setattr(image_lists_module.os, 'supports_fd', frozenset(), raising=False)
+
+        src = _make_png(str(Path(source_root) / 'a.png'))
+        success, message = save_image_to_list('cats', src, root_dir, source_root_dirs=source_root)
+
+        assert success, message
+        list_dir = get_list_dir('cats', root_dir)
+        assert os.path.isfile(os.path.join(list_dir, 'a.png'))
+        log_content = open(os.path.join(list_dir, 'log.html'), encoding='utf-8').read()
+        assert 'a.png' in log_content
+
 
 class TestMetadataRegistry:
     def test_record_then_get_returns_recorded_entry(self, tmp_path):
