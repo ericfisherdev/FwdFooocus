@@ -29,7 +29,6 @@ import sys
 import tempfile
 import threading
 import time
-import types
 from pathlib import Path
 from unittest import mock
 
@@ -50,6 +49,10 @@ import modules.config  # noqa: E402
 import modules.text_encoder as text_encoder  # noqa: E402
 
 sys.argv = _original_argv
+
+from tests._default_pipeline_doubles import (  # noqa: E402
+    install_default_pipeline_test_doubles as _install_default_pipeline_test_doubles,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -200,51 +203,6 @@ class TestPathTextEncodersConfig:
 # ---------------------------------------------------------------------------
 # modules.default_pipeline.clip_encode(): pooled=None regression fix
 # ---------------------------------------------------------------------------
-
-
-def _install_default_pipeline_test_doubles():
-    """Install a torchvision stand-in (when torchvision isn't installed) so
-    the real modules.default_pipeline can be imported. Returns a zero-arg
-    callable that restores the prior state.
-
-    Order matters: `transformers` must finish its own (real) import before
-    a torchvision stand-in is registered, because transformers decides once,
-    at import time, whether torchvision is available and caches that
-    decision -- if a spec-less stand-in is already in sys.modules when that
-    decision is made, the probe itself raises.
-    """
-    import transformers  # noqa: F401  (forces the real torchvision-unavailable check first)
-
-    restore_actions = []
-
-    torchvision_available = True
-    try:
-        import torchvision  # noqa: F401
-    except ImportError:
-        torchvision_available = False
-
-    if not torchvision_available:
-        stub_names = ('torchvision', 'torchvision.transforms', 'torchvision.transforms.functional')
-        for name in stub_names:
-            assert name not in sys.modules, f'unexpected pre-existing stub conflict for {name}'
-        functional_stub = types.ModuleType('torchvision.transforms.functional')
-        functional_stub.InterpolationMode = object
-        functional_stub.rotate = lambda *a, **k: None
-        transforms_stub = types.ModuleType('torchvision.transforms')
-        transforms_stub.functional = functional_stub
-        torchvision_stub = types.ModuleType('torchvision')
-        torchvision_stub.transforms = transforms_stub
-
-        sys.modules['torchvision'] = torchvision_stub
-        sys.modules['torchvision.transforms'] = transforms_stub
-        sys.modules['torchvision.transforms.functional'] = functional_stub
-        restore_actions.append(lambda: [sys.modules.pop(n, None) for n in stub_names])
-
-    def _restore():
-        for action in reversed(restore_actions):
-            action()
-
-    return _restore
 
 
 @pytest.fixture(scope='module')
