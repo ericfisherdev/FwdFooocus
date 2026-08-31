@@ -514,6 +514,7 @@ with shared.gradio_root:
                                 inpaint_input_image = grh.Image(label='Image', source='upload', type='numpy', tool='sketch', height=500, brush_color="#FFFFFF", elem_id='inpaint_canvas', show_label=False)
                                 inpaint_brush_mode = gr.Radio(choices=['Draw', 'Erase'], value='Draw',
                                                               label='Brush mode', elem_id='inpaint_brush_mode',
+                                                              interactive=True,
                                                               info='Erase removes previously painted mask areas '
                                                                    'with the same brush size. Undo only reverts '
                                                                    'draw strokes, not erases, and erasing resets '
