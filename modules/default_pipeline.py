@@ -191,7 +191,14 @@ def refresh_refiner_model(name):
     if model_refiner.filename == filename:
         return
 
-    _release_model(model_refiner)
+    # A synthetic refiner (synthesize_refiner_model()) aliases model_base's
+    # own patcher objects rather than owning independent ones -- releasing it
+    # here (unload_model_clones matches by underlying-module identity, see
+    # ModelPatcher.is_clone) would evict the still-current, still-in-VRAM
+    # base model, forcing a needless reupload on the very next sample. Only
+    # release when the outgoing refiner owns its own (real) patchers.
+    if model_refiner.unet is not model_base.unet:
+        _release_model(model_refiner)
     model_refiner = core.StableDiffusionModel()
     gc.collect()
     ldm_patched.modules.model_management.soft_empty_cache()
@@ -366,16 +373,28 @@ def refresh_everything(refiner_model_name, base_model_name, loras,
     if use_synthetic_refiner and refiner_model_name == 'None':
         print('Synthetic Refiner Activated')
         # The synthetic refiner (synthesize_refiner_model(), below) aliases
-        # model_base's own patchers rather than owning independent ones, and
-        # is only re-synthesized AFTER refresh_base_model() below swaps
-        # model_base -- so a stale synthetic model_refiner from a previous
-        # request still references the outgoing base model's patchers here.
-        # Release it first so those references don't re-pin the outgoing
-        # checkpoint through refresh_base_model()'s own release/swap.
-        _release_model(model_refiner)
-        model_refiner = core.StableDiffusionModel()
-        gc.collect()
-        ldm_patched.modules.model_management.soft_empty_cache()
+        # model_base's own patcher objects rather than owning independent
+        # ones, and is only re-synthesized AFTER refresh_base_model() below
+        # swaps model_base -- so at this point, a stale synthetic
+        # model_refiner from a previous request still has model_refiner.unet
+        # is model_base.unet (same object). Releasing it unconditionally
+        # would call unload_model_clones() against the CURRENT base's live
+        # patchers (is_clone() matches by underlying-module identity, see
+        # ModelPatcher.is_clone): on every repeat request with an unchanged
+        # base -- the common inpaint/upscale/image-prompt path -- that evicts
+        # the still-resident base from GPU for no reason, since
+        # refresh_base_model() below no-ops on an unchanged filename and
+        # never reloads it. Only release when the outgoing refiner owns its
+        # own (real) patchers; when it's the base's own alias, just drop the
+        # reference -- if the base IS changing, refresh_base_model()'s own
+        # _release_model(model_base) evicts these same patchers right below.
+        if model_refiner.unet is not None and model_refiner.unet is not model_base.unet:
+            _release_model(model_refiner)
+            model_refiner = core.StableDiffusionModel()
+            gc.collect()
+            ldm_patched.modules.model_management.soft_empty_cache()
+        else:
+            model_refiner = core.StableDiffusionModel()
 
         refresh_base_model(base_model_name, vae_name)
         synthesize_refiner_model()

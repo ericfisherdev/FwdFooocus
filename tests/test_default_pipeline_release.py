@@ -252,6 +252,36 @@ class TestRefreshRefinerModelReleaseOrdering:
         assert isinstance(pipeline.model_refiner, pipeline.core.StableDiffusionModel)
         assert pipeline.model_refiner.filename is None
 
+    def test_does_not_evict_live_base_when_outgoing_refiner_aliases_it(
+            self, default_pipeline, monkeypatch, _stub_unload_model_clones, _stub_gc_and_cache):
+        """A synthetic refiner's unet IS model_base.unet (same object,
+        assigned by synthesize_refiner_model()) -- unload_model_clones()
+        matches by that identity, so releasing it here would evict the
+        still-current base rather than just the (non-existent) refiner."""
+        pipeline = default_pipeline
+        gc_mock, cache_mock = _stub_gc_and_cache
+
+        live_base_unet = _FakeUnet()
+        pipeline.model_base = _FakeStableDiffusionModel(unet=live_base_unet)
+        pipeline.model_base.unet_with_lora = None
+        pipeline.model_refiner = _FakeStableDiffusionModel(
+            unet=live_base_unet, filename='/models/checkpoints/old_base.safetensors')
+        pipeline.model_refiner.unet_with_lora = None
+        _pin_resolve_checkpoint_path(
+            pipeline, monkeypatch, {'real_refiner.safetensors': '/models/checkpoints/real_refiner.safetensors'})
+
+        new_refiner = _FakeStableDiffusionModel(
+            unet=_FakeUnet(), filename='/models/checkpoints/real_refiner.safetensors')
+        monkeypatch.setattr(pipeline.core, 'load_model', MagicMock(return_value=new_refiner))
+
+        pipeline.refresh_refiner_model('real_refiner.safetensors')
+
+        _stub_unload_model_clones.assert_not_called()
+        gc_mock.collect.assert_called_once()
+        cache_mock.assert_called_once()
+        assert pipeline.model_refiner is new_refiner
+        assert pipeline.model_base.unet is live_base_unet
+
 
 # ---------------------------------------------------------------------------
 # refresh_everything(): synthetic refiner released before base model swap
@@ -259,19 +289,22 @@ class TestRefreshRefinerModelReleaseOrdering:
 
 
 class TestRefreshEverythingSyntheticRefinerRelease:
-    def test_releases_stale_synthetic_refiner_before_base_model_swap(
+    def test_base_swap_releases_old_base_exactly_once_via_refresh_base_model(
             self, default_pipeline, monkeypatch, _stub_unload_model_clones, _stub_gc_and_cache):
+        """synthesize_refiner_model() sets model_refiner.unet = model_base.unet
+        -- the SAME object, not a copy -- so this models that aliasing
+        faithfully (unlike a naive test using two distinct fakes, which
+        would not catch the live-base eviction bug this guards against)."""
         pipeline = default_pipeline
         gc_mock, cache_mock = _stub_gc_and_cache
 
-        stale_refiner_unet = _FakeUnet()
         old_base_unet = _FakeUnet()
-        pipeline.model_refiner = _FakeStableDiffusionModel(
-            unet=stale_refiner_unet, filename='/models/checkpoints/old_base.safetensors')
-        pipeline.model_refiner.unet_with_lora = None
         pipeline.model_base = _FakeStableDiffusionModel(
             unet=old_base_unet, filename='/models/checkpoints/old_base.safetensors', vae_filename=None)
         pipeline.model_base.unet_with_lora = None
+        pipeline.model_refiner = _FakeStableDiffusionModel(
+            unet=old_base_unet, filename='/models/checkpoints/old_base.safetensors')
+        pipeline.model_refiner.unet_with_lora = None
 
         sdxl_family = pipeline.modules.model_family.ModelFamily.SDXL
         monkeypatch.setattr(pipeline.modules.model_family_detection, 'get_family',
@@ -294,13 +327,54 @@ class TestRefreshEverythingSyntheticRefinerRelease:
             loras=[], use_synthetic_refiner=True)
 
         released = [call.args[0] for call in _stub_unload_model_clones.call_args_list]
-        # The stale synthetic refiner's UNet must be released before the
-        # OLD base model's own UNet -- proving refresh_everything() clears
-        # the synthetic model_refiner first, rather than leaving it aliasing
-        # patchers that refresh_base_model() is about to swap out from
-        # under it. Neither call releases the incoming new_base.unet.
-        assert released == [stale_refiner_unet, old_base_unet]
+        # The synthetic refiner ALIASES the outgoing base's own UNet object,
+        # so refresh_everything() must not explicitly release model_refiner
+        # (that would just be releasing the base's own patchers under a
+        # different name) -- the old base's UNet is released exactly once,
+        # by refresh_base_model()'s own _release_model(model_base) below.
+        assert released == [old_base_unet]
         assert pipeline.model_base is new_base
         # synthesize_refiner_model() re-aliases model_refiner to the new
         # base model's own (unset, in this fake) clip/vae/unet.
         assert pipeline.model_refiner.unet is new_base.unet
+
+    def test_repeat_request_with_unchanged_base_does_not_evict_live_base(
+            self, default_pipeline, monkeypatch, _stub_unload_model_clones, _stub_gc_and_cache):
+        """The common inpaint/upscale/image-prompt path: same base checkpoint,
+        synthetic refiner, request after request. Releasing the stale
+        synthetic refiner here would evict the still-resident base (it
+        aliases the base's own UNet) even though nothing is swapping --
+        forcing a needless CPU<->GPU reupload on every single generation."""
+        pipeline = default_pipeline
+
+        base_unet = _FakeUnet()
+        pipeline.model_base = _FakeStableDiffusionModel(
+            unet=base_unet, vae=object(), clip=object(),
+            filename='/models/checkpoints/base.safetensors', vae_filename=None)
+        pipeline.model_base.unet_with_lora = None
+        pipeline.model_refiner = _FakeStableDiffusionModel(
+            unet=base_unet, filename='/models/checkpoints/base.safetensors')
+        pipeline.model_refiner.unet_with_lora = None
+
+        sdxl_family = pipeline.modules.model_family.ModelFamily.SDXL
+        monkeypatch.setattr(pipeline.modules.model_family_detection, 'get_family',
+                             lambda name: sdxl_family)
+        monkeypatch.setattr(
+            pipeline.modules.model_family, 'get_capabilities',
+            lambda family: types.SimpleNamespace(supports_refiner=True))
+        monkeypatch.setattr(pipeline, 'resolve_checkpoint_path',
+                             lambda name, *_a, **_k: '/models/checkpoints/base.safetensors')
+        load_model_mock = MagicMock()
+        monkeypatch.setattr(pipeline.core, 'load_model', load_model_mock)
+        monkeypatch.setattr(pipeline, 'refresh_loras', MagicMock())
+        monkeypatch.setattr(pipeline, 'assert_model_integrity', MagicMock())
+        monkeypatch.setattr(pipeline, 'prepare_text_encoder', MagicMock())
+        monkeypatch.setattr(pipeline, 'clear_all_caches', MagicMock())
+
+        pipeline.refresh_everything(
+            refiner_model_name='None', base_model_name='base.safetensors',
+            loras=[], use_synthetic_refiner=True)
+
+        _stub_unload_model_clones.assert_not_called()
+        load_model_mock.assert_not_called()
+        assert pipeline.model_base.unet is base_unet
