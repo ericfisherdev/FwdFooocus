@@ -141,10 +141,6 @@ div:has(> #positive_prompt) {
   display: none !important;
 }
 
-#inpaint_brush_mode {
-  width: fit-content !important;
-}
-
 .min_check {
   min-width: min(1px, 100%) !important;
 }
