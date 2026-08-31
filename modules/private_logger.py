@@ -49,7 +49,20 @@ def log(img, metadata, metadata_parser: MetadataParser | None = None, output_for
         return local_temp_filename
 
     html_name = os.path.join(os.path.dirname(local_temp_filename), 'log.html')
+    append_log_entry(html_name, only_name, metadata, task=task, title_suffix=date_string)
 
+    return local_temp_filename
+
+
+def append_log_entry(html_path, only_name, metadata, task=None, title_suffix=''):
+    """Append one image entry to html_path's log, creating it if needed.
+
+    Shared by log() (per-date-folder logs) and modules.image_lists (one
+    log.html per named list) so the sentinel-append log writing lives in one
+    place. only_name is the image filename as it should appear relative to
+    html_path's directory -- both callers keep the image and its log.html
+    side by side, so a bare filename resolves correctly in either case.
+    """
     css_styles = (
         "<style>"
         "body { background-color: #121212; color: #E0E0E0; } "
@@ -68,7 +81,7 @@ def log(img, metadata, metadata_parser: MetadataParser | None = None, output_for
 
     js = (
         """<script>
-        function to_clipboard(txt) { 
+        function to_clipboard(txt) {
         txt = decodeURIComponent(txt);
         if (navigator.clipboard && navigator.permissions) {
             navigator.clipboard.writeText(txt)
@@ -91,14 +104,14 @@ def log(img, metadata, metadata_parser: MetadataParser | None = None, output_for
         </script>"""
     )
 
-    begin_part = f"<!DOCTYPE html><html><head><title>FwdFooocus Log {date_string}</title>{css_styles}</head><body>{js}<p>FwdFooocus Log {date_string} (private)</p>\n<p>Metadata is embedded if enabled in the config or developer debug mode. You can find the information for each image in line Metadata Scheme.</p><!--fooocus-log-split-->\n\n"
+    begin_part = f"<!DOCTYPE html><html><head><title>FwdFooocus Log {title_suffix}</title>{css_styles}</head><body>{js}<p>FwdFooocus Log {title_suffix} (private)</p>\n<p>Metadata is embedded if enabled in the config or developer debug mode. You can find the information for each image in line Metadata Scheme.</p><!--fooocus-log-split-->\n\n"
     end_part = f'\n<!--fooocus-log-split--></body></html>'
 
-    middle_part = log_cache.get(html_name, "")
+    middle_part = log_cache.get(html_path, "")
 
     if middle_part == "":
-        if os.path.exists(html_name):
-            existing_split = open(html_name, 'r', encoding='utf-8').read().split('<!--fooocus-log-split-->')
+        if os.path.exists(html_path):
+            existing_split = open(html_path, 'r', encoding='utf-8').read().split('<!--fooocus-log-split-->')
             if len(existing_split) == 3:
                 middle_part = existing_split[1]
             else:
@@ -127,11 +140,9 @@ def log(img, metadata, metadata_parser: MetadataParser | None = None, output_for
 
     middle_part = item + middle_part
 
-    with open(html_name, 'w', encoding='utf-8') as f:
+    with open(html_path, 'w', encoding='utf-8') as f:
         f.write(begin_part + middle_part + end_part)
 
-    print(f'Image generated with private log at: {html_name}')
+    print(f'Image generated with private log at: {html_path}')
 
-    log_cache[html_name] = middle_part
-
-    return local_temp_filename
+    log_cache[html_path] = middle_part
