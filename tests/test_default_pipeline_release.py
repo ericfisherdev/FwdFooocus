@@ -13,9 +13,9 @@
   synthetic model_refiner (which aliases model_base's own patchers) before
   refresh_base_model() swaps model_base out from under it.
 
-Mirrors tests/test_zimage_pipeline.py's approach to importing the real,
-unmodified modules.default_pipeline with just enough test doubles for the
-import to succeed in a torch/torchvision-optional sandbox.
+Import setup and StableDiffusionModel/UNet doubles are shared with
+tests/test_zimage_pipeline.py via tests/_default_pipeline_doubles.py, rather
+than duplicated here.
 """
 import sys
 import types
@@ -33,29 +33,11 @@ import modules.config  # noqa: E402
 
 sys.argv = _original_argv
 
-
-class _FakeStableDiffusionModel:
-    """Stands in for modules.core.StableDiffusionModel: a lightweight surface
-    for direct per-test construction of model_base/model_refiner fixtures."""
-
-    def __init__(self, unet=None, vae=None, clip=None, clip_vision=None,
-                 filename=None, vae_filename=None):
-        self.unet = unet
-        self.vae = vae
-        self.clip = clip
-        self.clip_vision = clip_vision
-        self.filename = filename
-        self.vae_filename = vae_filename
-        self.unet_with_lora = unet
-        self.clip_with_lora = clip
-
-    def refresh_loras(self, loras):
-        pass
-
-
-class _FakeUnet:
-    def __init__(self, model=None):
-        self.model = model if model is not None else object()
+from tests._default_pipeline_doubles import (  # noqa: E402
+    FakeStableDiffusionModel as _FakeStableDiffusionModel,
+    FakeUnet as _FakeUnet,
+    install_default_pipeline_test_doubles as _install_default_pipeline_test_doubles,
+)
 
 
 class _FakeEncoderWrapper:
@@ -64,47 +46,6 @@ class _FakeEncoderWrapper:
 
     def __init__(self, patcher=None):
         self.patcher = patcher if patcher is not None else object()
-
-
-def _install_default_pipeline_test_doubles():
-    """Install a torchvision stand-in (when torchvision isn't installed) so
-    the real modules.default_pipeline can be imported. Returns a zero-arg
-    callable that restores the prior state.
-
-    Mirrors tests/test_zimage_pipeline.py's helper of the same name.
-    """
-    import transformers  # noqa: F401  (forces the real torchvision-unavailable check first)
-
-    restore_actions = []
-
-    torchvision_available = True
-    try:
-        import torchvision  # noqa: F401
-    except ImportError:
-        torchvision_available = False
-
-    if not torchvision_available:
-        stub_names = ('torchvision', 'torchvision.transforms', 'torchvision.transforms.functional')
-        for name in stub_names:
-            assert name not in sys.modules, f'unexpected pre-existing stub conflict for {name}'
-        functional_stub = types.ModuleType('torchvision.transforms.functional')
-        functional_stub.InterpolationMode = object
-        functional_stub.rotate = lambda *a, **k: None
-        transforms_stub = types.ModuleType('torchvision.transforms')
-        transforms_stub.functional = functional_stub
-        torchvision_stub = types.ModuleType('torchvision')
-        torchvision_stub.transforms = transforms_stub
-
-        sys.modules['torchvision'] = torchvision_stub
-        sys.modules['torchvision.transforms'] = transforms_stub
-        sys.modules['torchvision.transforms.functional'] = functional_stub
-        restore_actions.append(lambda: [sys.modules.pop(n, None) for n in stub_names])
-
-    def _restore():
-        for action in reversed(restore_actions):
-            action()
-
-    return _restore
 
 
 @pytest.fixture(scope='module')
