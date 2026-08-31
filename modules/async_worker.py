@@ -1696,6 +1696,11 @@ def worker():
                 current_task = None
                 if pid in modules.patch.patch_settings:
                     del modules.patch.patch_settings[pid]
+                # Drops any model patcher whose only other referrer already
+                # went away (e.g. an interrupted task's transient clones),
+                # so it doesn't sit pinned in current_loaded_models until the
+                # next checkpoint swap notices it (FWDF-187).
+                ldm_patched.modules.model_management.cleanup_models()
     pass
 
 
