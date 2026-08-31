@@ -82,6 +82,26 @@ def scan_prompt(prompt: str, wildcard_dir: str, filenames: list[str]) -> Wildcar
     )
 
 
+def _confine_to_dir(target: str, wildcard_dir: str) -> str | None:
+    """Resolve target and verify it stays inside wildcard_dir.
+
+    Returns the resolved (symlink-following) path when target is confined,
+    else None. FWDF-186 wires prompt-derived (attacker-influenced) names
+    into read_wildcard/write_wildcard via the Gradio UI, so both callers
+    route through this single check rather than trusting name-pattern
+    validation alone -- name-pattern checks a few lines away from the
+    eventual os.open/open call aren't reliably recognized as a traversal
+    barrier by path-injection static analysis, while a normpath+startswith
+    containment check immediately guarding the resolved path used at the
+    sink is the standard, directly-verifiable pattern.
+    """
+    real_dir = os.path.realpath(wildcard_dir)
+    real_target = os.path.realpath(target)
+    if real_target == real_dir or real_target.startswith(real_dir + os.sep):
+        return real_target
+    return None
+
+
 def read_wildcard(name: str, wildcard_dir: str, filenames: list[str] | None = None) -> str:
     if filenames is None:
         # name may be arbitrary caller input here (no filenames list to match
@@ -98,14 +118,15 @@ def read_wildcard(name: str, wildcard_dir: str, filenames: list[str] | None = No
             return ''
         target = os.path.join(wildcard_dir, matches[0])
 
-    if not os.path.isfile(target):
+    real_target = _confine_to_dir(target, wildcard_dir)
+    if real_target is None or not os.path.isfile(real_target):
         return ''
 
     # Mirrors apply_wildcards' tolerant handling of unreadable/undecodable
     # wildcard files (modules/util.py's try/except around the file read):
     # a bad file degrades to empty content rather than crashing the scan.
     try:
-        with open(target, encoding='utf-8') as f:
+        with open(real_target, encoding='utf-8') as f:
             return f.read()
     except (OSError, UnicodeDecodeError):
         return ''
@@ -119,9 +140,8 @@ def write_wildcard(name: str, content: str, wildcard_dir: str) -> str:
 
     # Defense in depth: reject any resolved path that escapes the wildcard
     # directory (covers symlink tricks the name-pattern check can't catch).
-    real_dir = os.path.realpath(wildcard_dir)
-    real_target = os.path.realpath(target)
-    if os.path.commonpath([real_dir, real_target]) != real_dir:
+    real_target = _confine_to_dir(target, wildcard_dir)
+    if real_target is None:
         raise InvalidWildcardNameError(f'Invalid wildcard name: {name!r}')
 
     os.makedirs(wildcard_dir, exist_ok=True)
@@ -129,10 +149,12 @@ def write_wildcard(name: str, content: str, wildcard_dir: str) -> str:
     # The realpath check above and this write are two separate syscalls, so
     # a symlink dropped at target in between would otherwise be followed
     # (TOCTOU). O_NOFOLLOW makes symlink-rejection atomic with the open
-    # itself instead of just advisory.
+    # itself instead of just advisory. Opening real_target (not the
+    # original, unresolved target) means a symlink swapped into the
+    # unresolved path after the check above has no effect either way.
     open_flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, 'O_NOFOLLOW', 0)
     try:
-        fd = os.open(target, open_flags, 0o644)
+        fd = os.open(real_target, open_flags, 0o644)
     except OSError as error:
         raise InvalidWildcardNameError(f'Invalid wildcard name: {name!r}') from error
 
