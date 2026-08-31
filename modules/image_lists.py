@@ -14,10 +14,13 @@ ticket) can call it directly. The output root is injected as a parameter
 (root_dir) rather than read from modules.config deep inside each function,
 so callers own config lookups and tests never need modules.config.
 """
+import contextlib
 import os
 import re
 import shutil
-from typing import Optional
+import stat
+import threading
+from typing import Optional, Union
 
 from PIL import Image
 
@@ -27,8 +30,11 @@ from modules.private_logger import append_log_entry
 # Mirrors modules/lora_presets.py's sanitize_preset_name: invalid filesystem
 # characters are replaced rather than rejected, matching this ticket's
 # acceptance criterion that invalid characters in a list name are
-# sanitized, not refused outright.
-_INVALID_NAME_CHARS = re.compile(r'[\\/:*?"<>|]')
+# sanitized, not refused outright. Includes ASCII control characters
+# (\x00-\x1f, \x7f) -- legal in a POSIX filename but a nuisance on disk and
+# a log-forgery aid once they flow into title_suffix/status text/dropdown
+# entries verbatim.
+_INVALID_NAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f\x7f]')
 
 # In-process registry: absolute source image path -> (metadata, task) as
 # passed to private_logger.log() for that image. Populated by
@@ -37,6 +43,16 @@ _INVALID_NAME_CHARS = re.compile(r'[\\/:*?"<>|]')
 # log.html entry without re-deriving anything. Does not survive a process
 # restart -- see get_metadata()'s embedded-metadata fallback.
 _metadata_registry: dict[str, tuple[list, Optional[dict]]] = {}
+
+# Serializes the copy-plus-log section of save_image_to_list: the webui
+# Save to List handlers run queue=False, so Gradio can invoke them from
+# concurrent request threads. append_log_entry does a read-prepend-rewrite
+# of the whole log.html (backed by the shared private_logger.log_cache),
+# and the already_saved dedup check is a plain os.path.exists -- neither is
+# safe without a lock serializing the whole read-check-write section for a
+# given process. One process-wide lock is enough: private_logger.log() (the
+# per-date, single-worker-thread path) never contends with this.
+_save_lock = threading.Lock()
 
 
 def sanitize_list_name(name: str) -> str:
@@ -149,18 +165,22 @@ def get_metadata(path: str) -> tuple[Optional[list], Optional[dict]]:
 
 
 def save_image_to_list(name: str, source_image_path: str, root_dir: str,
-                        source_root_dir: str,
+                        source_root_dirs: Union[str, list[str]],
                         metadata: Optional[list] = None,
                         task: Optional[dict] = None) -> tuple[bool, str]:
     """Save (copy) source_image_path into the named list, creating the list
     directory if needed, and append a log.html entry for it.
 
-    source_root_dir confines source_image_path the same way root_dir
-    confines the list name -- callers pass modules.config.path_outputs,
-    the only legitimate home for a generated image (dated folders and
-    existing list folders alike). This closes the path-injection gap a
-    caller-supplied source_image_path would otherwise open: without it,
-    an unvalidated path flowed straight into os.path.isfile/os.open.
+    source_root_dirs confines source_image_path the same way root_dir
+    confines the list name -- source_image_path must resolve inside at
+    least one of them (first match wins), or the save is refused before
+    any filesystem call touches it. A single str is also accepted. Callers
+    pass every app-controlled directory a gallery path can point into:
+    modules.config.path_outputs normally, plus modules.config.temp_path
+    when --disable-image-log or a non-persisted intermediate routed the
+    image there instead (see modules/private_logger.py's log()). Without
+    this confinement, an unvalidated path flowed straight into
+    os.path.isfile/os.open.
 
     Additive: the caller's default-output copy and its date-folder
     log.html entry (private_logger.log) are untouched -- this only ever
@@ -168,7 +188,12 @@ def save_image_to_list(name: str, source_image_path: str, root_dir: str,
     into one list overwrites the copy (exact bytes) but does not duplicate
     the log entry.
     """
-    real_source_path = _confine(source_image_path, source_root_dir)
+    roots = [source_root_dirs] if isinstance(source_root_dirs, str) else list(source_root_dirs)
+    real_source_path = None
+    for root in roots:
+        real_source_path = _confine(source_image_path, root)
+        if real_source_path is not None:
+            break
     if real_source_path is None:
         return False, f"Source image outside allowed directory: {source_image_path}"
 
@@ -190,42 +215,72 @@ def save_image_to_list(name: str, source_image_path: str, root_dir: str,
     if real_dest_path is None:
         return False, f"Invalid destination path for '{only_name}' in list '{list_name}'"
 
-    try:
-        os.makedirs(list_dir, exist_ok=True)
+    # Serializes makedirs, the already_saved dedup check, the copy, and
+    # append_log_entry's log.html read-modify-write -- see _save_lock's
+    # module-level comment. Held across the whole section, not just the
+    # write, so two concurrent saves of different files can't both read
+    # already_saved=False and both append a log entry, and so two
+    # concurrent saves of the *same* file can't interleave their
+    # append_log_entry calls and lose one entry to the other's rewrite.
+    with _save_lock:
+        try:
+            os.makedirs(list_dir, exist_ok=True)
 
-        already_saved = os.path.exists(real_dest_path)
+            already_saved = os.path.exists(real_dest_path)
 
-        # Preserve exact bytes -- including any embedded metadata --
-        # rather than re-encoding. The numpy array that produced the image
-        # no longer exists at click time, so re-running
-        # private_logger.log() with an output-folder override is not an
-        # option here. Written by hand (not shutil.copy2) so the
-        # destination open can carry O_NOFOLLOW: _confine() above already
-        # verified real_dest_path is contained, but shutil.copy2's own
-        # internal open() would still follow a symlink planted at that
-        # exact path between the check and this write (TOCTOU).
-        # O_NOFOLLOW makes symlink-rejection atomic with the open itself
-        # instead of just advisory, mirroring
-        # modules/wildcard_ui.py's write_wildcard.
-        open_flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, 'O_NOFOLLOW', 0)
-        dest_fd = os.open(real_dest_path, open_flags, 0o644)  # OSError caught below
+            # Preserve exact bytes -- including any embedded metadata --
+            # rather than re-encoding. The numpy array that produced the
+            # image no longer exists at click time, so re-running
+            # private_logger.log() with an output-folder override is not
+            # an option here.
+            #
+            # Written to a temp name next to real_dest_path, then
+            # os.replace'd into place, rather than truncated in place, so
+            # a failed copy (disk full, crash) can never leave a partial
+            # real_dest_path behind -- in-place O_TRUNC would otherwise
+            # make every retry see already_saved=True from the partial
+            # file and permanently skip the log entry. os.replace also
+            # replaces (rather than follows) a symlink at the destination.
+            #
+            # mode/timestamps are applied through the still-open fd
+            # (os.fchmod/os.utime), not by path afterwards -- a by-path
+            # shutil.copystat call here would re-resolve real_dest_path
+            # and could follow a symlink swapped in after the fd write,
+            # reopening the exact TOCTOU window O_NOFOLLOW below closes.
+            #
+            # O_NOFOLLOW makes symlink-rejection atomic with the open
+            # itself instead of just advisory, mirroring
+            # modules/wildcard_ui.py's write_wildcard.
+            tmp_dest_path = real_dest_path + '.tmp'
+            open_flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, 'O_NOFOLLOW', 0)
+            dest_fd = os.open(tmp_dest_path, open_flags, 0o644)  # OSError caught below
 
-        with open(real_source_path, 'rb') as src_file, open(dest_fd, 'wb') as dest_file:
-            shutil.copyfileobj(src_file, dest_file)
-        shutil.copystat(real_source_path, real_dest_path)
+            try:
+                with open(real_source_path, 'rb') as src_file, open(dest_fd, 'wb') as dest_file:
+                    shutil.copyfileobj(src_file, dest_file)
+                    source_stat = os.stat(real_source_path)
+                    os.fchmod(dest_file.fileno(), stat.S_IMODE(source_stat.st_mode))
+                    dest_file.flush()
+                    os.utime(dest_file.fileno(),
+                             ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
+                os.replace(tmp_dest_path, real_dest_path)
+            except OSError:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp_dest_path)
+                raise
 
-        if already_saved:
-            return True, f"Updated '{only_name}' in list '{list_name}'"
+            if already_saved:
+                return True, f"Updated '{only_name}' in list '{list_name}'"
 
-        entry_metadata, entry_task = metadata, task
-        if entry_metadata is None:
-            entry_metadata, entry_task = get_metadata(real_source_path)
-        if entry_metadata is None:
-            entry_metadata = [('Filename', 'filename', only_name)]
+            entry_metadata, entry_task = metadata, task
+            if entry_metadata is None:
+                entry_metadata, entry_task = get_metadata(real_source_path)
+            if entry_metadata is None:
+                entry_metadata = [('Filename', 'filename', only_name)]
 
-        html_path = os.path.join(list_dir, 'log.html')
-        append_log_entry(html_path, only_name, entry_metadata, task=entry_task, title_suffix=list_name)
+            html_path = os.path.join(list_dir, 'log.html')
+            append_log_entry(html_path, only_name, entry_metadata, task=entry_task, title_suffix=list_name)
 
-        return True, f"Saved '{only_name}' to list '{list_name}'"
-    except OSError as e:
-        return False, f"Failed to save image to list '{list_name}': {e}"
+            return True, f"Saved '{only_name}' to list '{list_name}'"
+        except OSError as e:
+            return False, f"Failed to save image to list '{list_name}': {e}"
