@@ -82,6 +82,23 @@ def scan_prompt(prompt: str, wildcard_dir: str, filenames: list[str]) -> Wildcar
     )
 
 
+def _resolve_confined(target: str, wildcard_dir: str) -> str | None:
+    """Resolve target and wildcard_dir through symlinks and verify true
+    path containment via os.path.commonpath.
+
+    This is the authoritative safety check: os.path.commonpath on
+    os.path.realpath'd inputs is what actually catches a symlink inside
+    wildcard_dir pointing outside it -- a plain os.path.normpath (which
+    does not follow symlinks) or a bare string-prefix comparison would not.
+    Returns the resolved path when confined, else None.
+    """
+    real_dir = os.path.realpath(wildcard_dir)
+    real_target = os.path.realpath(target)
+    if os.path.commonpath([real_dir, real_target]) != real_dir:
+        return None
+    return real_target
+
+
 def read_wildcard(name: str, wildcard_dir: str, filenames: list[str] | None = None) -> str:
     # FWDF-186 wires prompt-derived (attacker-influenced) names into this
     # function via the Gradio UI.
@@ -100,12 +117,18 @@ def read_wildcard(name: str, wildcard_dir: str, filenames: list[str] | None = No
             return ''
         target = os.path.join(wildcard_dir, match)
 
-    # CodeQL's py/path-injection canonical containment check: normalize,
-    # then verify the result is confined to base_path before any
-    # filesystem access, immediately guarding the exact value used below
-    # (github.com/github/codeql query help for py/path-injection).
-    base_path = os.path.normpath(wildcard_dir)
-    fullpath = os.path.normpath(target)
+    real_target = _resolve_confined(target, wildcard_dir)
+    if real_target is None:
+        return ''
+
+    # CodeQL's py/path-injection recognized containment pattern (normalize,
+    # then verify the startswith-prefix), applied to the already
+    # symlink-resolved real_target so the value used below is both
+    # genuinely confined (via _resolve_confined's commonpath check above)
+    # and guarded by the exact shape path-injection static analysis
+    # expects immediately before the filesystem call.
+    base_path = os.path.normpath(os.path.realpath(wildcard_dir))
+    fullpath = os.path.normpath(real_target)
     if not fullpath.startswith(base_path + os.sep):
         return ''
 
@@ -128,20 +151,24 @@ def write_wildcard(name: str, content: str, wildcard_dir: str) -> str:
 
     target = os.path.join(wildcard_dir, f'{name}.txt')
 
-    # See read_wildcard's comment: the canonical normalize-then-verify
-    # containment check, immediately guarding fullpath before it is used.
-    base_path = os.path.normpath(wildcard_dir)
-    fullpath = os.path.normpath(target)
+    real_target = _resolve_confined(target, wildcard_dir)
+    if real_target is None:
+        raise InvalidWildcardNameError(f'Invalid wildcard name: {name!r}')
+
+    # See read_wildcard's comment: the CodeQL-recognized normalize +
+    # startswith guard, applied to the already symlink-resolved real_target.
+    base_path = os.path.normpath(os.path.realpath(wildcard_dir))
+    fullpath = os.path.normpath(real_target)
     if not fullpath.startswith(base_path + os.sep):
         raise InvalidWildcardNameError(f'Invalid wildcard name: {name!r}')
 
     os.makedirs(wildcard_dir, exist_ok=True)
 
-    # WILDCARD_NAME_PATTERN and the containment check above rule out an
-    # unsafe fullpath, but wildcard_dir's own components could still be
-    # symlinked to somewhere unexpected by the time this runs (TOCTOU).
-    # O_NOFOLLOW makes symlink-rejection atomic with the open itself
-    # instead of just advisory.
+    # _resolve_confined and the containment check above rule out an unsafe
+    # fullpath, but wildcard_dir's own components -- or fullpath's final
+    # component -- could still be (re)symlinked between those checks and
+    # this write (TOCTOU). O_NOFOLLOW makes symlink-rejection atomic with
+    # the open itself instead of just advisory.
     open_flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, 'O_NOFOLLOW', 0)
     try:
         fd = os.open(fullpath, open_flags, 0o644)
