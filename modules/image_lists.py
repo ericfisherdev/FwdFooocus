@@ -37,6 +37,14 @@ from modules.private_logger import append_log_entry
 # entries verbatim.
 _INVALID_NAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f\x7f]')
 
+# Prefix contract for save_image_to_list's "already saved, copy refreshed"
+# success message (FWDF-191 review round 2): webui.py's
+# save_to_list_confirm_clicked aggregates a saved-vs-updated count off this
+# prefix, so the wording lives in exactly one place instead of being
+# re-parsed out of prose that could drift (rephrase, localization) without
+# any test catching the mismatch.
+UPDATED_MESSAGE_PREFIX = 'Updated'
+
 # In-process registry: absolute source image path -> (metadata, task) as
 # passed to private_logger.log() for that image. Populated by
 # record_metadata() from modules.async_worker.save_and_log right after each
@@ -334,7 +342,7 @@ def save_image_to_list(name: str, source_image_path: str, root_dir: str,
                 raise
 
             if already_saved:
-                return True, f"Updated '{only_name}' in list '{list_name}'"
+                return True, f"{UPDATED_MESSAGE_PREFIX} '{only_name}' in list '{list_name}'"
 
             entry_metadata, entry_task = metadata, task
             if entry_metadata is None:

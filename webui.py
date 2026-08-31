@@ -2057,7 +2057,7 @@ with shared.gradio_root:
                     source_root_dirs=[modules.config.path_outputs, modules.config.temp_path])
                 if not success:
                     failures.append(f'{os.path.basename(source_path)}: {message}')
-                elif message.startswith('Updated'):
+                elif message.startswith(modules.image_lists.UPDATED_MESSAGE_PREFIX):
                     updated_count += 1
                 else:
                     saved_count += 1
