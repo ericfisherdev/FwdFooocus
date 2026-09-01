@@ -311,10 +311,11 @@ class TestSaveImageToList:
         assert os.path.isfile(os.path.join(list_dir, 'a.png'))
 
     def test_concurrent_saves_of_different_files_both_persist_log_entries(self, tmp_path, root_dir, source_root):
-        """save_to_list handlers run queue=False in webui.py, so Gradio can
-        invoke them from concurrent request threads -- the module-level
-        _save_lock must serialize the copy-plus-log section so two
-        concurrent saves into the same list cannot lose either entry to
+        """save_to_list handlers in webui.py run through Gradio's serialized
+        queue (FWDF-194), but this module is UI-agnostic and the new_ui
+        FastAPI path can invoke it from concurrent request threads -- the
+        module-level _save_lock must serialize the copy-plus-log section so
+        two concurrent saves into the same list cannot lose either entry to
         the other's log.html rewrite."""
         import threading
 
