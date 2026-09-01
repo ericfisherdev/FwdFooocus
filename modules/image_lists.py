@@ -53,9 +53,11 @@ UPDATED_MESSAGE_PREFIX = 'Updated'
 # restart -- see get_metadata()'s embedded-metadata fallback.
 _metadata_registry: dict[str, tuple[list, Optional[dict]]] = {}
 
-# Serializes the copy-plus-log section of save_image_to_list: the webui
-# Save to List handlers run queue=False, so Gradio can invoke them from
-# concurrent request threads. append_log_entry does a read-prepend-rewrite
+# Serializes the copy-plus-log section of save_image_to_list. The webui
+# Save to List handlers now run through Gradio's serialized queue
+# (FWDF-194), but this module is UI-agnostic and the new_ui FastAPI path
+# can invoke it from concurrent request threads. append_log_entry does a
+# read-prepend-rewrite
 # of the whole log.html (backed by the shared private_logger.log_cache),
 # and the already_saved dedup check is a plain os.path.exists -- neither is
 # safe without a lock serializing the whole read-check-write section for a
