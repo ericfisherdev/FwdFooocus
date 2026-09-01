@@ -2035,10 +2035,18 @@ with shared.gradio_root:
         def save_to_list_confirm_clicked(checked_json, gallery_paths, list_dropdown_value, new_list_name):
             """Resolve every checked image's original path, create the list
             if a new name was typed, then delegate each image's
-            copy-plus-log-entry to modules.image_lists individually,
-            reporting an aggregate status. Stays queue=False like the
-            original FWDF-188 handler -- unlike the open handler above, this
-            one only ever needs the plain status textbox, never a toast."""
+            copy-plus-log-entry to modules.image_lists individually.
+
+            A fully successful save closes the dialog and confirms via a
+            gr.Info toast -- the status textbox lives inside the dialog
+            column, so anything written there is invisible the moment the
+            dialog closes (FWDF-194). Any failure, total or partial, keeps
+            the dialog open with the per-file detail in the status textbox
+            so the user can see exactly which images failed. This click
+            MUST run through the queue (no queue=False) for the same reason
+            as the open handler above -- gr.Info/gr.Warning are only
+            delivered to the browser via Gradio's queue in this pinned
+            version."""
             resolved_paths = modules.image_lists.resolve_checked_gallery_paths(gallery_paths, checked_json)
             if not resolved_paths:
                 return (gr.update(visible=True, value='No images checked.'), gr.update(), gr.update(visible=True))
@@ -2073,25 +2081,27 @@ with shared.gradio_root:
                 status_parts.append(f'{saved_count} saved')
             if updated_count:
                 status_parts.append(f'{updated_count} updated')
+
+            dropdown_update = gr.update()
+            if saved_count or updated_count:
+                dropdown_update = gr.update(
+                    choices=modules.image_lists.list_image_lists(modules.config.path_image_lists),
+                    value=modules.image_lists.sanitize_list_name(list_name))
+
             if failures:
                 status_parts.append(f'{len(failures)} failed ({"; ".join(failures)})')
-            icon = '❌' if failures and not (saved_count or updated_count) else ('⚠️' if failures else '✅')
-            status_message = f'{icon} {", ".join(status_parts)}' if status_parts else '❌ Nothing was saved.'
-            status_update = gr.update(visible=True, value=status_message)
+                icon = '⚠️' if (saved_count or updated_count) else '❌'
+                status_update = gr.update(visible=True, value=f'{icon} {", ".join(status_parts)}')
+                return status_update, dropdown_update, gr.update(visible=True)
 
-            if not (saved_count or updated_count):
-                return status_update, gr.update(), gr.update(visible=True)
-
-            dropdown_update = gr.update(
-                choices=modules.image_lists.list_image_lists(modules.config.path_image_lists),
-                value=modules.image_lists.sanitize_list_name(list_name))
-            return status_update, dropdown_update, gr.update(visible=False)
+            saved_list_name = modules.image_lists.sanitize_list_name(list_name)
+            gr.Info(f'{", ".join(status_parts)} to list "{saved_list_name}"')
+            return gr.update(visible=False), dropdown_update, gr.update(visible=False)
 
         save_to_list_confirm.click(
             save_to_list_confirm_clicked,
             inputs=[gallery_checked_data, gallery_paths_state, image_list_dropdown, new_image_list_name],
             outputs=[save_to_list_status, image_list_dropdown, save_to_list_dialog],
-            queue=False,
             show_progress=False
         )
 

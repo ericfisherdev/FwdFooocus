@@ -165,11 +165,36 @@ div:has(> #positive_prompt) {
   cursor: pointer;
 }
 
+/* FWDF-194: fully self-styled (appearance: none) so checked/unchecked
+   states never depend on how the browser or Gradio theme renders a native
+   checkbox -- unchecked is an empty white-bordered box, checked is an
+   accent-filled box with an embedded white SVG checkmark. */
 .gallery-checkbox-overlay-input {
+  appearance: none;
+  -webkit-appearance: none;
   width: 16px;
   height: 16px;
   margin: 0;
   cursor: pointer;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  border-radius: 3px;
+  background-color: transparent;
+}
+
+.gallery-checkbox-overlay-input:checked {
+  background-color: var(--color-accent, #2563eb);
+  border-color: var(--color-accent, #2563eb);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3 8.5 6.5 12 13 4.5' fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-size: 12px 12px;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+/* FWDF-194: outline the whole thumbnail while checked so the selection
+   reads at a glance, in both the grid and the preview strip. */
+#final_gallery button.thumbnail-item:has(.gallery-checkbox-overlay-input:checked) {
+  outline: 2px solid var(--color-accent, #2563eb);
+  outline-offset: -2px;
 }
 
 .min_check {
