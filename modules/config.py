@@ -605,12 +605,12 @@ for slug, method, engine_default, strength_default, field_default in [
         key=f'default_inpaint_strength_{slug}',
         default_value=strength_default,
         validator=lambda x: isinstance(x, numbers.Number) and not isinstance(x, bool) and 0 <= x <= 1,
-        expected_type=float))
+        expected_type=numbers.Number))
     default_inpaint_respective_fields[method] = float(get_config_item_or_set_default(
         key=f'default_inpaint_respective_field_{slug}',
         default_value=field_default,
         validator=lambda x: isinstance(x, numbers.Number) and not isinstance(x, bool) and 0 <= x <= 1,
-        expected_type=float))
+        expected_type=numbers.Number))
 default_cfg_tsnr = get_config_item_or_set_default(
     key='default_cfg_tsnr',
     default_value=7.0,

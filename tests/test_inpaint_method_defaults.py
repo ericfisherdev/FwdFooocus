@@ -52,6 +52,7 @@ def _engine_validator(x):
 def _reload_config_key(key, raw_value, default_value, validator, expected_type):
     """Sets config_dict[key] to raw_value, re-runs get_config_item_or_set_default,
     then restores config_dict/visited_keys so other tests are unaffected."""
+    was_visited = key in modules.config.visited_keys
     modules.config.config_dict[key] = raw_value
     try:
         return modules.config.get_config_item_or_set_default(
@@ -59,7 +60,7 @@ def _reload_config_key(key, raw_value, default_value, validator, expected_type):
             expected_type=expected_type)
     finally:
         modules.config.config_dict.pop(key, None)
-        if key in modules.config.visited_keys:
+        if not was_visited and key in modules.config.visited_keys:
             modules.config.visited_keys.remove(key)
 
 
