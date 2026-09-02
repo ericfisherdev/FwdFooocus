@@ -192,6 +192,39 @@ class TestGenerateMaskFromImageADetailerDispatch:
         assert np.all(mask[0:10, 0:10] == 255)
         assert np.all(mask[40:50, 40:50] == 0)
 
+    def _single_mask_detection(self, y1, y2, x1, x2):
+        box = np.array([[0, 0, 60, 60]], dtype=np.float32)  # unused once masks are present
+        mask = np.zeros((60, 60), dtype=bool)
+        mask[y1:y2, x1:x2] = True
+        return DetectionResult(boxes=box, scores=np.array([0.9]), masks=np.stack([mask]))
+
+    def test_box_erode_or_dilate_expands_segmentation_mask_region(self, monkeypatch):
+        result = self._single_mask_detection(20, 30, 20, 30)
+        monkeypatch.setattr(inpaint_mask, 'detect_bboxes', lambda image, model_path, confidence: result)
+
+        options = inpaint_mask.ADetailerOptions(model_name='person_yolov8m-seg', box_erode_or_dilate=5)
+        mask, _, _, _ = inpaint_mask.generate_mask_from_image(
+            _image(60, 60), mask_model='adetailer', adetailer_options=options
+        )
+
+        # Dilated by 5px on each side: region [15:35, 15:35] should now be filled,
+        # including pixels just outside the original [20:30, 20:30] mask.
+        assert mask[16, 16][0] == 255
+        assert mask[34, 34][0] == 255
+
+    def test_negative_erode_or_dilate_shrinks_segmentation_mask_region(self, monkeypatch):
+        result = self._single_mask_detection(20, 40, 20, 40)
+        monkeypatch.setattr(inpaint_mask, 'detect_bboxes', lambda image, model_path, confidence: result)
+
+        options = inpaint_mask.ADetailerOptions(model_name='person_yolov8m-seg', box_erode_or_dilate=-5)
+        mask, _, _, _ = inpaint_mask.generate_mask_from_image(
+            _image(60, 60), mask_model='adetailer', adetailer_options=options
+        )
+
+        # Eroded by 5px on each side: region right at the original edge is now unfilled.
+        assert mask[21, 21][0] == 0
+        assert mask[30, 30][0] == 255
+
     def test_none_options_still_dispatches_to_adetailer_with_config_default_model(self, monkeypatch):
         # mask_model='adetailer' with no options must NOT fall through to
         # rembg's new_session('adetailer') -- which silently becomes a
