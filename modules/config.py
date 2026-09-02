@@ -202,6 +202,7 @@ path_fooocus_expansion = get_dir_or_set_default('path_fooocus_expansion', '../mo
 path_wildcards = get_dir_or_set_default('path_wildcards', '../wildcards/')
 path_safety_checker = get_dir_or_set_default('path_safety_checker', '../models/safety_checker/')
 path_sam = get_dir_or_set_default('path_sam', '../models/sam/')
+path_adetailer = get_dir_or_set_default('path_adetailer', '../models/adetailer/')
 path_outputs = get_path_output()
 path_lora_presets = get_dir_or_set_default('path_lora_presets', '../lora_presets/', make_directory=True)
 # Defaults under path_outputs (not relative to modules/, like the other
@@ -755,6 +756,13 @@ default_inpaint_mask_sam_model = get_config_item_or_set_default(
     expected_type=str
 )
 
+default_inpaint_mask_adetailer_model = get_config_item_or_set_default(
+    key='default_inpaint_mask_adetailer_model',
+    default_value='face_yolov9c',
+    validator=lambda x: x in modules.flags.inpaint_mask_adetailer_model,
+    expected_type=str
+)
+
 default_describe_apply_prompts_checkbox = get_config_item_or_set_default(
     key='default_describe_apply_prompts_checkbox',
     default_value=True,
@@ -1071,6 +1079,51 @@ def downloading_sam_vit_h():
         file_name='sam_vit_h_4b8939.pth'
     )
     return os.path.join(path_sam, 'sam_vit_h_4b8939.pth')
+
+
+# ADetailer ONNX exports (opset 12, static 640x640, fp32, no embedded NMS),
+# unmodified detection weights from https://huggingface.co/Bingsu/adetailer
+# (Apache-2.0), re-hosted as GitHub release assets so no HF auth is needed.
+# All four registry entries exist from day one; flags.inpaint_mask_adetailer_model
+# currently exposes only the bbox models (face/hand) — FWDF-199 appends the
+# -seg models once mask-prototype decoding lands.
+_ADETAILER_RELEASE_URL = 'https://github.com/ericfisherdev/FwdFooocus/releases/download/adetailer-onnx-v1'
+_adetailer_model_registry = {
+    'face_yolov9c': (
+        'face_yolov9c.onnx',
+        '1e05f810e80903a85cc32104460cd468d9fa90f7d2f9dfeb2fea94fcd412f71d',
+        101632702,
+    ),
+    'hand_yolov9c': (
+        'hand_yolov9c.onnx',
+        'b17542a18e28c741ca99a7d313f3baaac60d2ce2240e91f802c4f5d6433eeec9',
+        101632702,
+    ),
+    'person_yolov8m-seg': (
+        'person_yolov8m-seg.onnx',
+        '1749701df9750035066792fb88c8200ea435d1e64553c6a16f5e868c55250058',
+        109168699,
+    ),
+    'deepfashion2_yolov8s-seg': (
+        'deepfashion2_yolov8s-seg.onnx',
+        '92bd49709e0fda3ff8aa56695b7ed0ac7c3495e1f3fb83f8327c1878d8975c47',
+        47394057,
+    ),
+}
+
+
+def download_adetailer_model(model_name: str) -> str:
+    if model_name not in _adetailer_model_registry:
+        raise ValueError(f"adetailer model {model_name} does not exist.")
+    file_name, expected_sha256, expected_size = _adetailer_model_registry[model_name]
+    load_file_from_url(
+        url=f'{_ADETAILER_RELEASE_URL}/{file_name}',
+        model_dir=path_adetailer,
+        file_name=file_name,
+        expected_sha256=expected_sha256,
+        expected_size=expected_size,
+    )
+    return os.path.join(path_adetailer, file_name)
 
 
 # Z-Image is a DiT-only checkpoint: its text encoder and VAE ship as separate
