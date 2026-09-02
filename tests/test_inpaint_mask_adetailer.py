@@ -151,19 +151,21 @@ class TestGenerateMaskFromImageADetailerDispatch:
         assert mask[21, 21][0] == 0
         assert mask[30, 30][0] == 255
 
-    def test_segmentation_masks_are_unioned_instead_of_boxes(self, monkeypatch):
-        # A seg-capable model's DetectionResult carries boolean masks; the
-        # final mask must be their union, not the bbox rectangles.
-        boxes = np.array([[0, 0, 60, 60], [0, 0, 60, 60]], dtype=np.float32)  # overlapping boxes, disjoint masks
+    def _two_disjoint_mask_detections(self):
+        """Two overlapping bbox rectangles (unused once masks are present)
+        with disjoint 10x10 boolean masks, sorted by score descending."""
+        boxes = np.array([[0, 0, 60, 60], [0, 0, 60, 60]], dtype=np.float32)
         mask_a = np.zeros((60, 60), dtype=bool)
         mask_a[0:10, 0:10] = True
         mask_b = np.zeros((60, 60), dtype=bool)
         mask_b[40:50, 40:50] = True
-        masks = np.stack([mask_a, mask_b])
-        monkeypatch.setattr(
-            inpaint_mask, 'detect_bboxes',
-            lambda image, model_path, confidence: DetectionResult(boxes=boxes, scores=np.array([0.9, 0.8]), masks=masks)
-        )
+        return DetectionResult(boxes=boxes, scores=np.array([0.9, 0.8]), masks=np.stack([mask_a, mask_b]))
+
+    def test_segmentation_masks_are_unioned_instead_of_boxes(self, monkeypatch):
+        # A seg-capable model's DetectionResult carries boolean masks; the
+        # final mask must be their union, not the bbox rectangles.
+        result = self._two_disjoint_mask_detections()
+        monkeypatch.setattr(inpaint_mask, 'detect_bboxes', lambda image, model_path, confidence: result)
 
         options = inpaint_mask.ADetailerOptions(model_name='person_yolov8m-seg')
         mask, count, _, _ = inpaint_mask.generate_mask_from_image(
@@ -177,16 +179,8 @@ class TestGenerateMaskFromImageADetailerDispatch:
         assert np.all(mask[20:30, 20:30] == 0)
 
     def test_max_detections_truncates_applied_masks(self, monkeypatch):
-        boxes = np.array([[0, 0, 60, 60], [0, 0, 60, 60]], dtype=np.float32)
-        mask_a = np.zeros((60, 60), dtype=bool)
-        mask_a[0:10, 0:10] = True
-        mask_b = np.zeros((60, 60), dtype=bool)
-        mask_b[40:50, 40:50] = True
-        masks = np.stack([mask_a, mask_b])
-        monkeypatch.setattr(
-            inpaint_mask, 'detect_bboxes',
-            lambda image, model_path, confidence: DetectionResult(boxes=boxes, scores=np.array([0.9, 0.8]), masks=masks)
-        )
+        result = self._two_disjoint_mask_detections()
+        monkeypatch.setattr(inpaint_mask, 'detect_bboxes', lambda image, model_path, confidence: result)
 
         options = inpaint_mask.ADetailerOptions(model_name='person_yolov8m-seg', max_detections=1)
         mask, count, _, _ = inpaint_mask.generate_mask_from_image(
