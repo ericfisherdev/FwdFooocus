@@ -687,6 +687,12 @@ default_sam_max_detections = get_config_item_or_set_default(
     validator=lambda x: isinstance(x, int) and 0 <= x <= 10,
     expected_type=int
 )
+default_adetailer_max_detections = get_config_item_or_set_default(
+    key='default_adetailer_max_detections',
+    default_value=0,
+    validator=lambda x: isinstance(x, int) and 0 <= x <= 10,
+    expected_type=int
+)
 default_black_out_nsfw = get_config_item_or_set_default(
     key='default_black_out_nsfw',
     default_value=False,

@@ -5,7 +5,7 @@ import threading
 import numpy as np
 from PIL import Image
 
-from extras.inpaint_mask import generate_mask_from_image, SAMOptions
+from extras.inpaint_mask import generate_mask_from_image, SAMOptions, ADetailerOptions
 from modules.heartbeat import is_browser_connected
 from modules.patch import PatchSettings, patch_settings, patch_all
 from modules.session_state import save_state as save_session_state
@@ -155,6 +155,9 @@ class AsyncTask:
             enhance_mask_text_threshold = args.pop()
             enhance_mask_box_threshold = args.pop()
             enhance_mask_sam_max_detections = args.pop()
+            enhance_mask_adetailer_model = args.pop()
+            enhance_mask_adetailer_confidence = args.pop()
+            enhance_mask_adetailer_max_detections = args.pop()
             enhance_inpaint_disable_initial_latent = args.pop()
             enhance_inpaint_engine = args.pop()
             enhance_inpaint_strength = args.pop()
@@ -172,6 +175,9 @@ class AsyncTask:
                     enhance_mask_text_threshold,
                     enhance_mask_box_threshold,
                     enhance_mask_sam_max_detections,
+                    enhance_mask_adetailer_model,
+                    enhance_mask_adetailer_confidence,
+                    enhance_mask_adetailer_max_detections,
                     enhance_inpaint_disable_initial_latent,
                     enhance_inpaint_engine,
                     enhance_inpaint_strength,
@@ -282,6 +288,43 @@ def _inpaint_engine_active(base_model_name: str, inpaint_parameterized: bool) ->
     apply_image_input, process_enhance): the engine is in play only when the
     task requests it AND the checkpoint's family has a learned engine head."""
     return inpaint_parameterized and not _inpaint_family_lacks_engine_head(base_model_name)
+
+
+def _enhance_detection_log_lines(enhance_mask_model, dino_detection_count, sam_detection_count,
+                                  sam_detection_on_mask_count):
+    """Per-backend detection log lines for the lazy enhance mask path.
+
+    FWDF-197's adetailer branch of generate_mask_from_image returns
+    (mask, detection_count, 0, 0): dino_detection_count holds the real
+    detection count for adetailer, while sam_detection_count and
+    sam_detection_on_mask_count are always 0 and not applicable, so they
+    are not logged for that backend.
+    """
+    if enhance_mask_model == 'adetailer':
+        return [f'[Enhance] {dino_detection_count} adetailer detections']
+    return [
+        f'[Enhance] {dino_detection_count} boxes detected',
+        f'[Enhance] {sam_detection_count} segments detected in boxes',
+        f'[Enhance] {sam_detection_on_mask_count} segments applied to mask',
+    ]
+
+
+def _enhance_detection_skip_message(enhance_mask_model, dino_detection_count, sam_detection_on_mask_count,
+                                     debugging_dino, enhance_mask_dino_prompt_text):
+    """Whether the lazy enhance mask path should skip inpainting this tab,
+    and the message to print if so, or None to keep processing.
+
+    SAM skips when GroundingDINO found nothing, or (outside debug mode) SAM
+    itself produced no on-mask segments. ADetailer's contract has no
+    per-segment count -- FWDF-197's adetailer branch always returns 0 for
+    the SAM-only fields -- so it skips solely on zero raw detections.
+    """
+    if enhance_mask_model == 'sam' and (dino_detection_count == 0
+                                         or not debugging_dino and sam_detection_on_mask_count == 0):
+        return f'[Enhance] No "{enhance_mask_dino_prompt_text}" detected, skipping'
+    if enhance_mask_model == 'adetailer' and dino_detection_count == 0:
+        return '[Enhance] No adetailer detections, skipping'
+    return None
 
 
 class EarlyReturnException(BaseException):
@@ -1628,7 +1671,7 @@ def worker():
                     break
 
             # inpaint for all other tabs
-            for enhance_mask_dino_prompt_text, enhance_prompt, enhance_negative_prompt, enhance_mask_model, enhance_mask_cloth_category, enhance_mask_sam_model, enhance_mask_text_threshold, enhance_mask_box_threshold, enhance_mask_sam_max_detections, enhance_inpaint_disable_initial_latent, enhance_inpaint_engine, enhance_inpaint_strength, enhance_inpaint_respective_field, enhance_inpaint_erode_or_dilate, enhance_mask_invert in async_task.enhance_ctrls:
+            for enhance_mask_dino_prompt_text, enhance_prompt, enhance_negative_prompt, enhance_mask_model, enhance_mask_cloth_category, enhance_mask_sam_model, enhance_mask_text_threshold, enhance_mask_box_threshold, enhance_mask_sam_max_detections, enhance_mask_adetailer_model, enhance_mask_adetailer_confidence, enhance_mask_adetailer_max_detections, enhance_inpaint_disable_initial_latent, enhance_inpaint_engine, enhance_inpaint_strength, enhance_inpaint_respective_field, enhance_inpaint_erode_or_dilate, enhance_mask_invert in async_task.enhance_ctrls:
                 current_task_id += 1
                 current_progress = int(base_progress + (100 - preparation_steps) / float(all_steps) * (done_steps_upscaling + done_steps_inpainting))
                 progressbar(async_task, current_progress, f'Preparing enhancement {current_task_id + 1}/{total_count} ...')
@@ -1637,13 +1680,11 @@ def worker():
                 persist_image = not async_task.save_final_enhanced_image_only or is_last_enhance_for_image
 
                 extras = {}
+                sam_options = None
+                adetailer_options = None
                 if enhance_mask_model == 'sam':
                     print(f'[Enhance] Searching for "{enhance_mask_dino_prompt_text}"')
-                elif enhance_mask_model == 'u2net_cloth_seg':
-                    extras['cloth_category'] = enhance_mask_cloth_category
-
-                mask, dino_detection_count, sam_detection_count, sam_detection_on_mask_count = generate_mask_from_image(
-                    img, mask_model=enhance_mask_model, extras=extras, sam_options=SAMOptions(
+                    sam_options = SAMOptions(
                         dino_prompt=enhance_mask_dino_prompt_text,
                         dino_box_threshold=enhance_mask_box_threshold,
                         dino_text_threshold=enhance_mask_text_threshold,
@@ -1651,7 +1692,20 @@ def worker():
                         dino_debug=async_task.debugging_dino,
                         max_detections=enhance_mask_sam_max_detections,
                         model_type=enhance_mask_sam_model,
-                    ))
+                    )
+                elif enhance_mask_model == 'u2net_cloth_seg':
+                    extras['cloth_category'] = enhance_mask_cloth_category
+                elif enhance_mask_model == 'adetailer':
+                    adetailer_options = ADetailerOptions(
+                        model_name=enhance_mask_adetailer_model,
+                        confidence=enhance_mask_adetailer_confidence,
+                        max_detections=enhance_mask_adetailer_max_detections,
+                        box_erode_or_dilate=async_task.dino_erode_or_dilate,
+                    )
+
+                mask, dino_detection_count, sam_detection_count, sam_detection_on_mask_count = generate_mask_from_image(
+                    img, mask_model=enhance_mask_model, extras=extras, sam_options=sam_options,
+                    adetailer_options=adetailer_options)
                 if len(mask.shape) == 3:
                     mask = mask[:, :, 0]
 
@@ -1667,12 +1721,15 @@ def worker():
                                  async_task.disable_intermediate_results)
                     async_task.enhance_stats[index] += 1
 
-                print(f'[Enhance] {dino_detection_count} boxes detected')
-                print(f'[Enhance] {sam_detection_count} segments detected in boxes')
-                print(f'[Enhance] {sam_detection_on_mask_count} segments applied to mask')
+                for log_line in _enhance_detection_log_lines(
+                        enhance_mask_model, dino_detection_count, sam_detection_count, sam_detection_on_mask_count):
+                    print(log_line)
 
-                if enhance_mask_model == 'sam' and (dino_detection_count == 0 or not async_task.debugging_dino and sam_detection_on_mask_count == 0):
-                    print(f'[Enhance] No "{enhance_mask_dino_prompt_text}" detected, skipping')
+                skip_message = _enhance_detection_skip_message(
+                    enhance_mask_model, dino_detection_count, sam_detection_on_mask_count,
+                    async_task.debugging_dino, enhance_mask_dino_prompt_text)
+                if skip_message is not None:
+                    print(skip_message)
                     continue
 
                 goals_enhance = ['inpaint']

@@ -370,6 +370,9 @@ def _build_generate_args(body: dict) -> list:
             0.25,    # enhance_mask_text_threshold
             0.3,     # enhance_mask_box_threshold
             0,       # enhance_mask_sam_max_detections
+            config.default_inpaint_mask_adetailer_model, # enhance_mask_adetailer_model
+            0.3,     # enhance_mask_adetailer_confidence
+            0,       # enhance_mask_adetailer_max_detections
             False,   # enhance_inpaint_disable_initial_latent
             'None',  # enhance_inpaint_engine
             1.0,     # enhance_inpaint_strength

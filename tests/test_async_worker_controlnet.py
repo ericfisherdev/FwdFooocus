@@ -32,6 +32,7 @@ try:
         _inpaint_mask_stub = types.ModuleType('extras.inpaint_mask')
         _inpaint_mask_stub.generate_mask_from_image = lambda *_args, **_kwargs: None
         _inpaint_mask_stub.SAMOptions = object
+        _inpaint_mask_stub.ADetailerOptions = object
         sys.modules['extras.inpaint_mask'] = _inpaint_mask_stub
         _installed_stub_names.append('extras.inpaint_mask')
 
