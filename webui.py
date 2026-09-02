@@ -29,7 +29,7 @@ import modules.wildcard_ui_helpers
 import args_manager
 import copy
 import launch
-from extras.inpaint_mask import SAMOptions
+from extras.inpaint_mask import SAMOptions, ADetailerOptions
 
 from modules.sdxl_styles import legal_style_names
 from modules.private_logger import get_current_html_path
@@ -175,6 +175,44 @@ def inpaint_mode_change(mode, inpaint_engine_version):
         False, inpaint_engine_version,
         modules.config.default_inpaint_strengths[mode],
         modules.config.default_inpaint_respective_fields[mode]
+    ]
+
+
+def update_inpaint_mask_model_visibility(mask_model):
+    # inpaint_mask_cloth_category, inpaint_mask_dino_prompt_text,
+    # inpaint_mask_advanced_options, example_inpaint_mask_dino_prompt_text,
+    # inpaint_mask_sam_model, inpaint_mask_box_threshold, inpaint_mask_text_threshold,
+    # inpaint_mask_sam_max_detections, inpaint_mask_adetailer_model,
+    # inpaint_mask_adetailer_confidence, inpaint_mask_adetailer_max_detections
+    is_sam = mask_model == 'sam'
+    is_adetailer = mask_model == 'adetailer'
+    return [
+        gr.update(visible=mask_model == 'u2net_cloth_seg'),
+        gr.update(visible=is_sam),
+        gr.update(visible=is_sam or is_adetailer),
+        gr.Dataset.update(visible=is_sam, samples=modules.config.example_enhance_detection_prompts),
+        gr.update(visible=is_sam),
+        gr.update(visible=is_sam),
+        gr.update(visible=is_sam),
+        gr.update(visible=is_sam),
+        gr.update(visible=is_adetailer),
+        gr.update(visible=is_adetailer),
+        gr.update(visible=is_adetailer),
+    ]
+
+
+def update_enhance_mask_model_visibility(mask_model):
+    # enhance_mask_cloth_category, enhance_mask_dino_prompt_text,
+    # sam_options accordion, adetailer_options accordion,
+    # example_enhance_mask_dino_prompt_text
+    is_sam = mask_model == 'sam'
+    is_adetailer = mask_model == 'adetailer'
+    return [
+        gr.update(visible=mask_model == 'u2net_cloth_seg'),
+        gr.update(visible=is_sam),
+        gr.update(visible=is_sam),
+        gr.update(visible=is_adetailer),
+        gr.Dataset.update(visible=is_sam, samples=modules.config.example_enhance_detection_prompts),
     ]
 
 
@@ -579,18 +617,24 @@ with shared.gradio_root:
                                                                             outputs=inpaint_mask_dino_prompt_text,
                                                                             show_progress=False, queue=False)
 
-                                with gr.Accordion("Advanced options", visible=False, open=False) as inpaint_mask_advanced_options:
-                                    inpaint_mask_sam_model = gr.Dropdown(label='SAM model', choices=flags.inpaint_mask_sam_model, value=modules.config.default_inpaint_mask_sam_model)
-                                    inpaint_mask_box_threshold = gr.Slider(label="Box Threshold", minimum=0.0, maximum=1.0, value=0.3, step=0.05)
-                                    inpaint_mask_text_threshold = gr.Slider(label="Text Threshold", minimum=0.0, maximum=1.0, value=0.25, step=0.05)
-                                    inpaint_mask_sam_max_detections = gr.Slider(label="Maximum number of detections", info="Set to 0 to detect all", minimum=0, maximum=10, value=modules.config.default_sam_max_detections, step=1, interactive=True)
+                                with gr.Accordion("Advanced options",
+                                                  visible=modules.config.default_inpaint_mask_model in ['sam', 'adetailer'],
+                                                  open=False) as inpaint_mask_advanced_options:
+                                    inpaint_mask_sam_model = gr.Dropdown(label='SAM model', choices=flags.inpaint_mask_sam_model, value=modules.config.default_inpaint_mask_sam_model, visible=modules.config.default_inpaint_mask_model == 'sam')
+                                    inpaint_mask_box_threshold = gr.Slider(label="Box Threshold", minimum=0.0, maximum=1.0, value=0.3, step=0.05, visible=modules.config.default_inpaint_mask_model == 'sam')
+                                    inpaint_mask_text_threshold = gr.Slider(label="Text Threshold", minimum=0.0, maximum=1.0, value=0.25, step=0.05, visible=modules.config.default_inpaint_mask_model == 'sam')
+                                    inpaint_mask_sam_max_detections = gr.Slider(label="Maximum number of detections", info="Set to 0 to detect all", minimum=0, maximum=10, value=modules.config.default_sam_max_detections, step=1, interactive=True, visible=modules.config.default_inpaint_mask_model == 'sam')
+                                    inpaint_mask_adetailer_model = gr.Dropdown(label='ADetailer model', choices=flags.inpaint_mask_adetailer_model, value=modules.config.default_inpaint_mask_adetailer_model, visible=modules.config.default_inpaint_mask_model == 'adetailer')
+                                    inpaint_mask_adetailer_confidence = gr.Slider(label="Confidence", minimum=0.0, maximum=1.0, value=0.3, step=0.05, visible=modules.config.default_inpaint_mask_model == 'adetailer')
+                                    inpaint_mask_adetailer_max_detections = gr.Slider(label="Maximum number of detections", info="Set to 0 to detect all", minimum=0, maximum=10, value=modules.config.default_adetailer_max_detections, step=1, interactive=True, visible=modules.config.default_inpaint_mask_model == 'adetailer')
                                 generate_mask_button = gr.Button(value='Generate mask from image')
 
-                                def generate_mask(image, mask_model, cloth_category, dino_prompt_text, sam_model, box_threshold, text_threshold, sam_max_detections, dino_erode_or_dilate, dino_debug):
+                                def generate_mask(image, mask_model, cloth_category, dino_prompt_text, sam_model, box_threshold, text_threshold, sam_max_detections, adetailer_model, adetailer_confidence, adetailer_max_detections, dino_erode_or_dilate, dino_debug):
                                     from extras.inpaint_mask import generate_mask_from_image
 
                                     extras = {}
                                     sam_options = None
+                                    adetailer_options = None
                                     if mask_model == 'u2net_cloth_seg':
                                         extras['cloth_category'] = cloth_category
                                     elif mask_model == 'sam':
@@ -603,21 +647,33 @@ with shared.gradio_root:
                                             max_detections=sam_max_detections,
                                             model_type=sam_model
                                         )
+                                    elif mask_model == 'adetailer':
+                                        adetailer_options = ADetailerOptions(
+                                            model_name=adetailer_model,
+                                            confidence=adetailer_confidence,
+                                            max_detections=adetailer_max_detections,
+                                            box_erode_or_dilate=dino_erode_or_dilate
+                                        )
 
-                                    mask, _, _, _ = generate_mask_from_image(image, mask_model, extras, sam_options)
+                                    mask, _, _, _ = generate_mask_from_image(image, mask_model, extras, sam_options,
+                                                                             adetailer_options=adetailer_options)
 
                                     return mask
 
 
-                                inpaint_mask_model.change(lambda x: [gr.update(visible=x == 'u2net_cloth_seg')] +
-                                                                    [gr.update(visible=x == 'sam')] * 2 +
-                                                                    [gr.Dataset.update(visible=x == 'sam',
-                                                                                       samples=modules.config.example_enhance_detection_prompts)],
+                                inpaint_mask_model.change(update_inpaint_mask_model_visibility,
                                                           inputs=inpaint_mask_model,
                                                           outputs=[inpaint_mask_cloth_category,
                                                                    inpaint_mask_dino_prompt_text,
                                                                    inpaint_mask_advanced_options,
-                                                                   example_inpaint_mask_dino_prompt_text],
+                                                                   example_inpaint_mask_dino_prompt_text,
+                                                                   inpaint_mask_sam_model,
+                                                                   inpaint_mask_box_threshold,
+                                                                   inpaint_mask_text_threshold,
+                                                                   inpaint_mask_sam_max_detections,
+                                                                   inpaint_mask_adetailer_model,
+                                                                   inpaint_mask_adetailer_confidence,
+                                                                   inpaint_mask_adetailer_max_detections],
                                                           queue=False, show_progress=False)
 
                     with gr.Tab(label='Describe', id='describe_tab') as describe_tab:
@@ -750,6 +806,22 @@ with shared.gradio_root:
                                                                                 value=modules.config.default_sam_max_detections,
                                                                                 step=1, interactive=True)
 
+                                with gr.Accordion("ADetailer Options",
+                                                  visible=modules.config.default_enhance_inpaint_mask_model == 'adetailer',
+                                                  open=False) as adetailer_options_accordion:
+                                    enhance_mask_adetailer_model = gr.Dropdown(label='ADetailer model',
+                                                                               choices=flags.inpaint_mask_adetailer_model,
+                                                                               value=modules.config.default_inpaint_mask_adetailer_model,
+                                                                               interactive=True)
+                                    enhance_mask_adetailer_confidence = gr.Slider(label="Confidence", minimum=0.0,
+                                                                                  maximum=1.0, value=0.3, step=0.05,
+                                                                                  interactive=True)
+                                    enhance_mask_adetailer_max_detections = gr.Slider(label="Maximum number of detections",
+                                                                                      info="Set to 0 to detect all",
+                                                                                      minimum=0, maximum=10,
+                                                                                      value=modules.config.default_adetailer_max_detections,
+                                                                                      step=1, interactive=True)
+
                             with gr.Accordion("Inpaint", visible=True, open=False):
                                 enhance_inpaint_mode = gr.Dropdown(choices=modules.flags.inpaint_options,
                                                                    value=modules.config.default_inpaint_method,
@@ -794,6 +866,9 @@ with shared.gradio_root:
                             enhance_mask_text_threshold,
                             enhance_mask_box_threshold,
                             enhance_mask_sam_max_detections,
+                            enhance_mask_adetailer_model,
+                            enhance_mask_adetailer_confidence,
+                            enhance_mask_adetailer_max_detections,
                             enhance_inpaint_disable_initial_latent,
                             enhance_inpaint_engine,
                             enhance_inpaint_strength,
@@ -817,13 +892,10 @@ with shared.gradio_root:
                         ], show_progress=False, queue=False)
 
                         enhance_mask_model.change(
-                            lambda x: [gr.update(visible=x == 'u2net_cloth_seg')] +
-                                      [gr.update(visible=x == 'sam')] * 2 +
-                                      [gr.Dataset.update(visible=x == 'sam',
-                                                         samples=modules.config.example_enhance_detection_prompts)],
+                            update_enhance_mask_model_visibility,
                             inputs=enhance_mask_model,
                             outputs=[enhance_mask_cloth_category, enhance_mask_dino_prompt_text, sam_options,
-                                     example_enhance_mask_dino_prompt_text],
+                                     adetailer_options_accordion, example_enhance_mask_dino_prompt_text],
                             queue=False, show_progress=False)
 
             switch_js = "(x) => {if(x){viewer_to_bottom(100);viewer_to_bottom(500);}else{viewer_to_top();} return x;}"
@@ -1172,11 +1244,11 @@ with shared.gradio_root:
                                                             info='Positive value will make white area in the mask larger, '
                                                                  'negative value will make white area smaller. '
                                                                  '(default is 0, always processed before any mask invert)')
-                        dino_erode_or_dilate = gr.Slider(label='GroundingDINO Box Erode or Dilate',
+                        dino_erode_or_dilate = gr.Slider(label='GroundingDINO / ADetailer Box Erode or Dilate',
                                                          minimum=-64, maximum=64, step=1, value=0,
                                                          info='Positive value will make white area in the mask larger, '
                                                               'negative value will make white area smaller. '
-                                                              '(default is 0, processed before SAM)')
+                                                              '(default is 0, processed before SAM; also applies to adetailer boxes)')
 
                         inpaint_mask_color = gr.ColorPicker(label='Inpaint brush color', value='#FFFFFF', elem_id='inpaint_brush_color')
 
@@ -1816,7 +1888,9 @@ with shared.gradio_root:
                                    inputs=[inpaint_input_image, inpaint_mask_model, inpaint_mask_cloth_category,
                                            inpaint_mask_dino_prompt_text, inpaint_mask_sam_model,
                                            inpaint_mask_box_threshold, inpaint_mask_text_threshold,
-                                           inpaint_mask_sam_max_detections, dino_erode_or_dilate, debugging_dino],
+                                           inpaint_mask_sam_max_detections, inpaint_mask_adetailer_model,
+                                           inpaint_mask_adetailer_confidence, inpaint_mask_adetailer_max_detections,
+                                           dino_erode_or_dilate, debugging_dino],
                                    outputs=inpaint_mask_image, show_progress=True, queue=True)
 
         ctrls = [currentTask, generate_image_grid]

@@ -38,6 +38,7 @@ try:
         _inpaint_mask_stub = types.ModuleType('extras.inpaint_mask')
         _inpaint_mask_stub.generate_mask_from_image = lambda *_args, **_kwargs: None
         _inpaint_mask_stub.SAMOptions = object
+        _inpaint_mask_stub.ADetailerOptions = object
         sys.modules['extras.inpaint_mask'] = _inpaint_mask_stub
         _installed_stub_names.append('extras.inpaint_mask')
 
@@ -222,6 +223,63 @@ class TestApplyEraserMask:
 
         assert inverted[1, 1] == 255
         assert np.array_equal(inverted[eraser == 0], np.zeros(8, dtype=np.uint8))
+
+
+class TestEnhanceDetectionLogLines:
+    def test_adetailer_logs_only_the_raw_detection_count(self):
+        lines = async_worker._enhance_detection_log_lines('adetailer', 3, 0, 0)
+
+        assert lines == ['[Enhance] 3 adetailer detections']
+
+    def test_sam_logs_all_three_counts(self):
+        lines = async_worker._enhance_detection_log_lines('sam', 2, 1, 1)
+
+        assert lines == [
+            '[Enhance] 2 boxes detected',
+            '[Enhance] 1 segments detected in boxes',
+            '[Enhance] 1 segments applied to mask',
+        ]
+
+
+class TestEnhanceDetectionSkipMessage:
+    def test_adetailer_skips_on_zero_detections(self):
+        message = async_worker._enhance_detection_skip_message('adetailer', 0, 0, False, '')
+
+        assert message == '[Enhance] No adetailer detections, skipping'
+
+    def test_adetailer_does_not_skip_when_detections_found(self):
+        # Regression guard: adetailer's contract always reports 0 for the
+        # SAM-only sam_detection_on_mask_count field, so a naive reuse of
+        # the SAM skip condition would wrongly skip every non-debug
+        # adetailer run even with real detections.
+        message = async_worker._enhance_detection_skip_message('adetailer', 2, 0, False, '')
+
+        assert message is None
+
+    def test_sam_skips_on_zero_dino_detections(self):
+        message = async_worker._enhance_detection_skip_message('sam', 0, 0, False, 'a face')
+
+        assert message == '[Enhance] No "a face" detected, skipping'
+
+    def test_sam_skips_on_zero_on_mask_segments_outside_debug(self):
+        message = async_worker._enhance_detection_skip_message('sam', 2, 0, False, 'a face')
+
+        assert message == '[Enhance] No "a face" detected, skipping'
+
+    def test_sam_does_not_skip_in_debug_mode_with_zero_on_mask_segments(self):
+        message = async_worker._enhance_detection_skip_message('sam', 2, 0, True, 'a face')
+
+        assert message is None
+
+    def test_sam_does_not_skip_when_segments_applied(self):
+        message = async_worker._enhance_detection_skip_message('sam', 2, 1, False, 'a face')
+
+        assert message is None
+
+    def test_u2net_never_skips(self):
+        message = async_worker._enhance_detection_skip_message('u2net', 0, 0, False, '')
+
+        assert message is None
 
 
 if __name__ == '__main__':
