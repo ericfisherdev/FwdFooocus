@@ -63,24 +63,33 @@ def _generate_adetailer_mask(image: np.ndarray, options: ADetailerOptions) -> tu
 
     detection_count = len(result.boxes)
     boxes = result.boxes
+    masks = result.masks
     if options.max_detections > 0:
         boxes = boxes[:options.max_detections]  # already sorted by score descending
+        if masks is not None:
+            masks = masks[:options.max_detections]
 
     H, W = image.shape[0], image.shape[1]
     final_mask = np.zeros((H, W), dtype=bool)
 
-    for x1, y1, x2, y2 in boxes:
-        if options.box_erode_or_dilate != 0:
-            x1 -= options.box_erode_or_dilate
-            y1 -= options.box_erode_or_dilate
-            x2 += options.box_erode_or_dilate
-            y2 += options.box_erode_or_dilate
+    if masks is not None:
+        # Segmentation-capable models: union the per-detection pixel masks
+        # instead of filling bbox rectangles.
+        for mask in masks:
+            final_mask |= mask
+    else:
+        for x1, y1, x2, y2 in boxes:
+            if options.box_erode_or_dilate != 0:
+                x1 -= options.box_erode_or_dilate
+                y1 -= options.box_erode_or_dilate
+                x2 += options.box_erode_or_dilate
+                y2 += options.box_erode_or_dilate
 
-        x1 = int(np.clip(round(x1), 0, W))
-        y1 = int(np.clip(round(y1), 0, H))
-        x2 = int(np.clip(round(x2), 0, W))
-        y2 = int(np.clip(round(y2), 0, H))
-        final_mask[y1:y2, x1:x2] = True
+            x1 = int(np.clip(round(x1), 0, W))
+            y1 = int(np.clip(round(y1), 0, H))
+            x2 = int(np.clip(round(x2), 0, W))
+            y2 = int(np.clip(round(y2), 0, H))
+            final_mask[y1:y2, x1:x2] = True
 
     mask_image = np.dstack((final_mask, final_mask, final_mask)) * 255
     mask_image = np.array(mask_image, dtype=np.uint8)
