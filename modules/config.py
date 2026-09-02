@@ -1090,9 +1090,9 @@ def downloading_sam_vit_h():
 # ADetailer ONNX exports (opset 12, static 640x640, fp32, no embedded NMS),
 # unmodified detection weights from https://huggingface.co/Bingsu/adetailer
 # (Apache-2.0), re-hosted as GitHub release assets so no HF auth is needed.
-# All four registry entries exist from day one; flags.inpaint_mask_adetailer_model
-# currently exposes only the bbox models (face/hand) — FWDF-199 appends the
-# -seg models once mask-prototype decoding lands.
+# flags.inpaint_mask_adetailer_model exposes all four: face/hand are bbox
+# detect heads, person/deepfashion2 are -seg models decoded into pixel masks
+# by extras/adetailer/detector.py.
 _ADETAILER_RELEASE_URL = 'https://github.com/ericfisherdev/FwdFooocus/releases/download/adetailer-onnx-v1'
 _adetailer_model_registry = {
     'face_yolov9c': (

@@ -91,14 +91,16 @@ output_formats = ['png', 'jpeg', 'webp']
 inpaint_mask_models = ['u2net', 'u2netp', 'u2net_human_seg', 'u2net_cloth_seg', 'silueta', 'isnet-general-use', 'isnet-anime', 'sam', 'adetailer']
 inpaint_mask_cloth_category = ['full', 'upper', 'lower']
 inpaint_mask_sam_model = ['vit_b', 'vit_l', 'vit_h']
-# Bbox-only for now (face_yolov9c, hand_yolov9c); FWDF-199 appends the -seg
-# models once seg decoding lands. extras.inpaint_mask.generate_mask_from_image
-# dispatches 'adetailer' to its own branch before the rembg fallthrough --
-# even when a caller passes no ADetailerOptions (webui.py and
-# async_worker.py aren't wired for it until FWDF-198), the dispatch falls
-# back to modules.config.default_inpaint_mask_adetailer_model rather than
-# reaching rembg's new_session(), so it never silently becomes u2net.
-inpaint_mask_adetailer_model = ['face_yolov9c', 'hand_yolov9c']
+# face/hand are bbox-only detect heads; person/deepfashion2 are -seg models
+# that produce pixel-accurate masks (extras/adetailer/detector.py derives
+# this from the loaded ONNX session, not the name). extras.inpaint_mask.
+# generate_mask_from_image dispatches 'adetailer' to its own branch before
+# the rembg fallthrough -- even when a caller passes no ADetailerOptions
+# (webui.py and async_worker.py aren't wired for it until FWDF-198), the
+# dispatch falls back to modules.config.default_inpaint_mask_adetailer_model
+# rather than reaching rembg's new_session(), so it never silently becomes
+# u2net.
+inpaint_mask_adetailer_model = ['face_yolov9c', 'hand_yolov9c', 'person_yolov8m-seg', 'deepfashion2_yolov8s-seg']
 
 inpaint_engine_versions = ['None', 'v1', 'v2.5', 'v2.6']
 inpaint_option_default = 'Inpaint or Outpaint (default)'

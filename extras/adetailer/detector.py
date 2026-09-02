@@ -1,21 +1,22 @@
-"""ONNX YOLOv8/v9 bbox detection for the 'adetailer' inpaint-mask backend.
+"""ONNX YOLOv8/v9 bbox/segmentation detection for the 'adetailer' inpaint-mask
+backend.
 
 Vendors the letterbox/NMS/rescale pipeline ultralytics normally provides, so
-the face/hand detect-head models (extras/inpaint_mask.py's 'adetailer'
-dispatch) run on plain onnxruntime with no ultralytics dependency, mirroring
-extras/wd14tagger.py's InferenceSession usage.
+the face/hand detect-head models and the person/deepfashion2 segmentation
+models (extras/inpaint_mask.py's 'adetailer' dispatch) run on plain
+onnxruntime with no ultralytics dependency, mirroring extras/wd14tagger.py's
+InferenceSession usage. Mask-prototype decoding reimplements ultralytics
+ops.process_mask(upsample=True) in numpy/cv2.
 
 The numpy-only helpers (compute_letterbox_params, letterbox_image,
-postprocess_predictions) are unit-testable without a model file. The
-letterbox tensor/ratio/pads contract and postprocess_predictions'
-num_extra_coeffs / kept_indices parameters are FWDF-199's extension points
-for decoding the -seg models' mask-coefficient columns and un-letterboxing
-their prototype masks.
+postprocess_predictions, decode_masks) are unit-testable without a model
+file.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import NamedTuple
 
 import cv2
 import numpy as np
@@ -27,21 +28,34 @@ NMS_IOU_THRESHOLD = 0.7
 
 LETTERBOX_PAD_COLOR = (114, 114, 114)
 
+# YOLOv8-seg mask-prototype coefficient count (output0's trailing columns,
+# output1's channel count). Fixed by the ultralytics seg export format.
+SEG_MASK_COEFFICIENTS = 32
+
+
+class _CachedSession(NamedTuple):
+    """An onnxruntime session plus its capability, resolved once at load
+    time so detect_bboxes never re-inspects the session per call."""
+    session: InferenceSession
+    has_masks: bool
+
+
 # Keyed by resolved model path, mirroring extras/wd14tagger.py's
 # global_model module-level cache (:23,44-48).
-_session_cache: dict[str, InferenceSession] = {}
+_session_cache: dict[str, _CachedSession] = {}
 
 
 @dataclass(slots=True)
 class DetectionResult:
     """Detections from one detect_bboxes() call, in source-image coordinates.
 
-    masks is unused by this ticket's bbox-only scope; it exists so FWDF-199
-    can attach per-detection segmentation masks without changing this shape.
+    masks is populated only for segmentation-capable models (a 2-output
+    session whose second output is the mask-prototype tensor); bbox-only
+    models (a single-output session) leave it None.
     """
     boxes: np.ndarray  # (N, 4) xyxy, source coords
     scores: np.ndarray  # (N,)
-    masks: np.ndarray | None = field(default=None)
+    masks: np.ndarray | None = field(default=None)  # (N, src_h, src_w) bool
 
 
 def compute_letterbox_params(src_h: int, src_w: int, target: int = 640) -> tuple[float, float, float]:
@@ -60,8 +74,7 @@ def letterbox_image(image_rgb: np.ndarray, target: int = 640) -> tuple[np.ndarra
     """Resize+pad image_rgb (HWC uint8, RGB) onto a target x target canvas
     and return (tensor, ratio, pads). tensor is float32 NCHW (1, 3, target,
     target) scaled to [0, 1] (YOLO export expects RGB, 0-1). ratio/pads are
-    part of the public contract -- FWDF-199 reuses them to un-letterbox
-    segmentation masks."""
+    reused by decode_masks to un-letterbox segmentation masks."""
     src_h, src_w = image_rgb.shape[0], image_rgb.shape[1]
     ratio, pad_x, pad_y = compute_letterbox_params(src_h, src_w, target)
     new_w, new_h = round(src_w * ratio), round(src_h * ratio)
@@ -150,33 +163,132 @@ def postprocess_predictions(
     return boxes_xyxy[order], scores[order].astype(np.float32), kept_indices[order]
 
 
-def _get_session(model_path: str) -> InferenceSession:
-    session = _session_cache.get(model_path)
-    if session is None:
+def decode_masks(
+    protos: np.ndarray,
+    coefficients: np.ndarray,
+    letterbox_boxes: np.ndarray,
+    ratio: float,
+    pads: tuple[float, float],
+    src_shape: tuple[int, int],
+) -> np.ndarray:
+    """Decode YOLOv8-seg mask prototypes into per-detection boolean masks in
+    source-image coordinates, reimplementing ultralytics
+    ops.process_mask(upsample=True) without torch or ultralytics.
+
+    protos: (32, proto_h, proto_w) mask-prototype tensor (output1[0]).
+        proto_h/proto_w are 1/4 of the letterbox canvas size ultralytics
+        seg exports use (e.g. 160 for a 640 canvas).
+    coefficients: (N, 32) per-detection mask coefficients, gathered from
+        output0's trailing columns with postprocess_predictions' kept_indices.
+    letterbox_boxes: (N, 4) xyxy boxes in the padded letterbox canvas (the
+        square onnxruntime input space), NOT the un-letterboxed source
+        coordinates postprocess_predictions returns.
+    ratio, pads: from letterbox_image(), used to strip padding and rescale
+        the decoded masks back to src_shape.
+    src_shape: (src_h, src_w) of the original source image.
+
+    Returns (N, src_h, src_w) bool masks, one per row of `coefficients`.
+    """
+    num_detections = coefficients.shape[0]
+    src_h, src_w = src_shape
+    if num_detections == 0:
+        return np.empty((0, src_h, src_w), dtype=bool)
+
+    num_coeffs, proto_h, proto_w = protos.shape
+    letterbox_target = proto_h * 4  # protos are 1/4 the letterbox canvas resolution
+    proto_scale = proto_h / letterbox_target
+
+    raw_masks = coefficients @ protos.reshape(num_coeffs, -1)  # (N, proto_h*proto_w)
+    proto_masks = 1.0 / (1.0 + np.exp(-raw_masks))
+    proto_masks = proto_masks.reshape(num_detections, proto_h, proto_w)
+
+    new_h = round(src_h * ratio)
+    new_w = round(src_w * ratio)
+    pad_x, pad_y = pads
+    left, top = round(pad_x), round(pad_y)
+
+    masks = np.zeros((num_detections, src_h, src_w), dtype=bool)
+    for i in range(num_detections):
+        x1, y1, x2, y2 = letterbox_boxes[i]
+
+        # Crop to the detection's box, scaled into proto space.
+        px1 = int(np.clip(np.floor(x1 * proto_scale), 0, proto_w))
+        py1 = int(np.clip(np.floor(y1 * proto_scale), 0, proto_h))
+        px2 = int(np.clip(np.ceil(x2 * proto_scale), 0, proto_w))
+        py2 = int(np.clip(np.ceil(y2 * proto_scale), 0, proto_h))
+
+        cropped = np.zeros_like(proto_masks[i])
+        cropped[py1:py2, px1:px2] = proto_masks[i, py1:py2, px1:px2]
+
+        # Upsample to the full letterbox canvas, strip padding, resize to source.
+        upsampled = cv2.resize(cropped, (letterbox_target, letterbox_target), interpolation=cv2.INTER_LINEAR)
+        valid_region = upsampled[top:top + new_h, left:left + new_w]
+        resized_to_source = cv2.resize(valid_region, (src_w, src_h), interpolation=cv2.INTER_LINEAR)
+
+        masks[i] = resized_to_source > 0.5
+
+    return masks
+
+
+def _to_letterbox_space(boxes_xyxy_src: np.ndarray, ratio: float, pads: tuple[float, float]) -> np.ndarray:
+    """Inverse of postprocess_predictions' un-letterbox step: maps
+    source-image xyxy boxes back into the padded letterbox canvas, so
+    decode_masks can crop mask prototypes in that same coordinate space."""
+    pad_x, pad_y = pads
+    letterbox_boxes = boxes_xyxy_src * ratio
+    letterbox_boxes[:, [0, 2]] += pad_x
+    letterbox_boxes[:, [1, 3]] += pad_y
+    return letterbox_boxes
+
+
+def _derive_has_masks(session: InferenceSession) -> bool:
+    """A seg-capable session has a second output: the mask-prototype tensor,
+    rank-4 with 32 channels. No filename parsing."""
+    outputs = session.get_outputs()
+    if len(outputs) != 2:
+        return False
+    proto_shape = outputs[1].shape
+    return len(proto_shape) == 4 and proto_shape[1] == SEG_MASK_COEFFICIENTS
+
+
+def _get_session(model_path: str) -> _CachedSession:
+    cached = _session_cache.get(model_path)
+    if cached is None:
         session = InferenceSession(model_path, providers=['CPUExecutionProvider'])
-        _session_cache[model_path] = session
-    return session
+        cached = _CachedSession(session=session, has_masks=_derive_has_masks(session))
+        _session_cache[model_path] = cached
+    return cached
 
 
 def detect_bboxes(image_rgb: np.ndarray, model_path: str, confidence: float) -> DetectionResult:
-    """Run a bbox-only adetailer ONNX model over image_rgb (HWC uint8, RGB)
-    and return detections in source-image coordinates.
-
-    Model capability is derived from the loaded session, not the filename:
-    a single output is a detect head (bbox-only, handled here); a second
-    output is the seg-proto tensor, which is FWDF-199's scope.
+    """Run an adetailer ONNX model (bbox-only or segmentation) over
+    image_rgb (HWC uint8, RGB) and return detections in source-image
+    coordinates. Segmentation-capable models additionally populate
+    DetectionResult.masks with per-detection boolean masks.
     """
-    session = _get_session(model_path)
-    if len(session.get_outputs()) != 1:
-        raise ValueError("segmentation adetailer models require FWDF-199")
+    cached = _get_session(model_path)
+    session = cached.session
 
     src_h, src_w = image_rgb.shape[0], image_rgb.shape[1]
     tensor, ratio, pads = letterbox_image(image_rgb)
 
     input_name = session.get_inputs()[0].name
-    output0 = session.run(None, {input_name: tensor})[0]
+    outputs = session.run(None, {input_name: tensor})
+    output0 = outputs[0]
 
-    boxes, scores, _kept_indices = postprocess_predictions(
-        output0, ratio, pads, (src_h, src_w), confidence, NMS_IOU_THRESHOLD
+    num_extra_coeffs = SEG_MASK_COEFFICIENTS if cached.has_masks else 0
+    boxes, scores, kept_indices = postprocess_predictions(
+        output0, ratio, pads, (src_h, src_w), confidence, NMS_IOU_THRESHOLD, num_extra_coeffs
     )
-    return DetectionResult(boxes=boxes, scores=scores)
+
+    if not cached.has_masks:
+        return DetectionResult(boxes=boxes, scores=scores)
+
+    if len(boxes) == 0:
+        return DetectionResult(boxes=boxes, scores=scores, masks=np.empty((0, src_h, src_w), dtype=bool))
+
+    protos = outputs[1][0]  # (32, proto_h, proto_w)
+    coefficients = output0[0].T[kept_indices, -SEG_MASK_COEFFICIENTS:]
+    letterbox_boxes = _to_letterbox_space(boxes.copy(), ratio, pads)
+    masks = decode_masks(protos, coefficients, letterbox_boxes, ratio, pads, (src_h, src_w))
+    return DetectionResult(boxes=boxes, scores=scores, masks=masks)
