@@ -93,8 +93,11 @@ inpaint_mask_cloth_category = ['full', 'upper', 'lower']
 inpaint_mask_sam_model = ['vit_b', 'vit_l', 'vit_h']
 # Bbox-only for now (face_yolov9c, hand_yolov9c); FWDF-199 appends the -seg
 # models once seg decoding lands. extras.inpaint_mask.generate_mask_from_image
-# dispatches 'adetailer' to its own branch before the rembg fallthrough, so
-# unlike an unrecognized name it never reaches rembg's new_session().
+# dispatches 'adetailer' to its own branch before the rembg fallthrough --
+# even when a caller passes no ADetailerOptions (webui.py and
+# async_worker.py aren't wired for it until FWDF-198), the dispatch falls
+# back to modules.config.default_inpaint_mask_adetailer_model rather than
+# reaching rembg's new_session(), so it never silently becomes u2net.
 inpaint_mask_adetailer_model = ['face_yolov9c', 'hand_yolov9c']
 
 inpaint_engine_versions = ['None', 'v1', 'v2.5', 'v2.6']

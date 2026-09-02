@@ -103,7 +103,14 @@ def generate_mask_from_image(image: np.ndarray, mask_model: str = 'sam', extras=
     if 'image' in image:
         image = image['image']
 
-    if mask_model == 'adetailer' and adetailer_options is not None:
+    if mask_model == 'adetailer':
+        if adetailer_options is None:
+            # Callers not yet wired for FWDF-198's UI options (webui.py,
+            # async_worker.py) still get the adetailer branch with the
+            # configured default model -- never rembg's u2net fallback,
+            # which is what selecting 'adetailer' silently produced before
+            # this default existed.
+            adetailer_options = ADetailerOptions(model_name=modules.config.default_inpaint_mask_adetailer_model)
         return _generate_adetailer_mask(image, adetailer_options)
 
     if mask_model != 'sam' or sam_options is None:
