@@ -88,9 +88,11 @@ default_parameters = {
 
 output_formats = ['png', 'jpeg', 'webp']
 
-inpaint_mask_models = ['u2net', 'u2netp', 'u2net_human_seg', 'u2net_cloth_seg', 'silueta', 'isnet-general-use', 'isnet-anime', 'sam']
+inpaint_mask_models = ['u2net', 'u2netp', 'u2net_human_seg', 'u2net_cloth_seg', 'silueta', 'isnet-general-use', 'isnet-anime', 'sam', 'adetailer']
 inpaint_mask_cloth_category = ['full', 'upper', 'lower']
 inpaint_mask_sam_model = ['vit_b', 'vit_l', 'vit_h']
+# Bbox-only for now; FWDF-199 appends the -seg models once seg decoding lands.
+inpaint_mask_adetailer_model = ['face_yolov9c', 'hand_yolov9c']
 
 inpaint_engine_versions = ['None', 'v1', 'v2.5', 'v2.6']
 inpaint_option_default = 'Inpaint or Outpaint (default)'
