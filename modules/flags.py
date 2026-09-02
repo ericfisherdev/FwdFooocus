@@ -100,7 +100,7 @@ inpaint_mask_sam_model = ['vit_b', 'vit_l', 'vit_h']
 # dispatch falls back to modules.config.default_inpaint_mask_adetailer_model
 # rather than reaching rembg's new_session(), so it never silently becomes
 # u2net.
-inpaint_mask_adetailer_model = ['face_yolov9c', 'hand_yolov9c', 'person_yolov8m-seg', 'deepfashion2_yolov8s-seg']
+inpaint_mask_adetailer_model = ['face_yolov9c', 'hand_yolov9c', 'person_yolov8m-seg', 'deepfashion2_yolov8s-seg', 'anzhc_face-seg']
 
 inpaint_engine_versions = ['None', 'v1', 'v2.5', 'v2.6']
 inpaint_option_default = 'Inpaint or Outpaint (default)'
