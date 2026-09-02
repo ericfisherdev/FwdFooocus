@@ -1,5 +1,6 @@
 import sys
 
+import cv2
 import modules.config
 import numpy as np
 import torch
@@ -57,6 +58,17 @@ def optimize_masks(masks: torch.Tensor) -> torch.Tensor:
     return torch.from_numpy(masks)
 
 
+def _erode_or_dilate_mask(mask: np.ndarray, amount: int) -> np.ndarray:
+    """Grows (amount > 0) or shrinks (amount < 0) a boolean HxW mask by
+    `amount` pixels, giving segmentation masks the same "Box Erode or
+    Dilate" control the bbox rectangle branch applies to box coordinates."""
+    size = abs(amount)
+    kernel = np.ones((2 * size + 1, 2 * size + 1), dtype=np.uint8)
+    mask_u8 = mask.astype(np.uint8)
+    morph = cv2.dilate if amount > 0 else cv2.erode
+    return morph(mask_u8, kernel, iterations=1).astype(bool)
+
+
 def _generate_adetailer_mask(image: np.ndarray, options: ADetailerOptions) -> tuple[np.ndarray, int, int, int]:
     model_path = modules.config.download_adetailer_model(options.model_name)
     result = detect_bboxes(image, model_path, options.confidence)
@@ -77,6 +89,8 @@ def _generate_adetailer_mask(image: np.ndarray, options: ADetailerOptions) -> tu
         # instead of filling bbox rectangles.
         for mask in masks:
             final_mask |= mask
+        if options.box_erode_or_dilate != 0:
+            final_mask = _erode_or_dilate_mask(final_mask, options.box_erode_or_dilate)
     else:
         for x1, y1, x2, y2 in boxes:
             if options.box_erode_or_dilate != 0:
