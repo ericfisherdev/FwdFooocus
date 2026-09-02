@@ -26,16 +26,30 @@ class TestAdetailerModelRegistry:
             assert model_name in modules.config._adetailer_model_registry
 
     def test_registry_entries_have_valid_sha256_and_positive_size(self):
-        for file_name, expected_sha256, expected_size in modules.config._adetailer_model_registry.values():
+        for release_url, file_name, expected_sha256, expected_size in modules.config._adetailer_model_registry.values():
+            assert release_url.startswith('https://github.com/ericfisherdev/FwdFooocus/releases/download/')
             assert len(expected_sha256) == 64
             assert all(c in '0123456789abcdef' for c in expected_sha256)
             assert expected_size > 0
             assert file_name.endswith('.onnx')
 
-    def test_registry_contains_all_four_exported_models(self):
+    def test_registry_contains_all_exported_models(self):
         assert set(modules.config._adetailer_model_registry.keys()) == {
             'face_yolov9c', 'hand_yolov9c', 'person_yolov8m-seg', 'deepfashion2_yolov8s-seg',
+            'anzhc_face-seg',
         }
+
+    def test_anzhc_model_downloads_from_its_own_agpl_release(self):
+        with patch('modules.config.load_file_from_url') as mock_load:
+            mock_load.return_value = 'unused'
+            modules.config.download_adetailer_model('anzhc_face-seg')
+
+        _, kwargs = mock_load.call_args
+        assert kwargs['url'] == (
+            'https://github.com/ericfisherdev/FwdFooocus/releases/download/'
+            'adetailer-onnx-anzhc-v1/anzhc_face_seg_640_v4_y11n.onnx'
+        )
+        assert kwargs['expected_size'] == 11626379
 
 
 class TestDownloadAdetailerModel:

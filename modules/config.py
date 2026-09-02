@@ -1088,32 +1088,46 @@ def downloading_sam_vit_h():
 
 
 # ADetailer ONNX exports (opset 12, static 640x640, fp32, no embedded NMS),
-# unmodified detection weights from https://huggingface.co/Bingsu/adetailer
-# (Apache-2.0), re-hosted as GitHub release assets so no HF auth is needed.
-# flags.inpaint_mask_adetailer_model exposes all four: face/hand are bbox
-# detect heads, person/deepfashion2 are -seg models decoded into pixel masks
-# by extras/adetailer/detector.py.
+# re-hosted as GitHub release assets so no HF auth is needed and nothing
+# model-sized lives in git. Each registry entry carries its own release URL
+# because the weights ship under different licenses on separate releases:
+# adetailer-onnx-v1 holds the https://huggingface.co/Bingsu/adetailer models
+# (Apache-2.0; face/hand are bbox detect heads, person/deepfashion2 are -seg),
+# adetailer-onnx-anzhc-v1 holds the https://huggingface.co/Anzhc/Anzhcs_YOLOs
+# face segmentation model (AGPL-3.0). -seg outputs are decoded into pixel
+# masks by extras/adetailer/detector.py.
 _ADETAILER_RELEASE_URL = 'https://github.com/ericfisherdev/FwdFooocus/releases/download/adetailer-onnx-v1'
+_ADETAILER_ANZHC_RELEASE_URL = 'https://github.com/ericfisherdev/FwdFooocus/releases/download/adetailer-onnx-anzhc-v1'
 _adetailer_model_registry = {
     'face_yolov9c': (
+        _ADETAILER_RELEASE_URL,
         'face_yolov9c.onnx',
         '1e05f810e80903a85cc32104460cd468d9fa90f7d2f9dfeb2fea94fcd412f71d',
         101632702,
     ),
     'hand_yolov9c': (
+        _ADETAILER_RELEASE_URL,
         'hand_yolov9c.onnx',
         'b17542a18e28c741ca99a7d313f3baaac60d2ce2240e91f802c4f5d6433eeec9',
         101632702,
     ),
     'person_yolov8m-seg': (
+        _ADETAILER_RELEASE_URL,
         'person_yolov8m-seg.onnx',
         '1749701df9750035066792fb88c8200ea435d1e64553c6a16f5e868c55250058',
         109168699,
     ),
     'deepfashion2_yolov8s-seg': (
+        _ADETAILER_RELEASE_URL,
         'deepfashion2_yolov8s-seg.onnx',
         '92bd49709e0fda3ff8aa56695b7ed0ac7c3495e1f3fb83f8327c1878d8975c47',
         47394057,
+    ),
+    'anzhc_face-seg': (
+        _ADETAILER_ANZHC_RELEASE_URL,
+        'anzhc_face_seg_640_v4_y11n.onnx',
+        '2ccfc83fb6af1ad9141e7ef052bc3233c422daa411116fdfa444ae1a055b4e85',
+        11626379,
     ),
 }
 
@@ -1121,9 +1135,9 @@ _adetailer_model_registry = {
 def download_adetailer_model(model_name: str) -> str:
     if model_name not in _adetailer_model_registry:
         raise ValueError(f"adetailer model {model_name} does not exist.")
-    file_name, expected_sha256, expected_size = _adetailer_model_registry[model_name]
+    release_url, file_name, expected_sha256, expected_size = _adetailer_model_registry[model_name]
     load_file_from_url(
-        url=f'{_ADETAILER_RELEASE_URL}/{file_name}',
+        url=f'{release_url}/{file_name}',
         model_dir=path_adetailer,
         file_name=file_name,
         expected_sha256=expected_sha256,
