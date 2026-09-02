@@ -3,11 +3,25 @@ import sys
 import modules.config
 import numpy as np
 import torch
+from extras.adetailer.detector import detect_bboxes
 from extras.GroundingDINO.util.inference import default_groundingdino
 from extras.sam.predictor import SamPredictor
 from rembg import remove, new_session
 from segment_anything import sam_model_registry
 from segment_anything.utils.amg import remove_small_regions
+
+
+class ADetailerOptions:
+    def __init__(self,
+                 model_name: str,
+                 confidence: float = 0.3,
+                 max_detections: int = 0,
+                 box_erode_or_dilate: int = 0
+                 ):
+        self.model_name = model_name
+        self.confidence = confidence
+        self.max_detections = max_detections
+        self.box_erode_or_dilate = box_erode_or_dilate
 
 
 class SAMOptions:
@@ -43,8 +57,39 @@ def optimize_masks(masks: torch.Tensor) -> torch.Tensor:
     return torch.from_numpy(masks)
 
 
+def _generate_adetailer_mask(image: np.ndarray, options: ADetailerOptions) -> tuple[np.ndarray, int, int, int]:
+    model_path = modules.config.download_adetailer_model(options.model_name)
+    result = detect_bboxes(image, model_path, options.confidence)
+
+    detection_count = len(result.boxes)
+    boxes = result.boxes
+    if options.max_detections > 0:
+        boxes = boxes[:options.max_detections]  # already sorted by score descending
+
+    H, W = image.shape[0], image.shape[1]
+    final_mask = np.zeros((H, W), dtype=bool)
+
+    for x1, y1, x2, y2 in boxes:
+        if options.box_erode_or_dilate != 0:
+            x1 -= options.box_erode_or_dilate
+            y1 -= options.box_erode_or_dilate
+            x2 += options.box_erode_or_dilate
+            y2 += options.box_erode_or_dilate
+
+        x1 = int(np.clip(round(x1), 0, W))
+        y1 = int(np.clip(round(y1), 0, H))
+        x2 = int(np.clip(round(x2), 0, W))
+        y2 = int(np.clip(round(y2), 0, H))
+        final_mask[y1:y2, x1:x2] = True
+
+    mask_image = np.dstack((final_mask, final_mask, final_mask)) * 255
+    mask_image = np.array(mask_image, dtype=np.uint8)
+    return mask_image, detection_count, 0, 0
+
+
 def generate_mask_from_image(image: np.ndarray, mask_model: str = 'sam', extras=None,
-                             sam_options: SAMOptions | None = SAMOptions) -> tuple[np.ndarray | None, int | None, int | None, int | None]:
+                             sam_options: SAMOptions | None = SAMOptions,
+                             adetailer_options: ADetailerOptions | None = None) -> tuple[np.ndarray | None, int | None, int | None, int | None]:
     dino_detection_count = 0
     sam_detection_count = 0
     sam_detection_on_mask_count = 0
@@ -57,6 +102,9 @@ def generate_mask_from_image(image: np.ndarray, mask_model: str = 'sam', extras=
 
     if 'image' in image:
         image = image['image']
+
+    if mask_model == 'adetailer' and adetailer_options is not None:
+        return _generate_adetailer_mask(image, adetailer_options)
 
     if mask_model != 'sam' or sam_options is None:
         result = remove(

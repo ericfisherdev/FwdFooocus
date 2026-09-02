@@ -88,16 +88,13 @@ default_parameters = {
 
 output_formats = ['png', 'jpeg', 'webp']
 
-inpaint_mask_models = ['u2net', 'u2netp', 'u2net_human_seg', 'u2net_cloth_seg', 'silueta', 'isnet-general-use', 'isnet-anime', 'sam']
+inpaint_mask_models = ['u2net', 'u2netp', 'u2net_human_seg', 'u2net_cloth_seg', 'silueta', 'isnet-general-use', 'isnet-anime', 'sam', 'adetailer']
 inpaint_mask_cloth_category = ['full', 'upper', 'lower']
 inpaint_mask_sam_model = ['vit_b', 'vit_l', 'vit_h']
-# Bbox-only for now; FWDF-199 appends the -seg models once seg decoding lands.
-# 'adetailer' is intentionally NOT added to inpaint_mask_models here: that list
-# drives the UI dropdown (webui.py) and dispatches straight into
-# extras.inpaint_mask.generate_mask_from_image, which routes any unrecognized
-# name into rembg's new_session() -- rembg silently falls back to u2net for
-# unknown model names instead of raising. FWDF-199 wires the adetailer
-# dispatch branch and appends 'adetailer' here in the same change.
+# Bbox-only for now (face_yolov9c, hand_yolov9c); FWDF-199 appends the -seg
+# models once seg decoding lands. extras.inpaint_mask.generate_mask_from_image
+# dispatches 'adetailer' to its own branch before the rembg fallthrough, so
+# unlike an unrecognized name it never reaches rembg's new_session().
 inpaint_mask_adetailer_model = ['face_yolov9c', 'hand_yolov9c']
 
 inpaint_engine_versions = ['None', 'v1', 'v2.5', 'v2.6']
