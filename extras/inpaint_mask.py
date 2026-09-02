@@ -19,10 +19,13 @@ class ADetailerOptions:
                  max_detections: int = 0,
                  box_erode_or_dilate: int = 0
                  ):
+        # Gradio sliders deliver floats (4.0, 0.0) regardless of step, and
+        # max_detections is used as a slice bound -- coerce at this boundary
+        # so every caller is safe (FWDF-200).
         self.model_name = model_name
-        self.confidence = confidence
-        self.max_detections = max_detections
-        self.box_erode_or_dilate = box_erode_or_dilate
+        self.confidence = float(confidence)
+        self.max_detections = int(max_detections)
+        self.box_erode_or_dilate = int(box_erode_or_dilate)
 
 
 class SAMOptions:

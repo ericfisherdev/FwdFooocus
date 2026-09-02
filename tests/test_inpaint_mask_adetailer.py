@@ -43,6 +43,18 @@ class TestADetailerOptionsDefaults:
         assert options.max_detections == 2
         assert options.box_erode_or_dilate == 4
 
+    def test_float_slider_values_are_coerced_to_int(self):
+        # Gradio sliders deliver floats regardless of step (FWDF-200);
+        # max_detections is used as a slice bound and must come out int.
+        options = inpaint_mask.ADetailerOptions(
+            model_name='face_yolov9c', confidence=0.3, max_detections=4.0, box_erode_or_dilate=-2.0
+        )
+
+        assert options.max_detections == 4
+        assert isinstance(options.max_detections, int)
+        assert options.box_erode_or_dilate == -2
+        assert isinstance(options.box_erode_or_dilate, int)
+
 
 def _image(h=100, w=100):
     return np.zeros((h, w, 3), dtype=np.uint8)

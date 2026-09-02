@@ -9,6 +9,7 @@ __pycache__
 *.corrupted
 *.partial
 *.onnx
+*.verified
 sorted_styles.json
 hash_cache.txt
 /input
