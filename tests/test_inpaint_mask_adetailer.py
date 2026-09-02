@@ -151,17 +151,21 @@ class TestGenerateMaskFromImageADetailerDispatch:
         assert mask[21, 21][0] == 0
         assert mask[30, 30][0] == 255
 
-    def test_none_options_does_not_dispatch_to_adetailer(self, monkeypatch):
-        called = {}
-        monkeypatch.setattr(
-            inpaint_mask, 'detect_bboxes',
-            lambda *a, **k: called.setdefault('detect_bboxes_called', True)
-        )
-        # mask_model='adetailer' with no options must not reach the adetailer
-        # branch at all (mirrors the existing sam_options-is-None fallthrough).
-        try:
-            inpaint_mask.generate_mask_from_image(_image(), mask_model='adetailer', adetailer_options=None)
-        except Exception:
-            pass  # the rembg fallthrough's own behavior is out of this test's scope
+    def test_none_options_still_dispatches_to_adetailer_with_config_default_model(self, monkeypatch):
+        # mask_model='adetailer' with no options must NOT fall through to
+        # rembg's new_session('adetailer') -- which silently becomes a
+        # u2net mask for unrecognized names. It must use
+        # modules.config.default_inpaint_mask_adetailer_model instead, so
+        # callers not yet wired for FWDF-198's options (webui.py,
+        # async_worker.py) still get real bbox detection.
+        seen = {}
 
-        assert 'detect_bboxes_called' not in called
+        def fake_detect_bboxes(image, model_path, confidence):
+            seen['model_path'] = model_path
+            return DetectionResult(boxes=np.empty((0, 4)), scores=np.empty((0,)))
+
+        monkeypatch.setattr(inpaint_mask, 'detect_bboxes', fake_detect_bboxes)
+
+        inpaint_mask.generate_mask_from_image(_image(), mask_model='adetailer', adetailer_options=None)
+
+        assert seen['model_path'] == f'/fake/{modules.config.default_inpaint_mask_adetailer_model}.onnx'
