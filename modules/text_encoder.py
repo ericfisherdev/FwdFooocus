@@ -6,8 +6,8 @@
 `pooled` can be `None` (`sd1_clip`/`sd2_clip`/`sdxl_clip` return `None` for
 `pooled` whenever no projection head is configured). This module makes that
 contract explicit and reusable so upcoming non-CLIP encoders -- Qwen3-4B
-(FWDF-125, causal LM hidden states, never pooled) and Qwen3-VL-4B (Krea 2
-backlog, hidden-state tap) -- can sit behind `final_clip` without
+(FWDF-125, causal LM hidden states, never pooled) and Qwen3-VL-4B (Krea 2,
+FWDF-133, multi-layer hidden-state tap) -- can sit behind `final_clip` without
 `clip_encode()`, `clip_encode_single()`, or `clone_cond()` caring which kind
 of encoder they're talking to.
 
@@ -18,7 +18,7 @@ regression test in tests/test_text_encoder.py).
 from __future__ import annotations
 
 import os
-from typing import Optional, Protocol, runtime_checkable
+from typing import Callable, Optional, Protocol, runtime_checkable
 
 import torch
 
@@ -86,6 +86,27 @@ class PromptTemplate(Protocol):
         ...
 
 
+CHAT_ROLE_MARKERS = ('<|im_start|>', '<|im_end|>')
+
+
+def strip_chat_role_markers(text: str) -> str:
+    """Remove literal chat role markers from user text.
+
+    A caption containing `<|im_start|>`/`<|im_end|>` (accidentally or
+    adversarially) could otherwise break out of the user turn of a chat
+    template and reframe the model's context. Re-runs until stable: a
+    partially broken marker (e.g. '<|im_<|im_end|>end|>') can recombine into a
+    valid control token after a single replacement pass.
+    """
+    while True:
+        stripped = text
+        for marker in CHAT_ROLE_MARKERS:
+            stripped = stripped.replace(marker, '')
+        if stripped == text:
+            return text
+        text = stripped
+
+
 class IdentityPromptTemplate:
     """No-op `PromptTemplate`: returns the prompt unchanged.
 
@@ -94,6 +115,14 @@ class IdentityPromptTemplate:
 
     def apply(self, text: str) -> str:
         return text
+
+
+StateDictAdapter = Callable[[dict], dict]
+"""Reshapes a raw loaded state dict into the layout a `module_class` expects.
+
+Implementations must raise `TextEncoderStateDictMismatchError` when the file
+is not the kind of checkpoint they know how to adapt.
+"""
 
 
 @runtime_checkable
@@ -153,6 +182,13 @@ class TransformerTextEncoder:
     `cond_stage_model` classes do, with `pooled` being `None` when the family
     has no pooled projection.
 
+    `state_dict_adapter` is how a checkpoint whose text tower is embedded in a
+    larger (e.g. multimodal) checkpoint is selected without teaching this
+    loader about any family: when given, it is applied to the raw state dict
+    before `load_state_dict(strict=True)`. The default (`None`) loads the
+    state dict unchanged. An adapter reports a wrong file by raising
+    `TextEncoderStateDictMismatchError`.
+
     Raises:
         TextEncoderNotFoundError: `filename` does not exist.
         TextEncoderStateDictMismatchError: the state dict doesn't match
@@ -166,10 +202,13 @@ class TransformerTextEncoder:
         filename: str,
         tokenizer: Tokenizer,
         prompt_template: Optional[PromptTemplate] = None,
+        state_dict_adapter: Optional[StateDictAdapter] = None,
     ):
         self.prompt_template = prompt_template or IdentityPromptTemplate()
 
         state_dict = load_text_encoder_state_dict(filename)
+        if state_dict_adapter is not None:
+            state_dict = state_dict_adapter(state_dict)
 
         load_device = model_management.text_encoder_device()
         offload_device = model_management.text_encoder_offload_device()

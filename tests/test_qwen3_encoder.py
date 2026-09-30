@@ -375,6 +375,16 @@ class TestQwen3Tokenizer:
 
         assert sections == [[(_char_id("a"), 1.5)]]
 
+    def test_disable_weights_leaves_emphasis_syntax_literal_at_unit_weight(self):
+        tokenizer = Qwen3Tokenizer(hf_tokenizer=_FakeHFTokenizer(), disable_weights=True)
+
+        sections = tokenizer.tokenize_with_weights("(a:1.5)")
+
+        assert sections == [[(_char_id(c), 1.0) for c in "(a:1.5)"]]
+
+    def test_weights_are_enabled_by_default(self):
+        assert Qwen3Tokenizer(hf_tokenizer=_FakeHFTokenizer()).disable_weights is False
+
     def test_tokenize_with_weights_handles_empty_prompt(self):
         tokenizer = Qwen3Tokenizer(hf_tokenizer=_FakeHFTokenizer())
 

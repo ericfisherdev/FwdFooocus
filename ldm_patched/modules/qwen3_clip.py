@@ -109,9 +109,16 @@ class Qwen3Tokenizer:
     `hf_tokenizer` is injectable (DIP) so callers/tests can supply a
     pre-built tokenizer instead of loading real Qwen3 tokenizer assets from
     disk via `tokenizer_path`.
+
+    `disable_weights=True` mirrors ComfyUI's `disable_weights=True` for Qwen
+    tokenizers (Krea 2): the text is tokenized verbatim -- `(word:1.2)`
+    syntax stays literal -- and every token gets weight 1.0, so
+    `ClipTokenWeightEncoder.encode_token_weights` never appends the
+    empty-token section that weighted prompts need.
     """
 
-    def __init__(self, tokenizer_path=None, max_length=512, hf_tokenizer=None, tokenizer_class=None, template_suffix=None):
+    def __init__(self, tokenizer_path=None, max_length=512, hf_tokenizer=None, tokenizer_class=None, template_suffix=None,
+                 disable_weights=False):
         if hf_tokenizer is not None:
             self.tokenizer = hf_tokenizer
         else:
@@ -123,6 +130,7 @@ class Qwen3Tokenizer:
             self.tokenizer = tokenizer_class.from_pretrained(tokenizer_path)
 
         self.max_length = max_length
+        self.disable_weights = disable_weights
 
         pad_token_id = getattr(self.tokenizer, "pad_token_id", None)
         if pad_token_id is None:
@@ -145,12 +153,8 @@ class Qwen3Tokenizer:
         into multiple 77-token sections: `max_length` (default 512, per the
         Z-Image reference pipeline) is applied as a single truncation instead.
         """
-        text = escape_important(text)
-        parsed_weights = token_weights(text, 1.0)
-
         tokens = []
-        for weighted_segment, weight in parsed_weights:
-            segment = unescape_important(weighted_segment)
+        for segment, weight in self._weighted_segments(text):
             if segment == "":
                 continue
             ids = self.tokenizer(segment, add_special_tokens=False)["input_ids"]
@@ -171,6 +175,15 @@ class Qwen3Tokenizer:
             batch = list(tokens)
 
         return [batch]
+
+    def _weighted_segments(self, text):
+        """Yields `(segment, weight)` pairs: the whole text at weight 1.0 when
+        weights are disabled, else the parsed `(word:weight)` emphasis
+        segments."""
+        if self.disable_weights:
+            return [(text, 1.0)]
+        parsed_weights = token_weights(escape_important(text), 1.0)
+        return [(unescape_important(segment), weight) for segment, weight in parsed_weights]
 
     def untokenize(self, token_weight_pair):
         return list(map(lambda a: (a, self.tokenizer.decode([a[0]])), token_weight_pair))

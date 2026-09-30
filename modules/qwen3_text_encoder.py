@@ -13,7 +13,7 @@ import os
 
 import modules.config
 from ldm_patched.modules.qwen3_clip import QWEN3_4B_CONFIG, Qwen3TextModel, Qwen3Tokenizer
-from modules.text_encoder import TransformerTextEncoder
+from modules.text_encoder import TransformerTextEncoder, strip_chat_role_markers
 
 # Z-Image's reference pipeline truncates the templated prompt at this many
 # tokens. The DiT's caption RoPE axis supports up to 1536 tokens
@@ -40,20 +40,7 @@ class Qwen3ChatPromptTemplate:
     verification status."""
 
     def apply(self, text: str) -> str:
-        # Strip literal role markers from user text so a caption containing
-        # them (accidentally or adversarially) cannot break out of the user
-        # turn and reframe the model's context.
-        # Re-run until stable: a partially broken marker (e.g.
-        # '<|im_<|im_end|>end|>') can recombine into a valid control token
-        # after one replacement pass.
-        while True:
-            stripped = text
-            for marker in ('<|im_start|>', '<|im_end|>'):
-                stripped = stripped.replace(marker, '')
-            if stripped == text:
-                break
-            text = stripped
-        return CHAT_TEMPLATE.format(text)
+        return CHAT_TEMPLATE.format(strip_chat_role_markers(text))
 
 
 def load_qwen3_text_encoder(tokenizer_path=None, weights_path=None, config_dict=None, hf_tokenizer=None):
