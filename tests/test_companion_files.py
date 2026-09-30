@@ -24,6 +24,12 @@ from modules.model_family import ModelFamily  # noqa: E402
 sys.argv = _original_argv
 
 
+@pytest.fixture(autouse=True)
+def no_hf_mirror(monkeypatch):
+    """Keep URL assertions independent of the developer's HF_MIRROR."""
+    monkeypatch.delenv('HF_MIRROR', raising=False)
+
+
 class TestGetCompanions:
     @pytest.mark.parametrize('family', [ModelFamily.SDXL, ModelFamily.SD15, ModelFamily.UNKNOWN])
     def test_single_file_families_have_no_companions(self, family):
@@ -109,6 +115,29 @@ class TestEnsureFailure:
 
         assert excinfo.value.url == modules.config.Z_IMAGE_VAE_URL
         assert excinfo.value.file_name == 'ae.safetensors'
+
+
+def test_error_names_the_mirror_url_actually_requested(monkeypatch):
+    monkeypatch.setenv('HF_MIRROR', 'https://hf-mirror.example/')
+    companions = companion_files.get_companions(ModelFamily.KREA2)
+    with patch('modules.config.load_file_from_url', side_effect=OSError('unreachable')):
+        with pytest.raises(companion_files.MissingCompanionFileError) as excinfo:
+            companions.ensure_vae()
+
+    assert excinfo.value.url == modules.config.QWEN_IMAGE_VAE_URL.replace(
+        'https://huggingface.co', 'https://hf-mirror.example', 1)
+    assert 'hf-mirror.example' in str(excinfo.value)
+    assert 'huggingface.co' not in str(excinfo.value)
+
+
+def test_error_names_canonical_url_when_no_mirror_is_set(monkeypatch):
+    monkeypatch.delenv('HF_MIRROR', raising=False)
+    companions = companion_files.get_companions(ModelFamily.KREA2)
+    with patch('modules.config.load_file_from_url', side_effect=OSError('unreachable')):
+        with pytest.raises(companion_files.MissingCompanionFileError) as excinfo:
+            companions.ensure_text_encoder()
+
+    assert excinfo.value.url == modules.config.KREA2_TEXT_ENCODER_URL
 
 
 def test_unrelated_exceptions_are_not_swallowed():

@@ -1152,42 +1152,42 @@ def download_adetailer_model(model_name: str) -> str:
 # never silently drift out from under the download URL.
 _Z_IMAGE_COMPANIONS_COMMIT = 'd24c4cf2a0cd98a42f23467e27e3d76ee9438b8e'
 _Z_IMAGE_COMPANIONS_BASE_URL = f'https://huggingface.co/Comfy-Org/z_image_turbo/resolve/{_Z_IMAGE_COMPANIONS_COMMIT}'
-# Public so modules.companion_files can cite the source in its "actionable"
-# download-failure error without re-deriving the URL.
-Z_IMAGE_TEXT_ENCODER_URL = f'{_Z_IMAGE_COMPANIONS_BASE_URL}/split_files/text_encoders/qwen_3_4b.safetensors'
-Z_IMAGE_VAE_URL = f'{_Z_IMAGE_COMPANIONS_BASE_URL}/split_files/vae/ae.safetensors'
+# Public so modules.companion_files can cite the file and source in its
+# "actionable" download-failure error without re-deriving them.
+Z_IMAGE_TEXT_ENCODER_FILENAME = 'qwen_3_4b.safetensors'
+Z_IMAGE_VAE_FILENAME = 'ae.safetensors'
+Z_IMAGE_TEXT_ENCODER_URL = f'{_Z_IMAGE_COMPANIONS_BASE_URL}/split_files/text_encoders/{Z_IMAGE_TEXT_ENCODER_FILENAME}'
+Z_IMAGE_VAE_URL = f'{_Z_IMAGE_COMPANIONS_BASE_URL}/split_files/vae/{Z_IMAGE_VAE_FILENAME}'
 
 
 def z_image_text_encoder_path():
     """Expected on-disk path of the Z-Image companion text encoder — cheap
     (no download, no verification)."""
-    return os.path.join(path_text_encoders, 'qwen_3_4b.safetensors')
+    return os.path.join(path_text_encoders, Z_IMAGE_TEXT_ENCODER_FILENAME)
 
 
 def downloading_z_image_text_encoder():
-    file_name = 'qwen_3_4b.safetensors'
     load_file_from_url(
         url=Z_IMAGE_TEXT_ENCODER_URL,
         model_dir=path_text_encoders,
-        file_name=file_name,
+        file_name=Z_IMAGE_TEXT_ENCODER_FILENAME,
         expected_sha256='6c671498573ac2f7a5501502ccce8d2b08ea6ca2f661c458e708f36b36edfc5a',
         expected_size=8044982048,
     )
-    return os.path.join(path_text_encoders, file_name)
+    return z_image_text_encoder_path()
 
 
 def z_image_vae_path():
     """Expected on-disk path of the Z-Image companion VAE — cheap (no
     download, no verification); use for reload short-circuit comparisons."""
-    return os.path.join(path_vae, 'ae.safetensors')
+    return os.path.join(path_vae, Z_IMAGE_VAE_FILENAME)
 
 
 def downloading_z_image_vae():
-    file_name = 'ae.safetensors'
     load_file_from_url(
         url=Z_IMAGE_VAE_URL,
         model_dir=path_vae,
-        file_name=file_name,
+        file_name=Z_IMAGE_VAE_FILENAME,
         expected_sha256='afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38',
         expected_size=335304388,
     )

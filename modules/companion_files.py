@@ -16,6 +16,7 @@ from typing import Callable
 
 import modules.config
 from modules.model_family import ModelFamily
+from modules.model_loader import resolve_hf_mirror
 
 
 class MissingCompanionFileError(RuntimeError):
@@ -58,7 +59,8 @@ def _ensure_present(file_name: str, directory: str, url: str, download: Callable
     Catches `RuntimeError` (hash/size failure from `load_file_from_url`),
     `urllib.error.URLError` / `HTTPError` and `OSError` (from
     `torch.hub.download_url_to_file` or the filesystem). `URLError` is an
-    `OSError` subclass; it is listed for clarity.
+    `OSError` subclass; it is listed for clarity. The error names the URL
+    actually requested, i.e. after the `HF_MIRROR` rewrite.
     """
 
     def ensure() -> str:
@@ -67,7 +69,7 @@ def _ensure_present(file_name: str, directory: str, url: str, download: Callable
         except MissingCompanionFileError:
             raise
         except (RuntimeError, urllib.error.URLError, OSError) as e:
-            raise MissingCompanionFileError(file_name, directory, url) from e
+            raise MissingCompanionFileError(file_name, directory, resolve_hf_mirror(url)) from e
 
     return ensure
 
@@ -96,11 +98,11 @@ def _build_companions(
 # resolve the config helpers at call time, as the pipeline's direct calls do.
 COMPANIONS: dict[ModelFamily, FamilyCompanions] = {
     ModelFamily.Z_IMAGE: _build_companions(
-        text_encoder_file='qwen_3_4b.safetensors',
+        text_encoder_file=modules.config.Z_IMAGE_TEXT_ENCODER_FILENAME,
         text_encoder_url=modules.config.Z_IMAGE_TEXT_ENCODER_URL,
         text_encoder_path=lambda: modules.config.z_image_text_encoder_path(),
         download_text_encoder=lambda: modules.config.downloading_z_image_text_encoder(),
-        vae_file='ae.safetensors',
+        vae_file=modules.config.Z_IMAGE_VAE_FILENAME,
         vae_url=modules.config.Z_IMAGE_VAE_URL,
         vae_path=lambda: modules.config.z_image_vae_path(),
         download_vae=lambda: modules.config.downloading_z_image_vae(),
