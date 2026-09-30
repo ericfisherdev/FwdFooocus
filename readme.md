@@ -283,6 +283,8 @@ Given different goals, the default models and configs of Fooocus are different:
 
 Note that the download is **automatic** - you do not need to do anything if the internet connection is okay. However, you can download them manually if you (or move them from somewhere else) have your own preparation.
 
+Krea 2 checkpoints (user-provided in `models/checkpoints`) additionally need two companion files, which are downloaded automatically (pinned commit, hash-verified) from [Comfy-Org/Krea-2](https://huggingface.co/Comfy-Org/Krea-2): `qwen3vl_4b_bf16.safetensors` (text encoder, `models/text_encoders`) and `qwen_image_vae.safetensors` (VAE, `models/vae`). Krea 2 weights are under the [Krea 2 Community License](https://huggingface.co/krea/Krea-2-Turbo/blob/main/LICENSE.pdf); the two companions are Apache-2.0 Qwen releases. If the automatic download fails you will get an error naming the file, directory and URL so you can place it by hand.
+
 ## UI Access and Authentication
 In addition to running on localhost, Fooocus can also expose its UI in two ways: 
 * Local UI listener: use `--listen` (specify port e.g. with `--port 8888`). 

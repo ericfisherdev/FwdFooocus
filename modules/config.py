@@ -1152,12 +1152,22 @@ def download_adetailer_model(model_name: str) -> str:
 # never silently drift out from under the download URL.
 _Z_IMAGE_COMPANIONS_COMMIT = 'd24c4cf2a0cd98a42f23467e27e3d76ee9438b8e'
 _Z_IMAGE_COMPANIONS_BASE_URL = f'https://huggingface.co/Comfy-Org/z_image_turbo/resolve/{_Z_IMAGE_COMPANIONS_COMMIT}'
+# Public so modules.companion_files can cite the source in its "actionable"
+# download-failure error without re-deriving the URL.
+Z_IMAGE_TEXT_ENCODER_URL = f'{_Z_IMAGE_COMPANIONS_BASE_URL}/split_files/text_encoders/qwen_3_4b.safetensors'
+Z_IMAGE_VAE_URL = f'{_Z_IMAGE_COMPANIONS_BASE_URL}/split_files/vae/ae.safetensors'
+
+
+def z_image_text_encoder_path():
+    """Expected on-disk path of the Z-Image companion text encoder — cheap
+    (no download, no verification)."""
+    return os.path.join(path_text_encoders, 'qwen_3_4b.safetensors')
 
 
 def downloading_z_image_text_encoder():
     file_name = 'qwen_3_4b.safetensors'
     load_file_from_url(
-        url=f'{_Z_IMAGE_COMPANIONS_BASE_URL}/split_files/text_encoders/{file_name}',
+        url=Z_IMAGE_TEXT_ENCODER_URL,
         model_dir=path_text_encoders,
         file_name=file_name,
         expected_sha256='6c671498573ac2f7a5501502ccce8d2b08ea6ca2f661c458e708f36b36edfc5a',
@@ -1175,10 +1185,96 @@ def z_image_vae_path():
 def downloading_z_image_vae():
     file_name = 'ae.safetensors'
     load_file_from_url(
-        url=f'{_Z_IMAGE_COMPANIONS_BASE_URL}/split_files/vae/{file_name}',
+        url=Z_IMAGE_VAE_URL,
         model_dir=path_vae,
         file_name=file_name,
         expected_sha256='afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38',
         expected_size=335304388,
     )
     return z_image_vae_path()
+
+
+# Krea 2 ships as three separate files (diffusion model, text encoder, VAE).
+# The diffusion checkpoints are user-provided in `paths_checkpoints`; only the
+# text encoder and VAE are acquired here. Pinned to a specific Comfy-Org/Krea-2
+# commit (rather than `main`) so the verified SHA256/size below can never
+# silently drift out from under the download URL. Unlike Z-Image's repo the
+# paths are flat (`text_encoders/`, `vae/`), not under `split_files/`.
+_KREA2_COMPANIONS_COMMIT = 'eb1eddd3983a54678545a9b2c178c5853b30f7be'
+_KREA2_COMPANIONS_BASE_URL = f'https://huggingface.co/Comfy-Org/Krea-2/resolve/{_KREA2_COMPANIONS_COMMIT}'
+
+KREA2_TEXT_ENCODER_FILENAME = 'qwen3vl_4b_bf16.safetensors'
+# Named after the file, not the family: Qwen Image / Anima share this VAE.
+QWEN_IMAGE_VAE_FILENAME = 'qwen_image_vae.safetensors'
+
+KREA2_TEXT_ENCODER_URL = f'{_KREA2_COMPANIONS_BASE_URL}/text_encoders/{KREA2_TEXT_ENCODER_FILENAME}'
+QWEN_IMAGE_VAE_URL = f'{_KREA2_COMPANIONS_BASE_URL}/vae/{QWEN_IMAGE_VAE_FILENAME}'
+
+KREA2_LICENSE_NOTE = (
+    'Krea 2 checkpoints are distributed under the Krea 2 Community License '
+    '(https://huggingface.co/krea/Krea-2-Turbo/blob/main/LICENSE.pdf); the companion '
+    'text encoder (Qwen3-VL-4B) and VAE (Qwen Image) are Apache-2.0 Qwen releases.'
+)
+
+_krea2_license_note_shown = False
+
+
+def _show_krea2_license_note_once():
+    """Print `KREA2_LICENSE_NOTE` the first time a Krea 2 companion download
+    runs, so it lands in the same log stream as `load_file_from_url`'s
+    `Downloading: ...` line."""
+    global _krea2_license_note_shown
+    if _krea2_license_note_shown:
+        return
+    _krea2_license_note_shown = True
+    print(KREA2_LICENSE_NOTE)
+
+
+def krea2_text_encoder_path():
+    """Expected on-disk path of the Krea 2 companion text encoder — cheap (no
+    download, no verification)."""
+    return os.path.join(path_text_encoders, KREA2_TEXT_ENCODER_FILENAME)
+
+
+def downloading_krea2_text_encoder():
+    """Download (or verify the cached copy of) the Qwen3-VL-4B bf16 text
+    encoder from Comfy-Org/Krea-2 at the pinned commit. SHA256/size come from
+    the HF LFS metadata and were re-verified against the pinned URL; licence
+    is Apache-2.0 (Qwen/Qwen3-VL-4B-Instruct). Returns its on-disk path.
+
+    Raises RuntimeError (from `load_file_from_url`) if the download fails
+    hash/size verification."""
+    _show_krea2_license_note_once()
+    load_file_from_url(
+        url=KREA2_TEXT_ENCODER_URL,
+        model_dir=path_text_encoders,
+        file_name=KREA2_TEXT_ENCODER_FILENAME,
+        expected_sha256='36f3ff447ef59201722e8f9ce6020c9819fdcfba6aa2608c4e09b1c0ce114e34',
+        expected_size=8875719384,
+    )
+    return krea2_text_encoder_path()
+
+
+def qwen_image_vae_path():
+    """Expected on-disk path of the Qwen Image VAE (Wan 2.1 3D causal VAE
+    layout) — cheap (no download, no verification)."""
+    return os.path.join(path_vae, QWEN_IMAGE_VAE_FILENAME)
+
+
+def downloading_qwen_image_vae():
+    """Download (or verify the cached copy of) the Qwen Image VAE from
+    Comfy-Org/Krea-2 at the pinned commit. SHA256/size come from the HF LFS
+    metadata and were re-verified by hashing a real download; licence is
+    Apache-2.0 (Qwen/Qwen-Image). Returns its on-disk path.
+
+    Raises RuntimeError (from `load_file_from_url`) if the download fails
+    hash/size verification."""
+    _show_krea2_license_note_once()
+    load_file_from_url(
+        url=QWEN_IMAGE_VAE_URL,
+        model_dir=path_vae,
+        file_name=QWEN_IMAGE_VAE_FILENAME,
+        expected_sha256='a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f',
+        expected_size=253806246,
+    )
+    return qwen_image_vae_path()
