@@ -2,6 +2,7 @@ import torch
 from ldm_patched.ldm.modules.diffusionmodules.openaimodel import UNetModel, Timestep
 from ldm_patched.ldm.modules.encoders.noise_aug_modules import CLIPEmbeddingNoiseAugmentation
 from ldm_patched.ldm.modules.diffusionmodules.upscaling import ImageConcatWithNoiseAugmentation
+import ldm_patched.ldm.krea2.model
 import ldm_patched.ldm.lumina.model
 import ldm_patched.modules.model_management
 import ldm_patched.modules.conds
@@ -213,6 +214,9 @@ class BaseModel(torch.nn.Module):
         self.inpaint_model = True
 
     def memory_required(self, input_shape):
+        return self._base_memory_required(input_shape) * self.model_config.memory_usage_factor
+
+    def _base_memory_required(self, input_shape):
         if ldm_patched.modules.model_management.xformers_enabled() or ldm_patched.modules.model_management.pytorch_attention_flash_attention():
             dtype = self.get_dtype()
             if self.manual_cast_dtype is not None:
@@ -480,3 +484,37 @@ class ZImage(BaseModel):
 
         model_output = self.diffusion_model(xc, t, context=context, transformer_options=transformer_options, **extra_conds).float()
         return self.model_sampling.calculate_denoised(sigma, model_output, x)
+
+
+class Krea2(BaseModel):
+    """Krea 2 wraps ldm_patched.ldm.krea2.model.SingleStreamDiT (FWDF-131) in
+    place of the UNetModel BaseModel.__init__ builds by default.
+
+    apply_model() is deliberately NOT overridden (unlike ZImage): Krea2's
+    sampling_settings use multiplier == 1.0, so the inherited
+    BaseModel.apply_model() already hands the DiT the raw flow sigma
+    (ModelSamplingDiscreteFlow.timestep(sigma) == sigma) and applies the shared
+    flow calculate_denoised. There is no guidance-embedding input either, so
+    two-pass CFG in samplers.sampling_function() applies unmodified.
+    """
+    def __init__(self, model_config, model_type=ModelType.FLOW, device=None):
+        unet_config = model_config.unet_config
+        unet_config["disable_unet_model_creation"] = True
+        super().__init__(model_config, model_type=model_type, device=device)
+
+        if self.manual_cast_dtype is not None:
+            operations = ldm_patched.modules.ops.manual_cast
+        else:
+            operations = ldm_patched.modules.ops.disable_weight_init
+        self.diffusion_model = ldm_patched.ldm.krea2.model.SingleStreamDiT(**unet_config, device=device, operations=operations)
+
+    def extra_conds(self, **kwargs):
+        out = super().extra_conds(**kwargs)
+        cross_attn = kwargs.get("cross_attn", None)
+        if cross_attn is not None:
+            # CONDCrossAttn.concat() pads shorter conds by repeating tokens,
+            # which changes the result of a model whose text adapter attends
+            # over the real token sequence. CONDRegular refuses unequal shapes,
+            # so cond / uncond of different lengths run as separate passes.
+            out['c_crossattn'] = ldm_patched.modules.conds.CONDRegular(cross_attn)
+        return out

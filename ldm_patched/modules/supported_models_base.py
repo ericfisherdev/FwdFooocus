@@ -24,6 +24,10 @@ class BASE:
 
     manual_cast_dtype = None
 
+    # Multiplier applied to BaseModel.memory_required() for architectures whose
+    # real footprint exceeds the generic estimate.
+    memory_usage_factor = 1.0
+
     @classmethod
     def matches(s, unet_config):
         for k in s.unet_config:
