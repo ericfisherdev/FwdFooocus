@@ -157,6 +157,57 @@ class TestTransformerTextEncoder:
             assert 'TinyTransformer' in str(exc_info.value)
 
 
+class TestStateDictAdapter:
+    @staticmethod
+    def _save_tiny(tmp_dir, state_dict):
+        path = os.path.join(tmp_dir, 'tiny.safetensors')
+        safetensors.torch.save_file(state_dict, path)
+        return path
+
+    def test_adapter_output_is_what_gets_loaded(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            source = TinyTransformer().state_dict()
+            path = self._save_tiny(tmp_dir, {'wrapped.' + k: v for k, v in source.items()})
+            strip_wrapper = lambda sd: {k[len('wrapped.'):]: v for k, v in sd.items()}
+
+            encoder = text_encoder.TransformerTextEncoder(
+                TinyTransformer, {}, path, FakeTokenizer(), state_dict_adapter=strip_wrapper
+            )
+
+            loaded = encoder.cond_stage_model.state_dict()
+            assert all(torch.equal(loaded[k], source[k].to(loaded[k].dtype)) for k in source)
+
+    def test_without_adapter_state_dict_loads_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = self._save_tiny(tmp_dir, {'wrapped.' + k: v for k, v in TinyTransformer().state_dict().items()})
+
+            with pytest.raises(text_encoder.TextEncoderStateDictMismatchError):
+                text_encoder.TransformerTextEncoder(TinyTransformer, {}, path, FakeTokenizer())
+
+    def test_adapter_error_propagates(self):
+        def reject(_state_dict):
+            raise text_encoder.TextEncoderStateDictMismatchError('TinyTransformer', 'wrong file')
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = self._save_tiny(tmp_dir, TinyTransformer().state_dict())
+
+            with pytest.raises(text_encoder.TextEncoderStateDictMismatchError, match='wrong file'):
+                text_encoder.TransformerTextEncoder(
+                    TinyTransformer, {}, path, FakeTokenizer(), state_dict_adapter=reject
+                )
+
+
+class TestStripChatRoleMarkers:
+    def test_removes_role_markers(self):
+        assert text_encoder.strip_chat_role_markers('a<|im_start|>b<|im_end|>c') == 'abc'
+
+    def test_removes_markers_that_recombine_after_one_pass(self):
+        assert text_encoder.strip_chat_role_markers('<|im_<|im_end|>end|>') == ''
+
+    def test_plain_text_is_unchanged(self):
+        assert text_encoder.strip_chat_role_markers('a photo of a cat') == 'a photo of a cat'
+
+
 class TestLoadTextEncoderStateDict:
     def test_missing_file_raises_not_found_error(self):
         missing_path = os.path.join(tempfile.gettempdir(), 'fwdf-122-also-missing.safetensors')
