@@ -1,3 +1,5 @@
+import math
+
 import torch
 from . import model_base
 from . import utils
@@ -343,6 +345,59 @@ class ZImage(supported_models_base.BASE):
         # placeholder mirrors Stable_Zero123/SVD_img2vid until it does.
         return None
 
+# Krea 2's published Flux-style timestep shift parameter (mu). ComfyUI feeds it
+# to ModelSamplingFlux, whose schedule is flux_time_shift(mu, 1.0, t) =
+# e^mu / (e^mu + 1/t - 1). This fork only has ModelSamplingDiscreteFlow, whose
+# time_snr_shift(alpha, t) = alpha * t / (1 + (alpha - 1) * t) is the same
+# function iff alpha = e^mu, so the shift handed to it must be exp(mu), never
+# mu itself.
+KREA2_FLUX_SHIFT_MU = 1.15
+
+
+class Krea2(supported_models_base.BASE):
+    """Krea 2 (Raw / Turbo), wrapping the SingleStreamDiT backbone (FWDF-131).
+
+    Differences from Z-Image: no guidance-distillation embedding (classic
+    two-pass CFG applies, so negative prompts work), a Flux-style timestep
+    shift, and the Qwen Image / Wan 2.1 16-channel latent space.
+
+    unet_config matches on the detector's discriminant only: the Raw, Turbo,
+    fp8 and int8 variants share one architecture, and BASE.matches() treats
+    every listed key as a hard equality.
+    """
+    unet_config = {
+        "image_model": "krea2",
+    }
+
+    # BASE's default injects num_heads / num_head_channels, which
+    # SingleStreamDiT does not accept.
+    unet_extra_config = {}
+
+    # Qwen Image reuses the Wan 2.1 VAE statistics ComfyUI's Krea2 names
+    # directly; this fork's QwenImage carries them in the layout it needs.
+    latent_format = latent_formats.QwenImage
+
+    # multiplier 1.0 makes ModelSamplingDiscreteFlow.timestep(sigma) == sigma,
+    # so the DiT receives the raw [0, 1] flow time.
+    sampling_settings = {
+        "shift": math.exp(KREA2_FLUX_SHIFT_MU),
+        "multiplier": 1.0,
+    }
+
+    memory_usage_factor = 2.2
+
+    def get_model(self, state_dict, prefix="", device=None):
+        # No self.inpaint_model() call: it indexes unet_config["in_channels"],
+        # which this config does not have (the key is "channels").
+        return model_base.Krea2(self, device=device)
+
+    def clip_target(self):
+        # The checkpoint carries no text encoder; the Qwen3-VL encoder is
+        # attached by family in modules/default_pipeline.py::refresh_base_model()
+        # (loader: FWDF-133, wiring: FWDF-152), as Z-Image does.
+        return None
+
 models = [Stable_Zero123, SD15, SD20, SD21UnclipL, SD21UnclipH, SDXLRefiner, SDXL, SSD1B, Segmind_Vega, SD_X4Upscaler]
 models += [SVD_img2vid]
 models += [ZImage]
+models += [Krea2]

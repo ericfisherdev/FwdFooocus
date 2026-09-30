@@ -189,10 +189,11 @@ def detect_unet_config(state_dict, key_prefix, dtype):
 # 'input_blocks.0.0.weight' key detect_unet_config() has always required, so it never
 # runs against a non-UNet (e.g. DiT) state dict.
 #
-# Future architecture families register themselves via register_detector() instead of
+# Architecture families register themselves via register_detector() instead of
 # editing this table or model_config_from_unet() directly (Open/Closed Principle).
-# Planned discriminants for upcoming families:
-#   - Krea 2 (backlog): '{prefix}txtfusion.projector.weight'
+# Registered discriminants:
+#   - z-image: '{prefix}x_embedder.weight' + '{prefix}cap_embedder.1.weight'
+#   - krea2:   '{prefix}txtfusion.projector.weight' (see matches_krea2)
 _DETECTOR_TABLE = [
     ArchitectureDetector(
         name="unet",
@@ -282,6 +283,70 @@ def register_detector(name, matches, detect_config):
 
 
 register_detector("z-image", matches_z_image, detect_z_image_config)
+
+
+# Krea 2's attention head width is an architectural constant: no tensor shape
+# stores it (wq is features x features), so heads are derived as
+# projection_width // KREA2_HEAD_DIM.
+KREA2_HEAD_DIM = 128
+KREA2_PATCH_SIZE = 2
+# The patchify projection takes channels * patch * patch inputs.
+_KREA2_PATCH_AREA = KREA2_PATCH_SIZE * KREA2_PATCH_SIZE
+
+
+def matches_krea2(state_dict_keys, key_prefix):
+    """Krea 2 (SingleStreamDiT, FWDF-131) discriminant: the text-fusion layer
+    projector, which no UNet or other registered DiT has.
+
+    Per the ArchitectureDetector contract, every key detect_krea2_config()
+    dereferences is required, so a partial or unrelated checkpoint that merely
+    carries the discriminant fails detection gracefully instead of raising
+    KeyError inside the config builder.
+    """
+    required = (
+        '{}txtfusion.projector.weight'.format(key_prefix),
+        '{}first.weight'.format(key_prefix),
+        '{}blocks.0.attn.wq.weight'.format(key_prefix),
+        '{}blocks.0.attn.wk.weight'.format(key_prefix),
+        '{}txtfusion.layerwise_blocks.0.prenorm.scale'.format(key_prefix),
+    )
+    return all(key in state_dict_keys for key in required)
+
+
+def detect_krea2_config(state_dict, key_prefix, dtype):
+    """Read SingleStreamDiT's (FWDF-131) constructor config off tensor shapes,
+    mirroring ComfyUI's comfy/model_detection.py Krea 2 branch.
+
+    Known limitations:
+      - txtheads / txtkvheads are deliberately not emitted: the text adapter's
+        wq is txtdim x txtdim, which fixes head_dim * heads but not the split,
+        so the backbone's defaults (20 / 20) apply. The same goes for tdim and
+        theta, which are fixed architectural constants.
+      - `channels` is read from first.weight.shape[1], which is correct for
+        bf16 / fp8 / int8 repackages but wrong for 4-bit packed weights (the
+        packed dimension is halved). ComfyUI carries the same caveat.
+    """
+    state_dict_keys = list(state_dict.keys())
+
+    features, patchified_channels = state_dict['{}first.weight'.format(key_prefix)].shape
+    wq_rows = state_dict['{}blocks.0.attn.wq.weight'.format(key_prefix)].shape[0]
+    wk_rows = state_dict['{}blocks.0.attn.wk.weight'.format(key_prefix)].shape[0]
+
+    return {
+        "image_model": "krea2",
+        "dtype": dtype,
+        "patch": KREA2_PATCH_SIZE,
+        "features": features,
+        "channels": patchified_channels // _KREA2_PATCH_AREA,
+        "layers": count_blocks(state_dict_keys, '{}blocks.'.format(key_prefix) + '{}.'),
+        "heads": wq_rows // KREA2_HEAD_DIM,
+        "kvheads": wk_rows // KREA2_HEAD_DIM,
+        "txtlayers": state_dict['{}txtfusion.projector.weight'.format(key_prefix)].shape[1],
+        "txtdim": state_dict['{}txtfusion.layerwise_blocks.0.prenorm.scale'.format(key_prefix)].shape[0],
+    }
+
+
+register_detector("krea2", matches_krea2, detect_krea2_config)
 
 
 def model_config_from_unet_config(unet_config):
