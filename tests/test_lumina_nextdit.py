@@ -368,7 +368,7 @@ class TestRopeFreqsCache(unittest.TestCase):
         with torch.no_grad():
             model(x, timesteps, context)
             with unittest.mock.patch(
-                "ldm_patched.ldm.lumina.model.rope_freqs",
+                "ldm_patched.ldm.common_dit.rope_freqs",
                 side_effect=AssertionError("rope_freqs must not be recomputed"),
             ):
                 out = model(x, timesteps, context)

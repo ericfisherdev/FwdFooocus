@@ -18,31 +18,22 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import ldm_patched.modules.ops
+from ldm_patched.ldm.common_dit import (  # noqa: F401 -- re-exported: other modules/tests import these from here
+    EmbedND,
+    apply_rope,
+    apply_rope1,
+    clamp_fp16,
+    pad_to_patch_size,
+    rope_freqs,
+)
 from ldm_patched.ldm.modules.attention import optimized_attention
 from ldm_patched.ldm.modules.diffusionmodules.util import timestep_embedding
 
 ops = ldm_patched.modules.ops.disable_weight_init
 
 
-def clamp_fp16(x):
-    # NextDiT's SwiGLU/attention branches can overflow fp16 range; the
-    # upstream reference clamps at these same points to keep fp16 inference
-    # numerically stable instead of producing NaNs.
-    if x.dtype == torch.float16:
-        return torch.nan_to_num(x, nan=0.0, posinf=65504, neginf=-65504)
-    return x
-
-
 def modulate(x, scale):
     return x * (1 + scale.unsqueeze(1))
-
-
-def pad_to_patch_size(x, patch_size):
-    pad_h = (-x.shape[-2]) % patch_size
-    pad_w = (-x.shape[-1]) % patch_size
-    if pad_h == 0 and pad_w == 0:
-        return x
-    return F.pad(x, (0, pad_w, 0, pad_h), mode="circular")
 
 
 def patchify(x, patch_size):
@@ -79,44 +70,6 @@ def build_position_ids(cap_len, h_tokens, w_tokens, batch_size, device):
     img_pos_ids[:, :, 1] = torch.arange(h_tokens, dtype=torch.float32, device=device).view(-1, 1).repeat(1, w_tokens).flatten()
     img_pos_ids[:, :, 2] = torch.arange(w_tokens, dtype=torch.float32, device=device).view(1, -1).repeat(h_tokens, 1).flatten()
     return cap_pos_ids, img_pos_ids
-
-
-def rope_freqs(pos, dim, theta):
-    """Per-axis rotation-matrix RoPE table (Flux-style), shape (..., n, dim//2, 2, 2)."""
-    assert dim % 2 == 0, "rope axis dim must be even, got {}".format(dim)
-    scale = torch.linspace(0, (dim - 2) / dim, steps=dim // 2, dtype=torch.float64, device="cpu")
-    omega = 1.0 / (theta ** scale)
-    out = torch.einsum("...n,d->...nd", pos.to(dtype=torch.float64, device="cpu"), omega)
-    out = torch.stack([torch.cos(out), -torch.sin(out), torch.sin(out), torch.cos(out)], dim=-1)
-    out = out.view(*out.shape[:-1], 2, 2)
-    return out.to(dtype=torch.float32, device=pos.device)
-
-
-class EmbedND(nn.Module):
-    """Concatenates per-axis RoPE rotation tables into one head_dim-sized table."""
-
-    def __init__(self, dim, theta, axes_dim):
-        super().__init__()
-        self.dim = dim
-        self.theta = theta
-        self.axes_dim = axes_dim
-
-    def forward(self, ids):
-        n_axes = ids.shape[-1]
-        emb = torch.cat([rope_freqs(ids[..., i], self.axes_dim[i], self.theta) for i in range(n_axes)], dim=-3)
-        return emb.unsqueeze(1)
-
-
-def apply_rope1(x, freqs_cis):
-    x_ = x.to(dtype=freqs_cis.dtype).reshape(*x.shape[:-1], -1, 1, 2)
-    if x_.shape[2] != 1 and freqs_cis.shape[2] != 1 and x_.shape[2] != freqs_cis.shape[2]:
-        freqs_cis = freqs_cis[:, :, :x_.shape[2]]
-    x_out = freqs_cis[..., 0] * x_[..., 0] + freqs_cis[..., 1] * x_[..., 1]
-    return x_out.reshape(*x.shape).type_as(x)
-
-
-def apply_rope(xq, xk, freqs_cis):
-    return apply_rope1(xq, freqs_cis), apply_rope1(xk, freqs_cis)
 
 
 class TimestepEmbedder(nn.Module):
