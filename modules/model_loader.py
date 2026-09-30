@@ -91,6 +91,12 @@ def _remove_verification_state(cached_file: str) -> None:
             pass
 
 
+def resolve_hf_mirror(url: str) -> str:
+    """Return `url` with the huggingface.co host replaced by `HF_MIRROR`, if set."""
+    domain = os.environ.get("HF_MIRROR", "https://huggingface.co").rstrip('/')
+    return str.replace(url, "https://huggingface.co", domain, 1)
+
+
 def load_file_from_url(
         url: str,
         *,
@@ -112,8 +118,7 @@ def load_file_from_url(
 
     Returns the path to the downloaded file.
     """
-    domain = os.environ.get("HF_MIRROR", "https://huggingface.co").rstrip('/')
-    url = str.replace(url, "https://huggingface.co", domain, 1)
+    url = resolve_hf_mirror(url)
     os.makedirs(model_dir, exist_ok=True)
     if not file_name:
         parts = urlparse(url)
