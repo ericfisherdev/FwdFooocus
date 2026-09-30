@@ -222,6 +222,18 @@ class TestKrea2SamplingSettings(unittest.TestCase):
         self.assertAlmostEqual(expected, 0.7595, places=3)
         self.assertAlmostEqual(float(self.sampling.sigma(torch.tensor(0.5))), expected, places=5)
 
+    def test_sigma_table_matches_comfyui_10000_step_resolution(self):
+        # karras / exponential schedules start from sigma_min, so the discrete
+        # table must be tabulated at ComfyUI's ModelSamplingFlux resolution.
+        self.assertEqual(len(self.sampling.sigmas), 10000)
+        self.assertAlmostEqual(float(self.sampling.sigma_min), _flux_time_shift(1.15, 1.0, 1e-4), places=6)
+        self.assertAlmostEqual(float(self.sampling.sigma_min), 0.0003158, places=6)
+        self.assertAlmostEqual(float(self.sampling.sigma_max), 1.0, places=6)
+
+    def test_z_image_sigma_table_resolution_is_unchanged(self):
+        z_image_config = supported_models.ZImage({"image_model": "z_image"})
+        self.assertEqual(len(ModelSamplingDiscreteFlow(z_image_config).sigmas), 1000)
+
     def test_timestep_is_unscaled(self):
         self.assertEqual(self.sampling.multiplier, 1.0)
         sigma = torch.tensor([0.3])

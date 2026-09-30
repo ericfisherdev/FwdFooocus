@@ -382,6 +382,9 @@ class Krea2(supported_models_base.BASE):
     sampling_settings = {
         "shift": math.exp(KREA2_FLUX_SHIFT_MU),
         "multiplier": 1.0,
+        # ComfyUI's ModelSamplingFlux tabulates 10000 steps; matching it keeps
+        # sigma_min (and so karras / exponential schedules) at parity.
+        "timesteps": 10000,
     }
 
     memory_usage_factor = 2.2

@@ -177,7 +177,11 @@ class ModelSamplingDiscreteFlow(torch.nn.Module):
         else:
             sampling_settings = {}
 
-        self.set_parameters(shift=sampling_settings.get("shift", 1.0), multiplier=sampling_settings.get("multiplier", 1000))
+        self.set_parameters(
+            shift=sampling_settings.get("shift", 1.0),
+            timesteps=sampling_settings.get("timesteps", 1000),
+            multiplier=sampling_settings.get("multiplier", 1000),
+        )
         self.sigma_data = 1.0
 
     def set_parameters(self, shift=1.0, timesteps=1000, multiplier=1000):
