@@ -175,14 +175,16 @@ class TestFlatCheckpointDetection(_CheckpointTestCase):
             model_family_detection._detect_family_from_keys(frozenset(_UNRELATED_KEYS)), ModelFamily.UNKNOWN
         )
 
-    def test_flat_unet_only_keys_follow_the_same_prefix_rule(self):
-        # A UNet-only file is a flat diffusion model too, so it resolves the
-        # same way sd.load_checkpoint_guess_config will load it (SD15 here, as
-        # no label_emb key marks it SDXL); it needs an external VAE to load.
-        self.assertIs(
-            model_family_detection._detect_family_from_keys(frozenset({'input_blocks.0.0.weight'})),
-            ModelFamily.SD15,
-        )
+    def test_flat_unet_only_keys_are_unknown(self):
+        # A flat UNet-only file has no embedded text encoder or VAE, so it is
+        # not a loadable SD1.x/SDXL checkpoint (the loader rejects it too).
+        for keys in (['input_blocks.0.0.weight'], ['input_blocks.0.0.weight', 'label_emb.0.0.weight']):
+            with self.subTest(keys=keys):
+                self.assertIs(model_family_detection._detect_family_from_keys(frozenset(keys)), ModelFamily.UNKNOWN)
+
+    def test_get_family_flat_unet_only_file_is_unknown(self):
+        _write_checkpoint(self._checkpoint_path('unet_only.safetensors'), ['input_blocks.0.0.weight'])
+        self.assertIs(model_family_detection.get_family('unet_only.safetensors'), ModelFamily.UNKNOWN)
 
 
 class TestKrea2VariantResolution(_CheckpointTestCase):
