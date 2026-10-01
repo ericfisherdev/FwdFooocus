@@ -209,12 +209,6 @@ class TestKrea2VariantResolution(_CheckpointTestCase):
         _write_checkpoint(self._checkpoint_path('z_image_turbo.safetensors'), _Z_IMAGE_KEYS)
         self.assertIs(model_family_detection.get_family('z_image_turbo.safetensors'), ModelFamily.Z_IMAGE)
 
-    def test_session_state_id_is_keyed_per_variant(self):
-        _write_checkpoint(self._checkpoint_path('krea2_turbo.safetensors'), _KREA2_KEYS)
-        _write_checkpoint(self._checkpoint_path('krea2_raw.safetensors'), _KREA2_KEYS)
-        self.assertEqual(model_family_detection.session_state_id('krea2_turbo.safetensors'), 'krea2_turbo')
-        self.assertEqual(model_family_detection.session_state_id('krea2_raw.safetensors'), 'krea2_raw')
-
 
 class TestKrea2VariantOverridesConfig(unittest.TestCase):
     """The `krea2_variant_overrides` config item and its validator."""
@@ -380,32 +374,6 @@ class TestCorruptCheckpointError(_CheckpointTestCase):
 
         with self.assertRaises(model_family_detection.CorruptCheckpointError):
             model_family_detection._read_state_dict_keys(garbage_path)
-
-
-class TestSessionStateKey(_CheckpointTestCase):
-    """session_state_id() shares the UNKNOWN -> config-string fallback rule."""
-
-    def test_returns_family_value_when_detected(self):
-        _write_checkpoint(self._checkpoint_path('sdxl.safetensors'), _SDXL_KEYS)
-        self.assertEqual(model_family_detection.session_state_id('sdxl.safetensors'), 'sdxl')
-
-    def test_falls_back_to_config_default_base_model_when_unknown(self):
-        _write_checkpoint(self._checkpoint_path('mystery.safetensors'), _UNRELATED_KEYS)
-        model_family_detection.modules.config.default_base_model = 'pony'
-
-        self.assertEqual(model_family_detection.session_state_id('mystery.safetensors'), 'pony')
-
-    def test_returns_unknown_literal_when_unknown_and_no_config_default(self):
-        _write_checkpoint(self._checkpoint_path('mystery.safetensors'), _UNRELATED_KEYS)
-        model_family_detection.modules.config.default_base_model = None
-
-        self.assertEqual(model_family_detection.session_state_id('mystery.safetensors'), 'unknown')
-
-    def test_detected_family_takes_priority_over_config_default(self):
-        _write_checkpoint(self._checkpoint_path('sdxl.safetensors'), _SDXL_KEYS)
-        model_family_detection.modules.config.default_base_model = 'pony'
-
-        self.assertEqual(model_family_detection.session_state_id('sdxl.safetensors'), 'sdxl')
 
 
 class TestCacheBoundedness(unittest.TestCase):

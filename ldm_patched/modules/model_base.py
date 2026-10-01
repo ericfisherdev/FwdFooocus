@@ -171,6 +171,12 @@ class BaseModel(torch.nn.Module):
             if k.startswith(unet_prefix):
                 to_load[k[len(unet_prefix):]] = sd.pop(k)
 
+        # Fold ComfyUI per-tensor scaled-fp8 weights (float8_e4m3fn + a scalar
+        # weight_scale + a comfy_quant marker) back into ordinary weights
+        # before loading -- this fork's models have no weight_scale parameter,
+        # so such tensors would otherwise load un-scaled. No-op for checkpoints
+        # without those markers (i.e. every non-fp8-quantized checkpoint).
+        to_load = utils.dequantize_comfy_scaled_fp8(to_load)
         to_load = self.model_config.process_unet_state_dict(to_load)
         m, u = self.diffusion_model.load_state_dict(to_load, strict=False)
         if len(m) > 0:

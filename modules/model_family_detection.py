@@ -168,20 +168,3 @@ def get_family(checkpoint_filename: str) -> ModelFamily:
 
     _family_cache[resolved_path] = (fingerprint, family)
     return family
-
-
-def session_state_id(checkpoint_filename: str) -> str:
-    """Resolve the session-state persistence key for a checkpoint.
-
-    Uses the detected `ModelFamily` when recognized. Falls back to the
-    hand-authored `modules.config.default_base_model` string only when
-    detection returns `UNKNOWN`, so existing session rows for users who
-    already configured `default_base_model` in `config.txt` keep resolving
-    to the same key as before. Shared by both the load site (`webui.py`)
-    and the save site (`modules/async_worker.py`) so this fallback rule
-    lives in exactly one place.
-    """
-    family = get_family(checkpoint_filename)
-    if family is ModelFamily.UNKNOWN and modules.config.default_base_model is not None:
-        return modules.config.default_base_model
-    return family.value

@@ -265,6 +265,55 @@ def convert_sd_to(state_dict, dtype):
         state_dict[k] = state_dict[k].to(dtype)
     return state_dict
 
+def dequantize_comfy_scaled_fp8(state_dict):
+    """Fold ComfyUI per-tensor scaled-fp8 weights back into ordinary weights.
+
+    Some checkpoints (e.g. ComfyUI-saved fp8_e4m3fn model merges) store a
+    Linear's weight as `float8_e4m3fn` alongside a scalar `<name>.weight_scale`
+    and a `<name>.comfy_quant` JSON marker, where the real weight is
+    `weight.to(dtype) * weight_scale`. This fork's model definitions have no
+    `weight_scale` parameter, so without this step the fp8 weights would load
+    un-scaled (garbage) and the scale/marker keys report as unexpected.
+
+    For every `<name>.weight_scale`, multiply the sibling fp8 `<name>.weight`
+    by the scale (cast to the checkpoint's own non-quantized compute dtype) and
+    drop the scale plus the `<name>.comfy_quant` marker. Any remaining fp8
+    tensors carried no scale (stored as plain fp8, e.g. the cap/x pad-token
+    embeddings) and are cast to the compute dtype too, so the returned dict is
+    uniformly loadable -- an fp8 tensor cannot be copied into an unquantized
+    model's bf16/fp16 weight. Non-fp8 weights (a mixed-precision checkpoint
+    keeps most layers in bf16/fp16) are left untouched. A no-op for checkpoints
+    carrying no such markers, so it is safe to run on every checkpoint. Mutates
+    and returns `state_dict`.
+    """
+    scale_suffix = ".weight_scale"
+    marker_suffix = ".comfy_quant"
+    scale_keys = list(filter(lambda k: k.endswith(scale_suffix), state_dict.keys()))
+    marker_keys = list(filter(lambda k: k.endswith(marker_suffix), state_dict.keys()))
+    if len(scale_keys) == 0 and len(marker_keys) == 0:
+        return state_dict
+
+    fp8_dtypes = (torch.float8_e4m3fn, torch.float8_e5m2)
+    compute_dtype = next((v.dtype for v in state_dict.values()
+                          if v.dtype in (torch.bfloat16, torch.float16)), torch.float32)
+
+    for scale_key in scale_keys:
+        weight_key = scale_key[:-len(scale_suffix)] + ".weight"
+        scale = state_dict.pop(scale_key)
+        weight = state_dict.get(weight_key)
+        if weight is None or weight.dtype not in fp8_dtypes:
+            continue
+        state_dict[weight_key] = weight.to(compute_dtype) * scale.to(compute_dtype)
+
+    for marker_key in marker_keys:
+        state_dict.pop(marker_key, None)
+
+    for k in list(state_dict.keys()):
+        if state_dict[k].dtype in fp8_dtypes:
+            state_dict[k] = state_dict[k].to(compute_dtype)
+
+    return state_dict
+
 def safetensors_header(safetensors_path, max_size=100*1024*1024):
     with open(safetensors_path, "rb") as f:
         header = f.read(8)
