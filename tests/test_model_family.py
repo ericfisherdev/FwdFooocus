@@ -426,6 +426,7 @@ def _make_blank_capabilities(**overrides):
         default_steps=1,
         latent_channels=4,
         native_resolution_range=(1.0, 1.0),
+        resolution_multiple=1,
     )
     values.update(overrides)
     return model_family.FamilyCapabilities(**values)
@@ -512,6 +513,56 @@ class TestNativeResolutionRangeDerivation(unittest.TestCase):
         from modules.util import get_shape_ceil
         floor, _ = model_family._native_resolution_range(('768*1344',))
         self.assertEqual(floor, get_shape_ceil(768, 1344))
+
+
+class TestAcceptsResolution(unittest.TestCase):
+    """FWDF-207: the rule for admitting a user-configured W*H into a curated list."""
+
+    def setUp(self):
+        self.krea2 = model_family.get_capabilities(model_family.ModelFamily.KREA2_RAW)
+        self.sdxl = model_family.get_capabilities(model_family.ModelFamily.SDXL)
+
+    def test_krea2_accepts_aligned_in_range_resolution(self):
+        # 1152*1536 buckets to 1344, inside Krea 2's (1024, 2048).
+        self.assertTrue(self.krea2.accepts_resolution(1152, 1536))
+
+    def test_krea2_rejects_side_not_a_multiple_of_sixteen(self):
+        self.assertFalse(self.krea2.accepts_resolution(1150, 1536))
+        self.assertFalse(self.krea2.accepts_resolution(1152, 1544))
+
+    def test_krea2_rejects_resolution_below_native_range(self):
+        self.assertFalse(self.krea2.accepts_resolution(512, 512))
+
+    def test_krea2_rejects_resolution_above_native_range(self):
+        self.assertFalse(self.krea2.accepts_resolution(4096, 4096))
+
+    def test_range_bounds_are_inclusive(self):
+        floor, ceiling = self.krea2.native_resolution_range
+        self.assertTrue(self.krea2.accepts_resolution(int(floor), int(floor)))
+        self.assertTrue(self.krea2.accepts_resolution(int(ceiling), int(ceiling)))
+
+    def test_non_positive_sides_are_rejected(self):
+        self.assertFalse(self.krea2.accepts_resolution(0, 1024))
+        self.assertFalse(self.krea2.accepts_resolution(-1024, 1024))
+
+    def test_sdxl_only_requires_a_multiple_of_eight(self):
+        self.assertTrue(self.sdxl.accepts_resolution(1160, 904))
+        self.assertFalse(self.sdxl.accepts_resolution(1161, 904))
+
+    def test_every_family_accepts_its_own_aspect_ratios(self):
+        for family, caps in model_family.FAMILY_CAPABILITIES.items():
+            for entry in caps.aspect_ratios:
+                width, height = (int(side) for side in entry.split('*'))
+                with self.subTest(family=family.name, entry=entry):
+                    self.assertTrue(caps.accepts_resolution(width, height))
+
+
+class TestResolutionMultipleValidation(unittest.TestCase):
+    def test_non_positive_resolution_multiple_raises(self):
+        for bad in (0, -8):
+            with self.subTest(resolution_multiple=bad):
+                with self.assertRaises(ValueError):
+                    _make_blank_capabilities(resolution_multiple=bad)
 
 
 class TestImmutability(unittest.TestCase):

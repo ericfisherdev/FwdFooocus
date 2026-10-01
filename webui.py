@@ -1587,8 +1587,8 @@ with shared.gradio_root:
 
         state_is_generating = gr.State(False)
 
-        def _capabilities_for_base_model(base_model_filename):
-            """Resolve the FamilyCapabilities for a base-model checkpoint filename.
+        def _family_for_base_model(base_model_filename):
+            """Resolve the ModelFamily for a base-model checkpoint filename.
 
             The dropdown value arrives from the browser, and get_family() reads
             the file's safetensors header — so the name used for path
@@ -1599,9 +1599,24 @@ with shared.gradio_root:
             trusted_name = next(
                 (name for name in modules.config.model_filenames if name == base_model_filename), None)
             if trusted_name is None:
-                return modules.model_family.get_capabilities(modules.model_family.ModelFamily.UNKNOWN)
-            family = modules.model_family_detection.get_family(trusted_name)
-            return modules.model_family.get_capabilities(family)
+                return modules.model_family.ModelFamily.UNKNOWN
+            return modules.model_family_detection.get_family(trusted_name)
+
+        def _capabilities_for_base_model(base_model_filename):
+            """Resolve the FamilyCapabilities for a base-model checkpoint filename."""
+            return modules.model_family.get_capabilities(_family_for_base_model(base_model_filename))
+
+        def _report_rejected_aspect_ratios(family, caps):
+            """Print one warning per configured aspect ratio the family cannot run.
+
+            The aspect-ratio Radio cannot show a message itself, so a rejected
+            `available_aspect_ratios` entry is reported on the console instead
+            of vanishing silently.
+            """
+            resolution = family_ui_gates.resolve_aspect_ratios(
+                caps, modules.flags.sdxl_aspect_ratios, modules.config.available_aspect_ratios)
+            for ratio in resolution.rejected:
+                print(family_ui_gates.rejected_aspect_ratio_message(ratio, family.value, caps))
 
         def _family_gated_updates(base_model_filename, performance, refiner_model_value, sampler_name_value,
                                    scheduler_name_value, aspect_ratio_value, vae_name_value, guidance_scale_value):
@@ -1613,7 +1628,8 @@ with shared.gradio_root:
             preset_selection.change's .then() chain (loading a preset can also
             change the selected checkpoint).
             """
-            caps = _capabilities_for_base_model(base_model_filename)
+            family = _family_for_base_model(base_model_filename)
+            caps = modules.model_family.get_capabilities(family)
 
             # Resolve performance_selection's own new value FIRST: if the
             # incoming `performance` isn't valid for the new family,
@@ -1647,6 +1663,7 @@ with shared.gradio_root:
             aspect_choices, aspect_value = family_ui_gates.aspect_ratio_choices_and_value(
                 caps, aspect_ratio_value, modules.config.add_ratio,
                 modules.flags.sdxl_aspect_ratios, modules.config.available_aspect_ratios)
+            _report_rejected_aspect_ratios(family, caps)
             vae_visible, vae_interactive, vae_choices, vae_value = family_ui_gates.vae_state(
                 caps, vae_name_value, modules.config.vae_filenames, modules.flags.default_vae)
             cfg_minimum, cfg_maximum, cfg_value = family_ui_gates.guidance_scale_range_and_value(

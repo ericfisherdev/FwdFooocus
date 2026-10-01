@@ -106,14 +106,44 @@ class FamilyCapabilities:
     default_steps: int
     latent_channels: int
     native_resolution_range: tuple[float, float]
+    resolution_multiple: int
 
     def __post_init__(self):
+        if self.resolution_multiple <= 0:
+            raise ValueError(f"resolution_multiple must be positive; got {self.resolution_multiple!r}")
         if self.supports_controlnet != bool(self.controlnet_types):
             raise ValueError(
                 f"supports_controlnet ({self.supports_controlnet!r}) must equal "
                 f"bool(controlnet_types) ({bool(self.controlnet_types)!r}); "
                 f"got controlnet_types={self.controlnet_types!r}"
             )
+
+    def accepts_resolution(self, width: int, height: int) -> bool:
+        """True when a `width` x `height` image is a valid size for this family.
+
+        This is the rule for admitting a user-configured `W*H` entry
+        (`available_aspect_ratios` in `config.txt`) into a family's curated
+        `aspect_ratios` list: both sides must be positive multiples of
+        `resolution_multiple` (the VAE downscale, times the DiT patch size for
+        transformer families), and the size's shape-ceil bucket must fall
+        inside `native_resolution_range` (inclusive).
+        """
+        if width <= 0 or height <= 0:
+            return False
+        if width % self.resolution_multiple or height % self.resolution_multiple:
+            return False
+        floor, ceiling = self.native_resolution_range
+        return floor <= _shape_ceil(height, width) <= ceiling
+
+
+def _shape_ceil(height: int, width: int) -> float:
+    """`ceil(sqrt(h*w) / 64) * 64`, mirroring `modules.util.get_shape_ceil()`.
+
+    Duplicated rather than imported from `modules.util` because that module
+    pulls in cv2/PIL/numpy, dependencies this lightweight capability-registry
+    module should not need at import time.
+    """
+    return math.ceil(((height * width) ** 0.5) / 64.0) * 64.0
 
 
 def _native_resolution_range(aspect_ratios: tuple[str, ...]) -> tuple[float, float]:
@@ -127,18 +157,12 @@ def _native_resolution_range(aspect_ratios: tuple[str, ...]) -> tuple[float, flo
     presets all resolve to 1024.0) -- the floor here is the minimum across
     the list, and the ceiling is double that: the point past which
     `apply_vary`/`apply_upscale` (`modules/async_worker.py`) stop upsizing an
-    input image further. The formula is duplicated rather than imported from
-    `modules.util` because that module pulls in cv2/PIL/numpy, dependencies
-    this lightweight capability-registry module should not need at import
-    time.
+    input image further (see `_shape_ceil()` for the bucket formula).
 
     For SDXL's `aspect_ratios` this yields exactly `(1024.0, 2048.0)`,
     matching the literals this replaces in `apply_vary`/`apply_upscale`.
     """
-    def shape_ceil(h: int, w: int) -> float:
-        return math.ceil(((h * w) ** 0.5) / 64.0) * 64.0
-
-    floor = min(shape_ceil(*(int(v) for v in entry.split('*'))) for entry in aspect_ratios)
+    floor = min(_shape_ceil(*(int(v) for v in entry.split('*'))) for entry in aspect_ratios)
     return floor, floor * 2.0
 
 
@@ -196,6 +220,8 @@ def _build_sdxl_capabilities() -> FamilyCapabilities:
         scheduler_names=tuple(scheduler_list),
         aspect_ratios=tuple(sdxl_aspect_ratios),
         native_resolution_range=_native_resolution_range(tuple(sdxl_aspect_ratios)),
+        # SDXL's UNet needs sides divisible by the VAE's 8x downscale.
+        resolution_multiple=8,
         default_cfg=modules.config.default_cfg_scale,
         cfg_range=guidance_scale_range,
         default_steps=Steps.SPEED.value,
@@ -296,6 +322,8 @@ def _build_z_image_capabilities() -> FamilyCapabilities:
         # automatically with zero changes needed at the Vary/Upscale call
         # sites in modules/async_worker.py.
         native_resolution_range=_native_resolution_range(tuple(sdxl_aspect_ratios)),
+        # Lumina DiT: patch_size 2 x VAE 8x downscale.
+        resolution_multiple=16,
         default_cfg=1.5,
         cfg_range=(1.0, 4.0),
         default_steps=9,
@@ -354,6 +382,8 @@ def _build_krea2_capabilities(
         scheduler_names=('simple', 'normal'),
         aspect_ratios=tuple(krea2_aspect_ratios),
         native_resolution_range=_native_resolution_range(tuple(krea2_aspect_ratios)),
+        # Krea 2 DiT: patch 2 x VAE 8x downscale.
+        resolution_multiple=16,
         default_cfg=default_cfg,
         cfg_range=cfg_range,
         default_steps=performance_mode.steps,

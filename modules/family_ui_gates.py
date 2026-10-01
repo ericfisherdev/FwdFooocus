@@ -19,6 +19,7 @@ taken at each call site.
 """
 
 from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass
 
 from modules.flags import Performance
 from modules.model_family import FamilyCapabilities
@@ -88,6 +89,83 @@ def performance_choices_and_value(caps: FamilyCapabilities, current_value: str) 
     return choice_list_and_value(choices, current_value, default_label)
 
 
+def parse_aspect_ratio(ratio: str) -> tuple[int, int] | None:
+    """Parse a `W*H` aspect-ratio entry into `(width, height)`.
+
+    Returns `None` for anything that is not exactly two positive integers
+    joined by `*` (the form `modules.config` validates with `'*' in v`).
+    """
+    sides = ratio.split('*')
+    if len(sides) != 2 or not all(side.isascii() and side.isdecimal() for side in sides):
+        return None
+    width, height = int(sides[0]), int(sides[1])
+    if width <= 0 or height <= 0:
+        return None
+    return width, height
+
+
+@dataclass(frozen=True, slots=True)
+class AspectRatioResolution:
+    """Outcome of merging configured aspect ratios into a family's list.
+
+    `ratios` is the raw `W*H` list the radio should offer; `rejected` holds
+    configured entries the family cannot run (malformed, mis-aligned or
+    outside its native range), so the caller can report them.
+    """
+
+    ratios: tuple[str, ...]
+    rejected: tuple[str, ...]
+
+
+def resolve_aspect_ratios(
+    caps: FamilyCapabilities,
+    unrestricted_aspect_ratios: Sequence[str],
+    configured_aspect_ratios: Sequence[str],
+) -> AspectRatioResolution:
+    """Merge the user-configured `available_aspect_ratios` into the family list.
+
+    `FamilyCapabilities.aspect_ratios` (FWDF-117) is the hardcoded framework
+    default (`modules.flags.sdxl_aspect_ratios`) for SDXL/SD15/Z-Image. When a
+    family's list is value-equal to that default there is no family
+    restriction, so the user's configured list is used verbatim.
+
+    A family that declares a curated list (Krea 2) keeps it, followed by the
+    configured entries that are not already present and that
+    `caps.accepts_resolution` admits, in config order. Entries that are
+    malformed or fail that rule are reported in `rejected`; entries already in
+    the curated list are neither appended nor rejected.
+    """
+    if tuple(caps.aspect_ratios) == tuple(unrestricted_aspect_ratios):
+        return AspectRatioResolution(ratios=tuple(configured_aspect_ratios), rejected=())
+
+    curated = tuple(caps.aspect_ratios)
+    extras: list[str] = []
+    rejected: list[str] = []
+    for ratio in configured_aspect_ratios:
+        if ratio in curated or ratio in extras or ratio in rejected:
+            continue
+        size = parse_aspect_ratio(ratio)
+        if size is not None and caps.accepts_resolution(*size):
+            extras.append(ratio)
+        else:
+            rejected.append(ratio)
+    return AspectRatioResolution(ratios=curated + tuple(extras), rejected=tuple(rejected))
+
+
+def rejected_aspect_ratio_message(ratio: str, family_name: str, caps: FamilyCapabilities) -> str:
+    """Console warning for a configured aspect ratio a curated family cannot run.
+
+    The Radio cannot show a message, so `webui.py` prints this, in the style
+    `modules.config` uses for other invalid `config.txt` entries.
+    """
+    floor, ceiling = caps.native_resolution_range
+    return (
+        f'Ignoring available_aspect_ratios entry {ratio!r} for the {family_name} family: '
+        f'it must be W*H with both sides multiples of {caps.resolution_multiple} and the size must fall '
+        f"within the family's native range ({floor:g} to {ceiling:g})."
+    )
+
+
 def aspect_ratio_choices_and_value(
     caps: FamilyCapabilities,
     current_value: str,
@@ -97,25 +175,17 @@ def aspect_ratio_choices_and_value(
 ) -> tuple[tuple[str, ...], str]:
     """Aspect-ratio radio choices/value for the given family.
 
-    `FamilyCapabilities.aspect_ratios` (FWDF-117) is always the hardcoded
-    framework default (`modules.flags.sdxl_aspect_ratios`) today -- unlike
-    `vae_names`, it has no `None`-means-"no family restriction" sentinel.
-    When a family's declared list is value-equal to that hardcoded default,
-    this prefers the user's actually-configured `available_aspect_ratios`
-    (which may have been customized in `config.txt`) instead of silently
-    discarding that customization on every `base_model` change; a family
-    that declares a genuinely different/curated list is still honored as
-    an intentional restriction.
+    The raw list comes from `resolve_aspect_ratios`, so a customized
+    `available_aspect_ratios` in `config.txt` survives `base_model` changes on
+    unrestricted families and extends (rather than being dropped by) a curated
+    family's list when its entries are valid for that family.
 
     `add_ratio` is `modules.config.add_ratio`, injected rather than imported
     here to keep this module's only dependency direction explicit (and the
     function trivially testable with a stub formatter).
     """
-    if tuple(caps.aspect_ratios) == tuple(unrestricted_aspect_ratios):
-        raw_ratios = configured_aspect_ratios
-    else:
-        raw_ratios = caps.aspect_ratios
-    choices = tuple(add_ratio(ratio) for ratio in raw_ratios)
+    resolution = resolve_aspect_ratios(caps, unrestricted_aspect_ratios, configured_aspect_ratios)
+    choices = tuple(add_ratio(ratio) for ratio in resolution.ratios)
     return choice_list_and_value(choices, current_value, choices[0] if choices else None)
 
 
