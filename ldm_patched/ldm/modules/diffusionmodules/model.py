@@ -240,6 +240,18 @@ def pytorch_attention(q, k, v):
     return out
 
 
+def vae_attention():
+    """Select the VAE attention implementation (xformers, torch SDPA, or split)
+    for the current device/args. Shared by every VAE attention block."""
+    if model_management.xformers_enabled_vae():
+        print("Using xformers attention in VAE")
+        return xformers_attention
+    if model_management.pytorch_attention_enabled():
+        print("Using pytorch attention in VAE")
+        return pytorch_attention
+    print("Using split attention in VAE")
+    return normal_attention
+
 class AttnBlock(nn.Module):
     def __init__(self, in_channels):
         super().__init__()
@@ -267,15 +279,7 @@ class AttnBlock(nn.Module):
                                         stride=1,
                                         padding=0)
 
-        if model_management.xformers_enabled_vae():
-            print("Using xformers attention in VAE")
-            self.optimized_attention = xformers_attention
-        elif model_management.pytorch_attention_enabled():
-            print("Using pytorch attention in VAE")
-            self.optimized_attention = pytorch_attention
-        else:
-            print("Using split attention in VAE")
-            self.optimized_attention = normal_attention
+        self.optimized_attention = vae_attention()
 
     def forward(self, x):
         h_ = x

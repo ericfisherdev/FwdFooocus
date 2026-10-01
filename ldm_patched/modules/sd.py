@@ -21,6 +21,7 @@ import ldm_patched.modules.lora
 import ldm_patched.t2ia.adapter
 import ldm_patched.modules.supported_models_base
 import ldm_patched.taesd.taesd
+from ldm_patched.ldm.wan.vae import ImageModeWanVAE, WAN21_LATENT_CHANNELS, is_wan21_vae_state_dict, wan21_vae_config
 
 def load_model_weights(model, sd):
     m, u = model.load_state_dict(sd, strict=False)
@@ -172,11 +173,21 @@ class VAE:
                                                             decoder_config={'target': "ldm_patched.ldm.modules.temporal_ae.VideoDecoder", 'params': decoder_config})
             elif "taesd_decoder.1.weight" in sd:
                 self.first_stage_model = ldm_patched.taesd.taesd.TAESD()
+            elif is_wan21_vae_state_dict(sd):
+                #Wan 2.1 3D causal VAE (Krea 2 / Qwen Image / Anima): not AutoencoderKL-shaped.
+                #Driven in image mode (T=1) so the 4-D encode/decode/tiling below work unchanged.
+                self.latent_channels = WAN21_LATENT_CHANNELS
+                self.first_stage_model = ImageModeWanVAE(**wan21_vae_config(sd))
+                self.memory_used_encode = lambda shape, dtype: (1500 * shape[2] * shape[3]) * model_management.dtype_size(dtype)
+                self.memory_used_decode = lambda shape, dtype: (2200 * shape[2] * shape[3] * 64) * model_management.dtype_size(dtype)
+            elif "decoder.middle.0.residual.0.gamma" in sd:
+                raise ValueError("Unsupported VAE: Wan 2.2 layout (decoder.upsamples.0.upsamples.0.residual.2.weight); only the Wan 2.1 VAE is supported.")
             else:
                 #default SD1.x/SD2.x VAE parameters; z_channels/embed_dim are derived from the
-                #decoder's first conv layer when present so standalone 16-channel VAEs that share
-                #this same AutoencoderKL architecture (Flux's ae.safetensors, the Qwen Image VAE)
-                #decode correctly instead of being forced into the SDXL default of 4 channels.
+                #decoder's first conv layer when present so standalone 16-channel AutoencoderKL
+                #VAEs (Flux's ae.safetensors) decode correctly instead of being forced into the
+                #SDXL default of 4 channels. The Qwen Image VAE is NOT this layout: it is the
+                #Wan 2.1 3D causal VAE, handled by the is_wan21_vae_state_dict branch above.
                 ddconfig = {'double_z': True, 'z_channels': 4, 'resolution': 256, 'in_channels': 3, 'out_ch': 3, 'ch': 128, 'ch_mult': [1, 2, 4, 4], 'num_res_blocks': 2, 'attn_resolutions': [], 'dropout': 0.0}
 
                 if 'encoder.down.2.downsample.conv.weight' not in sd: #Stable diffusion x4 upscaler VAE
