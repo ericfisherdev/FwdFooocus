@@ -483,6 +483,8 @@ def load_checkpoint_guess_config(ckpt_path, output_vae=True, output_clip=True, o
         model_config = model_detection.model_config_from_unet(sd, "model.diffusion_model.", unet_dtype)
     except model_detection.UnsupportedArchitectureError as e:
         raise RuntimeError(f"ERROR: Detected architecture '{e.architecture_name}' for {ckpt_path} but no model config is registered for it yet.") from e
+    except model_detection.MalformedArchitectureError as e:
+        raise RuntimeError(f"ERROR: {ckpt_path} looks like a '{e.architecture_name}' checkpoint but is malformed ({e.reason}); the file may be truncated or corrupt.") from e
 
     if model_config is None:
         raise RuntimeError(f"ERROR: Could not detect model type of: {ckpt_path}")

@@ -354,8 +354,12 @@ def _validate_krea2_shapes(state_dict, key_prefix):
     def is_whole_heads(shape):
         return is_matrix(shape) and shape[0] % KREA2_HEAD_DIM == 0
 
+    def is_whole_patches(shape):
+        return is_matrix(shape) and shape[1] % _KREA2_PATCH_AREA == 0
+
     _require_krea2_shape(state_dict, '{}first.weight'.format(key_prefix),
-                         "a (features, patch*patch*channels) matrix", is_matrix)
+                         "a (features, patch*patch*channels) matrix whose column count is a multiple of {}".format(
+                             _KREA2_PATCH_AREA), is_whole_patches)
     _require_krea2_shape(state_dict, '{}txtfusion.projector.weight'.format(key_prefix),
                          "(1, text layers)", lambda shape: is_matrix(shape) and shape[0] == 1)
     _require_krea2_shape(state_dict, '{}txtfusion.layerwise_blocks.0.prenorm.scale'.format(key_prefix),

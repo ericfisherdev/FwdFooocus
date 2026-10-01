@@ -159,6 +159,7 @@ class TestMalformedKrea2Checkpoints(unittest.TestCase):
             "key projection not a whole number of heads": ("blocks.0.attn.wk.weight", (200, 256)),
             "query heads not a multiple of kv heads": ("blocks.0.attn.wk.weight", (3 * 128, 256)),
             "patchify projection that is a vector": ("first.weight", (256,)),
+            "patchify projection not a whole number of patches": ("first.weight", (256, 66)),
             "text norm scale that is a matrix": ("txtfusion.layerwise_blocks.0.prenorm.scale", (4, 10)),
         }
         for description, (key, shape) in malformed.items():
