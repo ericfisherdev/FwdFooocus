@@ -115,7 +115,7 @@ def _resolve_krea2_variant(checkpoint_filename: str, family: ModelFamily) -> Mod
 
     logger.warning(
         f"Cannot tell whether Krea 2 checkpoint '{checkpoint_filename}' is Raw or Turbo from its file name; "
-        f"assuming Raw. Add \"{basename}\": \"turbo\" (or \"raw\") to 'krea2_variant_overrides' in config.txt."
+        f"assuming Raw. Map the file to 'turbo' or 'raw' in the 'krea2_variant_overrides' entry of config.txt."
     )
     return ModelFamily.KREA2_RAW
 
