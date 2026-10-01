@@ -431,13 +431,14 @@ def _contains_subsequence(haystack, needle):
 
 
 # ---------------------------------------------------------------------------
-# Real-weights smoke test (env gated)
+# Real-weights tests (opt-in via FWDF_RUN_MODEL_TESTS=1, see tests/conftest.py)
 # ---------------------------------------------------------------------------
 
 _REAL_WEIGHTS = os.path.join(modules.config.path_text_encoders, QWEN3_VL_WEIGHTS_FILENAME)
 _REAL_TOKENIZER = os.path.join(modules.config.path_text_encoders, "tokenizer.json")
 
 
+@pytest.mark.requires_models
 @pytest.mark.skipif(not (os.path.isfile(_REAL_WEIGHTS) and os.path.isfile(_REAL_TOKENIZER)),
                     reason="requires qwen3vl_4b_bf16.safetensors and tokenizer assets in path_text_encoders")
 def test_real_checkpoint_strict_loads_and_yields_30720_wide_conditioning():

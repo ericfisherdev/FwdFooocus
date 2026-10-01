@@ -213,6 +213,23 @@ class TestLoadCheckpointGuessConfigOrderingFix(unittest.TestCase):
             )
 
 
+    @patch("ldm_patched.modules.utils.load_torch_file")
+    @patch("ldm_patched.modules.model_detection.model_config_from_unet")
+    def test_malformed_architecture_is_wrapped_naming_the_file_and_reason(self, mock_detect, mock_load):
+        mock_load.return_value = {
+            "model.diffusion_model.txtfusion.projector.weight": torch.zeros(3, 7),
+        }
+        mock_detect.side_effect = model_detection.MalformedArchitectureError("krea2", "projector has 3 rows")
+
+        with pytest.raises(RuntimeError, match=r"fake-checkpoint\.safetensors.*krea2.*projector has 3 rows"):
+            sd_module.load_checkpoint_guess_config(
+                "fake-checkpoint.safetensors",
+                output_vae=False,
+                output_clip=False,
+                output_model=False,
+            )
+
+
 class TestLoadControlnetGuard(unittest.TestCase):
     """Regression test for ldm_patched.modules.controlnet.load_controlnet(): a
     controlnet state dict whose architecture resolves to no model config must raise a

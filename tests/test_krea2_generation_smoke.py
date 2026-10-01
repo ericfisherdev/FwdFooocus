@@ -10,8 +10,9 @@ Run locally:
     FWDF_RUN_MODEL_TESTS=1 python -m pytest tests/test_krea2_generation_smoke.py -m requires_models
 
 Prerequisites beyond the three Krea 2 files: one checkpoint of each variant
-whose name resolves to it (`krea2_raw*` / `krea2_turbo*`, or a
-`krea2_variant_overrides` entry), and the prompt-expansion model that
+whose file name contains `krea2` (the gate only discovers those) and resolves
+to that variant (`krea2_raw*` / `krea2_turbo*`, or a `krea2_variant_overrides`
+entry for such a name), and the prompt-expansion model that
 `refresh_everything` always loads. A variant with no checkpoint skips its tests.
 
 Budget (24 GB card): Raw is 52 steps with two passes per step, roughly several
