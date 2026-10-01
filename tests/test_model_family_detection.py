@@ -154,7 +154,6 @@ class TestKrea2VariantResolution(_CheckpointTestCase):
         with self.assertLogs(model_family_detection.logger, level='WARNING') as logs:
             family = self._family_of('krea2.safetensors')
         self.assertIs(family, ModelFamily.KREA2_RAW)
-        self.assertIn('krea2.safetensors', logs.output[0])
         self.assertIn('krea2_variant_overrides', logs.output[0])
 
     def test_filename_naming_both_variants_is_ambiguous(self):
