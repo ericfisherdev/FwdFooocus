@@ -251,21 +251,44 @@ class TestConcurrentCopies(unittest.TestCase):
             self.assertNotEqual(tmp_path, self.fast_file + '.tmp')
             self.assertEqual(os.path.dirname(tmp_path), self.fast_dir)
 
-    def test_failed_copy_removes_only_its_own_tmp(self):
+    def test_failed_copy_leaves_no_tmp_behind(self):
         from modules.fast_checkpoint import resolve_checkpoint_path
-        stray_tmp = os.path.join(self.fast_dir, 'model.safetensors.other.tmp')
-        with open(stray_tmp, 'wb') as f:
-            f.write(b'in-flight data of another copier')
-
         with patch('modules.fast_checkpoint.shutil.copy2', side_effect=OSError('disk full')):
             result = resolve_checkpoint_path(
                 self.checkpoint_name, [self.slow_dir], fast_path=self.fast_dir
             )
 
         self.assertEqual(result, self.slow_path)
-        self.assertEqual(os.listdir(self.fast_dir), ['model.safetensors.other.tmp'])
-        with open(stray_tmp, 'rb') as f:
-            self.assertEqual(f.read(), b'in-flight data of another copier')
+        self.assertEqual(os.listdir(self.fast_dir), [])
+
+    def test_interrupted_copy_leaves_no_tmp_behind(self):
+        from modules.fast_checkpoint import resolve_checkpoint_path
+        with patch('modules.fast_checkpoint.shutil.copy2', side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                resolve_checkpoint_path(
+                    self.checkpoint_name, [self.slow_dir], fast_path=self.fast_dir
+                )
+
+        self.assertEqual(os.listdir(self.fast_dir), [])
+
+    def test_next_copy_sweeps_orphaned_tmp_files_of_this_checkpoint_only(self):
+        from modules.fast_checkpoint import resolve_checkpoint_path
+        orphan = 'model.safetensors.abcd1234.tmp'
+        legacy_orphan = 'model.safetensors.tmp'
+        other_checkpoint_tmp = 'other.safetensors.abcd1234.tmp'
+        for name in (orphan, legacy_orphan, other_checkpoint_tmp):
+            with open(os.path.join(self.fast_dir, name), 'wb') as f:
+                f.write(b'leftover of an interrupted copy')
+
+        result = resolve_checkpoint_path(
+            self.checkpoint_name, [self.slow_dir], fast_path=self.fast_dir
+        )
+
+        self.assertEqual(result, self.fast_file)
+        self.assertEqual(
+            sorted(os.listdir(self.fast_dir)),
+            [self.checkpoint_name, other_checkpoint_tmp],
+        )
 
     def test_concurrent_requests_for_different_checkpoints_do_not_serialize(self):
         from modules.fast_checkpoint import resolve_checkpoint_path
