@@ -52,6 +52,7 @@ def _make_capabilities(**overrides) -> FamilyCapabilities:
         default_steps=30,
         latent_channels=4,
         native_resolution_range=(1024.0, 2048.0),
+        resolution_multiple=8,
     )
     values.update(overrides)
     return FamilyCapabilities(**values)
@@ -86,6 +87,7 @@ def _restricted_capabilities(**overrides) -> FamilyCapabilities:
         default_steps=20,
         latent_channels=16,
         native_resolution_range=(1024.0, 2048.0),
+        resolution_multiple=16,
     )
     values.update(overrides)
     return FamilyCapabilities(**values)
@@ -269,9 +271,9 @@ class TestAspectRatioChoicesAndValue(unittest.TestCase):
         self.assertEqual(choices, ('formatted(2048*2048)',))
         self.assertEqual(value, 'formatted(2048*2048)')
 
-    def test_honors_family_specific_restriction_over_configured_list(self):
+    def test_family_specific_list_stays_first_and_unsupported_configured_entries_are_dropped(self):
         caps = _restricted_capabilities()  # aspect_ratios = ('512*512',), differs from UNRESTRICTED_DEFAULT
-        configured = ('2048*2048',)
+        configured = ('4096*4096',)  # outside the family's native range
         choices, _ = family_ui_gates.aspect_ratio_choices_and_value(
             caps, 'anything', self._stub_add_ratio, self.UNRESTRICTED_DEFAULT, configured
         )
@@ -291,6 +293,103 @@ class TestAspectRatioChoicesAndValue(unittest.TestCase):
             caps, 'formatted(1152*896)', self._stub_add_ratio, self.UNRESTRICTED_DEFAULT, configured
         )
         self.assertEqual(value, 'formatted(1152*896)')
+
+
+class TestParseAspectRatio(unittest.TestCase):
+    def test_parses_width_and_height(self):
+        self.assertEqual(family_ui_gates.parse_aspect_ratio('1152*1536'), (1152, 1536))
+
+    def test_malformed_entries_return_none(self):
+        for bad in ('', '1152', '1152*', '*1536', '1152x1536', '1152*1536*2', 'a*b', '-8*16', '0*1024', '10.5*16'):
+            with self.subTest(entry=bad):
+                self.assertIsNone(family_ui_gates.parse_aspect_ratio(bad))
+
+
+class TestResolveAspectRatios(unittest.TestCase):
+    """FWDF-207: configured ratios extend, not get dropped by, a curated list."""
+
+    UNRESTRICTED_DEFAULT = ('1024*1024', '1152*896')
+
+    @staticmethod
+    def _curated_capabilities():
+        return _make_capabilities(
+            aspect_ratios=('1024*1024', '1152*896'),
+            native_resolution_range=(1024.0, 2048.0),
+            resolution_multiple=16,
+        )
+
+    def _resolve(self, configured, caps=None):
+        return family_ui_gates.resolve_aspect_ratios(
+            caps or self._curated_capabilities(), ('unrelated*default',), configured)
+
+    def test_unrestricted_family_gets_configured_list_verbatim(self):
+        caps = _make_capabilities()
+        configured = ('2048*2048', '1150*1536', 'junk')
+        result = family_ui_gates.resolve_aspect_ratios(caps, self.UNRESTRICTED_DEFAULT, configured)
+        self.assertEqual(result.ratios, configured)
+        self.assertEqual(result.rejected, ())
+
+    def test_curated_family_appends_valid_configured_entries_after_curated_list(self):
+        result = self._resolve(('1152*1536', '1536*1152'))
+        self.assertEqual(result.ratios, ('1024*1024', '1152*896', '1152*1536', '1536*1152'))
+        self.assertEqual(result.rejected, ())
+
+    def test_entries_already_curated_are_neither_appended_nor_rejected(self):
+        result = self._resolve(('1152*896', '1152*1536', '1152*1536'))
+        self.assertEqual(result.ratios, ('1024*1024', '1152*896', '1152*1536'))
+        self.assertEqual(result.rejected, ())
+
+    def test_non_multiple_entry_is_rejected(self):
+        result = self._resolve(('1150*1536',))
+        self.assertEqual(result.ratios, ('1024*1024', '1152*896'))
+        self.assertEqual(result.rejected, ('1150*1536',))
+
+    def test_out_of_range_entry_is_rejected(self):
+        result = self._resolve(('512*512', '4096*4096'))
+        self.assertEqual(result.ratios, ('1024*1024', '1152*896'))
+        self.assertEqual(result.rejected, ('512*512', '4096*4096'))
+
+    def test_malformed_entry_is_rejected(self):
+        result = self._resolve(('not-a-ratio', '1152*1536'))
+        self.assertEqual(result.ratios, ('1024*1024', '1152*896', '1152*1536'))
+        self.assertEqual(result.rejected, ('not-a-ratio',))
+
+    def test_rejected_entries_are_reported_once(self):
+        self.assertEqual(self._resolve(('1150*1536', '1150*1536')).rejected, ('1150*1536',))
+
+    def test_rejection_message_names_entry_family_and_rule(self):
+        message = family_ui_gates.rejected_aspect_ratio_message(
+            '1150*1536', 'krea2_raw', self._curated_capabilities())
+        self.assertIn('1150*1536', message)
+        self.assertIn('krea2_raw', message)
+        self.assertIn('multiples of 16', message)
+        self.assertIn('native range (1024 to 2048)', message)
+
+
+class TestAspectRatioChoicesOnCuratedFamily(unittest.TestCase):
+    """A configured ratio valid for a curated family is selectable and kept as the value."""
+
+    @staticmethod
+    def _stub_add_ratio(raw: str) -> str:
+        return f'formatted({raw})'
+
+    def _choices_and_value(self, current_value, configured):
+        caps = _make_capabilities(aspect_ratios=('1024*1024', '1152*896'), resolution_multiple=16)
+        return family_ui_gates.aspect_ratio_choices_and_value(
+            caps, current_value, self._stub_add_ratio, ('unrelated*default',), configured)
+
+    def test_configured_entry_is_offered_after_the_curated_list(self):
+        choices, _ = self._choices_and_value('formatted(1024*1024)', ('1152*1536',))
+        self.assertEqual(choices, ('formatted(1024*1024)', 'formatted(1152*896)', 'formatted(1152*1536)'))
+
+    def test_current_value_preserved_when_it_is_a_configured_entry(self):
+        _, value = self._choices_and_value('formatted(1152*1536)', ('1152*1536',))
+        self.assertEqual(value, 'formatted(1152*1536)')
+
+    def test_rejected_current_value_falls_back_to_first_curated_choice(self):
+        choices, value = self._choices_and_value('formatted(1150*1536)', ('1150*1536',))
+        self.assertEqual(value, choices[0])
+        self.assertNotIn('formatted(1150*1536)', choices)
 
 
 class TestSamplerAndSchedulerChoicesAndValue(unittest.TestCase):

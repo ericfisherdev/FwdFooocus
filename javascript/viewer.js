@@ -65,12 +65,41 @@ function on_style_selection_blur() {
     target.dispatchEvent(e);
 }
 
-onUiLoaded(async () => {
-    let spans = document.querySelectorAll('.aspect_ratios span');
-
-    spans.forEach(function (span) {
-        span.innerHTML = span.innerHTML.replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+// Gradio 3.41.2's Radio renders every choice label as an escaped text node, so the
+// grey "W:H" suffix in an aspect ratio label shows up as literal <span> markup. The
+// label string is also the radio's value, so the markup to render is always
+// input.value (a server-generated string from modules.config.add_ratio). The write is
+// idempotent (skipped when already equal), which keeps the MutationObserver below from
+// re-triggering itself, and it re-runs after every gr.update(choices=...) swap, where
+// Gradio recreates or retargets the label text nodes.
+function renderAspectRatioLabels() {
+    document.querySelectorAll('.aspect_ratios label').forEach(function (label) {
+        const input = label.querySelector('input[type=radio]');
+        const span = label.querySelector(':scope > span');
+        if (input && span && span.innerHTML !== input.value) {
+            span.innerHTML = input.value;
+        }
     });
+}
+
+function observeAspectRatioLabels() {
+    const radio = document.querySelector('.aspect_ratios');
+    if (!radio) {
+        return;
+    }
+    // childList: the choice list grew or shrank. data-testid: same-length swap, where
+    // Gradio only rewrites each label's data-testid to match its new value.
+    new MutationObserver(renderAspectRatioLabels).observe(radio, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['data-testid']
+    });
+}
+
+onUiLoaded(async () => {
+    renderAspectRatioLabels();
+    observeAspectRatioLabels();
 
     document.querySelector('.style_selections').addEventListener('focusout', function (event) {
         setTimeout(() => {
