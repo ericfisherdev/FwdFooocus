@@ -445,6 +445,27 @@ class TestCorruptCheckpointError(_CheckpointTestCase):
             model_family_detection._read_state_dict_keys(garbage_path)
 
 
+    def test_unreadable_header_is_not_cached(self):
+        """A header that cannot be parsed must not be remembered as UNKNOWN:
+        once the file is repaired in place with the same size and mtime, the
+        next get_family() call has to re-read it (FWDF-206)."""
+        path = self._checkpoint_path('repaired.safetensors')
+        _write_checkpoint(path, _SDXL_KEYS)
+        valid_bytes = open(path, 'rb').read()
+        valid_stat = os.stat(path)
+
+        with open(path, 'wb') as f:  # same size, unreadable header
+            f.write(b'\xff' * len(valid_bytes))
+        os.utime(path, ns=(valid_stat.st_atime_ns, valid_stat.st_mtime_ns))
+        self.assertIs(model_family_detection.get_family('repaired.safetensors'), ModelFamily.UNKNOWN)
+        self.assertEqual(len(model_family_detection._family_cache), 0)
+
+        with open(path, 'wb') as f:  # repaired in place, same size and mtime
+            f.write(valid_bytes)
+        os.utime(path, ns=(valid_stat.st_atime_ns, valid_stat.st_mtime_ns))
+        self.assertIs(model_family_detection.get_family('repaired.safetensors'), ModelFamily.SDXL)
+
+
 class TestCacheBoundedness(unittest.TestCase):
     def setUp(self):
         model_family_detection._family_cache.clear()

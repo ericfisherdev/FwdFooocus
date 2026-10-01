@@ -9,9 +9,25 @@ Subsequent loads use the cached fast copy.
 import logging
 import os
 import shutil
+import tempfile
+import threading
 import time
 
 logger = logging.getLogger(__name__)
+
+# One lock per fast-drive destination so concurrent callers (worker thread,
+# Gradio request threads, FastAPI threadpool) copy a checkpoint once and the
+# rest wait for the finished file. The map holds one tiny entry per distinct
+# checkpoint path and is never evicted. In-process locking is sufficient: the
+# app is a single process.
+_copy_locks_guard = threading.Lock()
+_copy_locks: dict[str, threading.Lock] = {}
+
+
+def _destination_lock(fast_file: str) -> threading.Lock:
+    """Return the lock serialising copies to `fast_file`, creating it on first use."""
+    with _copy_locks_guard:
+        return _copy_locks.setdefault(fast_file, threading.Lock())
 
 
 def _find_in_folders(name: str, folders: list[str]) -> str:
@@ -43,6 +59,9 @@ def resolve_checkpoint_path(
     """
     Resolve the path for a checkpoint, caching it on the fast drive if configured.
 
+    Concurrent calls for the same checkpoint are single-flight: one copies,
+    the others block until it finishes and then serve the finished file.
+
     When a fast copy already exists, it is revalidated against the source
     checkpoint using a cheap (mtime, size) comparison before being served.
     If the source has changed (re-download, in-place edit), the fast copy is
@@ -73,9 +92,24 @@ def resolve_checkpoint_path(
         logger.warning(f"Resolved fast-cache path escapes cache root: {checkpoint_name}")
         return _find_in_folders(checkpoint_name, checkpoint_folders)
 
-    if os.path.isfile(fast_file):
-        original_path = _find_in_folders(checkpoint_name, checkpoint_folders)
+    with _destination_lock(fast_file):
+        return _serve_fast_copy(checkpoint_name, checkpoint_folders, fast_file)
 
+
+def _serve_fast_copy(
+    checkpoint_name: str,
+    checkpoint_folders: list[str],
+    fast_file: str,
+) -> str:
+    """
+    Return the path to serve for `checkpoint_name`, copying to `fast_file` if needed.
+
+    Must be called with the destination lock for `fast_file` held, so the
+    exists / staleness / copy decision is atomic with respect to other callers.
+    """
+    original_path = _find_in_folders(checkpoint_name, checkpoint_folders)
+
+    if os.path.isfile(fast_file):
         if not os.path.isfile(original_path):
             # Source is gone; the fast copy is all that remains.
             return fast_file
@@ -87,8 +121,6 @@ def resolve_checkpoint_path(
             return _copy_to_fast_drive(original_path, fast_file)
 
         return fast_file
-
-    original_path = _find_in_folders(checkpoint_name, checkpoint_folders)
 
     if not os.path.isfile(original_path):
         return original_path
@@ -122,6 +154,12 @@ def _copy_to_fast_drive(source_path: str, dest_path: str) -> str:
     """
     Copy a checkpoint file to the fast drive using atomic write.
 
+    Two invariants hold regardless of concurrency:
+    - Every call writes to its own unique temporary file, so copiers never
+      truncate, rename, or delete one another's in-flight data.
+    - `dest_path` is only ever created by `os.replace` of a fully written and
+      closed file, so no reader can open a partial file at the final path.
+
     Args:
         source_path: Path to the original checkpoint file.
         dest_path: Target path on the fast drive.
@@ -129,6 +167,7 @@ def _copy_to_fast_drive(source_path: str, dest_path: str) -> str:
     Returns:
         dest_path on success, source_path on failure.
     """
+    tmp_path = None
     try:
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
 
@@ -138,10 +177,10 @@ def _copy_to_fast_drive(source_path: str, dest_path: str) -> str:
             f"{os.path.basename(source_path)} ({file_size_mb:.0f} MB)"
         )
 
-        tmp_path = dest_path + '.tmp'
+        tmp_path = _create_unique_tmp_file(dest_path)
         start_time = time.time()
         shutil.copy2(source_path, tmp_path)
-        os.rename(tmp_path, dest_path)
+        os.replace(tmp_path, dest_path)
         elapsed = time.time() - start_time
 
         logger.info(
@@ -154,11 +193,36 @@ def _copy_to_fast_drive(source_path: str, dest_path: str) -> str:
             f"Failed to cache checkpoint on fast storage: {e}. "
             f"Loading from original location."
         )
-        # Clean up partial tmp file
-        tmp_path = dest_path + '.tmp'
-        if os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
+        if tmp_path is not None:
+            _remove_quietly(tmp_path)
         return source_path
+
+
+def _create_unique_tmp_file(dest_path: str) -> str:
+    """
+    Create an empty, uniquely named temporary file beside `dest_path`.
+
+    The file lives in the destination's directory so the later `os.replace`
+    stays on one filesystem (and therefore atomic). The descriptor is closed
+    immediately because `shutil.copy2` reopens by path; `copy2` also copies
+    the source's mode bits onto it, so the final file keeps the source's
+    permissions.
+
+    Raises:
+        OSError: if the temporary file cannot be created.
+    """
+    fd, tmp_path = tempfile.mkstemp(
+        dir=os.path.dirname(dest_path),
+        prefix=os.path.basename(dest_path) + '.',
+        suffix='.tmp',
+    )
+    os.close(fd)
+    return tmp_path
+
+
+def _remove_quietly(path: str) -> None:
+    """Remove `path`, ignoring a file that is already gone or cannot be removed."""
+    try:
+        os.remove(path)
+    except OSError:
+        pass
