@@ -60,9 +60,11 @@ class TestVAELatentChannelDerivation(unittest.TestCase):
         self.assertNotIn("Leftover VAE keys", output)
 
     def test_sixteen_channel_state_dict_derives_flux_qwen_shape(self):
-        """Flux's ae.safetensors and the Qwen Image VAE are both 16-channel
-        AutoencoderKL-shaped checkpoints; the VAE class must derive
-        latent_channels=16 from the state dict instead of hardcoding 4."""
+        """Flux's ae.safetensors is a 16-channel AutoencoderKL-shaped
+        checkpoint; the VAE class must derive latent_channels=16 from the
+        state dict instead of hardcoding 4. (The Qwen Image VAE does not
+        share this layout; it is the Wan 2.1 3D causal VAE, covered in
+        tests/test_wan_vae.py.)"""
         sd = _build_autoencoder_state_dict(z_channels=16)
         vae, output = self._construct_vae_without_key_warnings(sd)
 
