@@ -26,6 +26,7 @@ stay in sync by construction rather than by convention:
 
 import logging
 import os
+import re
 
 from safetensors import SafetensorError, safe_open
 
@@ -46,6 +47,11 @@ _KREA2_FAMILIES = frozenset({ModelFamily.KREA2_RAW, ModelFamily.KREA2_TURBO})
 # One family per value in `modules.config.KREA2_VARIANTS`, the values the
 # `krea2_variant_overrides` config item may map a checkpoint to.
 _KREA2_VARIANT_FAMILIES = {'raw': ModelFamily.KREA2_RAW, 'turbo': ModelFamily.KREA2_TURBO}
+# A variant name counts only as a standalone word (no adjacent letter), so
+# 'drawing' / 'straw' never read as 'raw'; a digit or separator is a boundary.
+_KREA2_VARIANT_PATTERNS = {
+    variant: re.compile(rf'(?<![a-z]){variant}(?![a-z])') for variant in _KREA2_VARIANT_FAMILIES
+}
 
 
 class CorruptCheckpointError(Exception):
@@ -95,8 +101,9 @@ def _resolve_krea2_variant(checkpoint_filename: str, family: ModelFamily) -> Mod
 
     Precedence: a `modules.config.krea2_variant_overrides` entry (looked up by
     the filename exactly as given, then by its basename), else the
-    case-insensitive substrings `turbo` / `raw` in the basename. A name that
-    contains both or neither is ambiguous: it resolves to `KREA2_RAW` and
+    case-insensitive whole words `turbo` / `raw` in the basename (a word has no
+    adjacent letter, so `drawing` does not name Raw). A name that contains both
+    or neither is ambiguous: it resolves to `KREA2_RAW` and
     logs a warning naming the config key that fixes it.
     """
     if family not in _KREA2_FAMILIES:
@@ -109,7 +116,7 @@ def _resolve_krea2_variant(checkpoint_filename: str, family: ModelFamily) -> Mod
         return _KREA2_VARIANT_FAMILIES[override]
 
     lowered = basename.lower()
-    named_variants = [variant for variant in _KREA2_VARIANT_FAMILIES if variant in lowered]
+    named_variants = [variant for variant, pattern in _KREA2_VARIANT_PATTERNS.items() if pattern.search(lowered)]
     if len(named_variants) == 1:
         return _KREA2_VARIANT_FAMILIES[named_variants[0]]
 

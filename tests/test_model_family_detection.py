@@ -161,6 +161,23 @@ class TestKrea2VariantResolution(_CheckpointTestCase):
             family = self._family_of('krea2_raw_to_turbo_merge.safetensors')
         self.assertIs(family, ModelFamily.KREA2_RAW)
 
+    def test_variant_names_inside_longer_words_do_not_count(self):
+        # 'drawing' contains 'raw' but names nothing, so the name is ambiguous.
+        with self.assertLogs(model_family_detection.logger, level='WARNING') as logs:
+            family = self._family_of('krea2_distilled_drawing.safetensors')
+        self.assertIs(family, ModelFamily.KREA2_RAW)
+        self.assertIn('krea2_variant_overrides', logs.output[0])
+
+    def test_a_variant_word_next_to_an_unrelated_word_still_resolves(self):
+        with self.assertNoLogs(model_family_detection.logger, level='WARNING'):
+            family = self._family_of('krea2_turbo_drawing.safetensors')
+        self.assertIs(family, ModelFamily.KREA2_TURBO)
+
+    def test_a_digit_is_a_word_boundary(self):
+        with self.assertNoLogs(model_family_detection.logger, level='WARNING'):
+            self.assertIs(self._family_of('krea2raw.safetensors'), ModelFamily.KREA2_RAW)
+            self.assertIs(self._family_of('krea2turbo.safetensors'), ModelFamily.KREA2_TURBO)
+
     def test_a_clear_filename_does_not_warn(self):
         with self.assertNoLogs(model_family_detection.logger, level='WARNING'):
             self._family_of('krea2_turbo.safetensors')

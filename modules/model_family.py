@@ -437,19 +437,25 @@ def get_capabilities(family: ModelFamily) -> FamilyCapabilities:
 def resolve_performance_mode(label: str, caps: FamilyCapabilities) -> PerformanceMode:
     """Resolve a UI performance label to its `PerformanceMode`.
 
-    A label the family declares wins. Otherwise a legacy `Performance` label
-    (Quality, Speed, ...) resolves to its SDXL-built mode, because the Gradio
-    radio can still carry one while a non-SDXL family's checkpoint is being
-    selected and every task has always accepted those.
+    A label the family declares wins. Otherwise an *unrestricted* legacy
+    `Performance` label (Quality, Speed) resolves to its SDXL-built mode,
+    because the Gradio radio can still carry one while a non-SDXL family's
+    checkpoint is being selected and tasks have always accepted those. The
+    restricted legacy labels (Extreme Speed, Lightning, Hyper-SD) are SDXL
+    accelerator-LoRA modes: for a family that does not declare them they are
+    rejected rather than applying an SDXL LoRA and sampler defaults to a DiT.
 
     Raises:
-        ValueError: `label` is neither one of `caps.performance_modes` nor a
-            legacy `Performance` label.
+        ValueError: `label` is neither one of `caps.performance_modes` nor an
+            unrestricted legacy `Performance` label.
     """
-    for mode in (*caps.performance_modes, *_SDXL_CAPABILITIES.performance_modes):
+    for mode in caps.performance_modes:
         if mode.label == label:
+            return mode
+    for mode in _SDXL_CAPABILITIES.performance_modes:
+        if mode.label == label and not mode.restricted:
             return mode
     raise ValueError(
         f"{label!r} is not a performance mode for this model family "
-        f"(valid: {[mode.label for mode in caps.performance_modes]}) nor a legacy Performance label"
+        f"(valid: {[mode.label for mode in caps.performance_modes]}) nor an unrestricted legacy Performance label"
     )

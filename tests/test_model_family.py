@@ -340,6 +340,21 @@ class TestResolvePerformanceMode(unittest.TestCase):
         mode = model_family.resolve_performance_mode('Speed', self.z_image)
         self.assertEqual(mode.steps, Performance.SPEED.steps())
 
+    def test_restricted_legacy_labels_are_rejected_for_a_family_that_omits_them(self):
+        # Extreme Speed / Lightning / Hyper-SD would apply an SDXL accelerator
+        # LoRA and sampler defaults to a DiT.
+        for label in ('Extreme Speed', 'Lightning', 'Hyper-SD'):
+            for family in (model_family.ModelFamily.Z_IMAGE, model_family.ModelFamily.KREA2_RAW,
+                           model_family.ModelFamily.KREA2_TURBO):
+                with self.subTest(label=label, family=family):
+                    with self.assertRaises(ValueError):
+                        model_family.resolve_performance_mode(label, model_family.get_capabilities(family))
+
+    def test_restricted_legacy_labels_still_resolve_for_sdxl(self):
+        for label in ('Extreme Speed', 'Lightning', 'Hyper-SD'):
+            with self.subTest(label=label):
+                self.assertTrue(model_family.resolve_performance_mode(label, self.sdxl).restricted)
+
     def test_family_label_wins_over_a_same_named_legacy_label(self):
         synthetic = _make_blank_capabilities(performance_modes=(
             model_family.PerformanceMode(label='Speed', steps=7, steps_uov=7, cfg=None,
