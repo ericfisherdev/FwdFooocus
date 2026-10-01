@@ -97,7 +97,7 @@ def _resolve_krea2_variant(checkpoint_filename: str, family: ModelFamily) -> Mod
     the filename exactly as given, then by its basename), else the
     case-insensitive substrings `turbo` / `raw` in the basename. A name that
     contains both or neither is ambiguous: it resolves to `KREA2_RAW` and
-    logs a warning naming the file and the config key that fixes it.
+    logs a warning naming the config key that fixes it.
     """
     if family not in _KREA2_FAMILIES:
         return family
@@ -113,9 +113,12 @@ def _resolve_krea2_variant(checkpoint_filename: str, family: ModelFamily) -> Mod
     if len(named_variants) == 1:
         return _KREA2_VARIANT_FAMILIES[named_variants[0]]
 
+    # The message is deliberately static: CodeQL's clear-text-logging query
+    # treats checkpoint names derived from config values as secrets, so it
+    # names the config key instead of the file.
     logger.warning(
-        f"Cannot tell whether Krea 2 checkpoint '{checkpoint_filename}' is Raw or Turbo from its file name; "
-        f"assuming Raw. Map the file to 'turbo' or 'raw' in the 'krea2_variant_overrides' entry of config.txt."
+        "Cannot tell whether a Krea 2 checkpoint is Raw or Turbo from its file name; assuming Raw. "
+        "Map the file to 'turbo' or 'raw' in the 'krea2_variant_overrides' entry of config.txt."
     )
     return ModelFamily.KREA2_RAW
 
