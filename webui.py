@@ -1606,15 +1606,13 @@ with shared.gradio_root:
             """Resolve the FamilyCapabilities for a base-model checkpoint filename."""
             return modules.model_family.get_capabilities(_family_for_base_model(base_model_filename))
 
-        def _report_rejected_aspect_ratios(family, caps):
+        def _report_rejected_aspect_ratios(family, caps, resolution):
             """Print one warning per configured aspect ratio the family cannot run.
 
             The aspect-ratio Radio cannot show a message itself, so a rejected
             `available_aspect_ratios` entry is reported on the console instead
             of vanishing silently.
             """
-            resolution = family_ui_gates.resolve_aspect_ratios(
-                caps, modules.flags.sdxl_aspect_ratios, modules.config.available_aspect_ratios)
             for ratio in resolution.rejected:
                 print(family_ui_gates.rejected_aspect_ratio_message(ratio, family.value, caps))
 
@@ -1660,10 +1658,11 @@ with shared.gradio_root:
                 caps, sampler_name_value, modules.config.default_sampler)
             scheduler_choices, scheduler_value = family_ui_gates.scheduler_choices_and_value(
                 caps, scheduler_name_value, modules.config.default_scheduler)
+            aspect_resolution = family_ui_gates.resolve_aspect_ratios(
+                caps, modules.flags.sdxl_aspect_ratios, modules.config.available_aspect_ratios)
             aspect_choices, aspect_value = family_ui_gates.aspect_ratio_choices_and_value(
-                caps, aspect_ratio_value, modules.config.add_ratio,
-                modules.flags.sdxl_aspect_ratios, modules.config.available_aspect_ratios)
-            _report_rejected_aspect_ratios(family, caps)
+                aspect_resolution, aspect_ratio_value, modules.config.add_ratio)
+            _report_rejected_aspect_ratios(family, caps, aspect_resolution)
             vae_visible, vae_interactive, vae_choices, vae_value = family_ui_gates.vae_state(
                 caps, vae_name_value, modules.config.vae_filenames, modules.flags.default_vae)
             cfg_minimum, cfg_maximum, cfg_value = family_ui_gates.guidance_scale_range_and_value(

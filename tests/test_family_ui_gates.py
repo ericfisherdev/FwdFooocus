@@ -250,6 +250,13 @@ class TestPerformanceChoicesAndValue(unittest.TestCase):
         self.assertEqual(value, 'Z Balanced')
 
 
+def _aspect_choices_and_value(caps, current_value, unrestricted, configured):
+    """Resolve once, then derive choices/value, exactly as `webui.py` does."""
+    resolution = family_ui_gates.resolve_aspect_ratios(caps, unrestricted, configured)
+    return family_ui_gates.aspect_ratio_choices_and_value(
+        resolution, current_value, lambda raw: f'formatted({raw})')
+
+
 class TestAspectRatioChoicesAndValue(unittest.TestCase):
     """`caps.aspect_ratios` (FWDF-117) is always the hardcoded framework
     default today; these tests exercise the config-override-preservation
@@ -258,15 +265,11 @@ class TestAspectRatioChoicesAndValue(unittest.TestCase):
 
     UNRESTRICTED_DEFAULT = ('1024*1024', '1152*896')  # matches _make_capabilities().aspect_ratios
 
-    @staticmethod
-    def _stub_add_ratio(raw: str) -> str:
-        return f'formatted({raw})'
-
     def test_uses_configured_list_when_family_matches_unrestricted_default(self):
         caps = _make_capabilities()  # aspect_ratios == UNRESTRICTED_DEFAULT
         configured = ('2048*2048',)
-        choices, value = family_ui_gates.aspect_ratio_choices_and_value(
-            caps, 'anything', self._stub_add_ratio, self.UNRESTRICTED_DEFAULT, configured
+        choices, value = _aspect_choices_and_value(
+            caps, 'anything', self.UNRESTRICTED_DEFAULT, configured
         )
         self.assertEqual(choices, ('formatted(2048*2048)',))
         self.assertEqual(value, 'formatted(2048*2048)')
@@ -274,23 +277,23 @@ class TestAspectRatioChoicesAndValue(unittest.TestCase):
     def test_family_specific_list_stays_first_and_unsupported_configured_entries_are_dropped(self):
         caps = _restricted_capabilities()  # aspect_ratios = ('512*512',), differs from UNRESTRICTED_DEFAULT
         configured = ('4096*4096',)  # outside the family's native range
-        choices, _ = family_ui_gates.aspect_ratio_choices_and_value(
-            caps, 'anything', self._stub_add_ratio, self.UNRESTRICTED_DEFAULT, configured
+        choices, _ = _aspect_choices_and_value(
+            caps, 'anything', self.UNRESTRICTED_DEFAULT, configured
         )
         self.assertEqual(choices, ('formatted(512*512)',))
 
     def test_falls_back_to_first_choice_when_current_not_in_new_family(self):
         caps = _restricted_capabilities()
-        choices, value = family_ui_gates.aspect_ratio_choices_and_value(
-            caps, 'stale-value', self._stub_add_ratio, self.UNRESTRICTED_DEFAULT, ()
+        choices, value = _aspect_choices_and_value(
+            caps, 'stale-value', self.UNRESTRICTED_DEFAULT, ()
         )
         self.assertEqual(value, choices[0])
 
     def test_current_value_preserved_when_still_valid(self):
         caps = _make_capabilities()
         configured = ('1024*1024', '1152*896')
-        _, value = family_ui_gates.aspect_ratio_choices_and_value(
-            caps, 'formatted(1152*896)', self._stub_add_ratio, self.UNRESTRICTED_DEFAULT, configured
+        _, value = _aspect_choices_and_value(
+            caps, 'formatted(1152*896)', self.UNRESTRICTED_DEFAULT, configured
         )
         self.assertEqual(value, 'formatted(1152*896)')
 
@@ -369,14 +372,9 @@ class TestResolveAspectRatios(unittest.TestCase):
 class TestAspectRatioChoicesOnCuratedFamily(unittest.TestCase):
     """A configured ratio valid for a curated family is selectable and kept as the value."""
 
-    @staticmethod
-    def _stub_add_ratio(raw: str) -> str:
-        return f'formatted({raw})'
-
     def _choices_and_value(self, current_value, configured):
         caps = _make_capabilities(aspect_ratios=('1024*1024', '1152*896'), resolution_multiple=16)
-        return family_ui_gates.aspect_ratio_choices_and_value(
-            caps, current_value, self._stub_add_ratio, ('unrelated*default',), configured)
+        return _aspect_choices_and_value(caps, current_value, ('unrelated*default',), configured)
 
     def test_configured_entry_is_offered_after_the_curated_list(self):
         choices, _ = self._choices_and_value('formatted(1024*1024)', ('1152*1536',))

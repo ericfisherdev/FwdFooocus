@@ -167,24 +167,22 @@ def rejected_aspect_ratio_message(ratio: str, family_name: str, caps: FamilyCapa
 
 
 def aspect_ratio_choices_and_value(
-    caps: FamilyCapabilities,
+    resolution: AspectRatioResolution,
     current_value: str,
     add_ratio: Callable[[str], str],
-    unrestricted_aspect_ratios: Sequence[str],
-    configured_aspect_ratios: Sequence[str],
 ) -> tuple[tuple[str, ...], str]:
-    """Aspect-ratio radio choices/value for the given family.
+    """Aspect-ratio radio choices/value from a resolved `AspectRatioResolution`.
 
-    The raw list comes from `resolve_aspect_ratios`, so a customized
-    `available_aspect_ratios` in `config.txt` survives `base_model` changes on
-    unrestricted families and extends (rather than being dropped by) a curated
-    family's list when its entries are valid for that family.
+    The caller resolves once with `resolve_aspect_ratios` and derives both the
+    radio choices (here) and any rejected-entry warnings from that single
+    result, so the two can never disagree. A customized `available_aspect_ratios`
+    in `config.txt` therefore survives `base_model` changes on unrestricted
+    families and extends a curated family's list when its entries are valid.
 
     `add_ratio` is `modules.config.add_ratio`, injected rather than imported
     here to keep this module's only dependency direction explicit (and the
     function trivially testable with a stub formatter).
     """
-    resolution = resolve_aspect_ratios(caps, unrestricted_aspect_ratios, configured_aspect_ratios)
     choices = tuple(add_ratio(ratio) for ratio in resolution.ratios)
     return choice_list_and_value(choices, current_value, choices[0] if choices else None)
 
