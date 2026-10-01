@@ -6,6 +6,7 @@ On first use, copies a checkpoint from the slow drive to the fast drive.
 Subsequent loads use the cached fast copy.
 """
 
+import glob
 import logging
 import os
 import shutil
@@ -154,9 +155,12 @@ def _copy_to_fast_drive(source_path: str, dest_path: str) -> str:
     """
     Copy a checkpoint file to the fast drive using atomic write.
 
-    Two invariants hold regardless of concurrency:
+    Must be called with the destination lock for `dest_path` held. These
+    invariants hold regardless of concurrency:
     - Every call writes to its own unique temporary file, so copiers never
       truncate, rename, or delete one another's in-flight data.
+    - Leftovers of interrupted earlier copies to `dest_path` are swept before
+      copying (safe because the caller holds the destination lock).
     - `dest_path` is only ever created by `os.replace` of a fully written and
       closed file, so no reader can open a partial file at the final path.
 
@@ -170,6 +174,7 @@ def _copy_to_fast_drive(source_path: str, dest_path: str) -> str:
     tmp_path = None
     try:
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        _remove_orphaned_tmp_files(dest_path)
 
         file_size_mb = os.path.getsize(source_path) / (1024 * 1024)
         logger.info(
@@ -197,6 +202,13 @@ def _copy_to_fast_drive(source_path: str, dest_path: str) -> str:
             _remove_quietly(tmp_path)
         return source_path
 
+    except BaseException:
+        # Not an OSError (e.g. KeyboardInterrupt, MemoryError): still leave no
+        # full-size orphan behind, then let it propagate.
+        if tmp_path is not None:
+            _remove_quietly(tmp_path)
+        raise
+
 
 def _create_unique_tmp_file(dest_path: str) -> str:
     """
@@ -218,6 +230,21 @@ def _create_unique_tmp_file(dest_path: str) -> str:
     )
     os.close(fd)
     return tmp_path
+
+
+def _remove_orphaned_tmp_files(dest_path: str) -> None:
+    """
+    Delete tmp files a previous, interrupted copy to `dest_path` left behind.
+
+    Must be called with the destination lock held: the lock guarantees no
+    other in-process copier for `dest_path` is in flight, so every match is
+    an orphan. The pattern matches mkstemp's 8-character random part only, so
+    another checkpoint whose name merely starts with this one's is not hit.
+    The legacy fixed `<dest>.tmp` name is swept too.
+    """
+    escaped = glob.escape(dest_path)
+    for orphan in glob.glob(escaped + '.' + '?' * 8 + '.tmp') + [dest_path + '.tmp']:
+        _remove_quietly(orphan)
 
 
 def _remove_quietly(path: str) -> None:
