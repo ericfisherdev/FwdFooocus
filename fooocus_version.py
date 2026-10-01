@@ -1,3 +1,3 @@
 # CalVer format: YYYY.MM.MICRO
 # MICRO increments with each PR merge in the same month
-version = '2026.09.11'
+version = '2026.10.0'
