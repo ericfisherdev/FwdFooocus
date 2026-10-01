@@ -495,6 +495,20 @@ embeddings_downloads = get_config_item_or_set_default(
     validator=lambda x: isinstance(x, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in x.items()),
     expected_type=dict
 )
+KREA2_VARIANTS = ('raw', 'turbo')
+
+
+def is_valid_krea2_variant_overrides(value) -> bool:
+    """`krea2_variant_overrides` maps checkpoint file names to a Krea 2 variant."""
+    return isinstance(value, dict) and all(isinstance(k, str) and v in KREA2_VARIANTS for k, v in value.items())
+
+
+krea2_variant_overrides = get_config_item_or_set_default(
+    key='krea2_variant_overrides',
+    default_value={},
+    validator=is_valid_krea2_variant_overrides,
+    expected_type=dict
+)
 vae_downloads = get_config_item_or_set_default(
     key='vae_downloads',
     default_value={},

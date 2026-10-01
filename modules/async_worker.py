@@ -31,8 +31,34 @@ def _base_model_supports_ip_adapter(base_model_name):
 
 
 class AsyncTask:
+    def _apply_performance_mode(self, performance_label: str) -> None:
+        """Resolve the UI's performance label against the requested
+        checkpoint's family and set every attribute derived from it.
+
+        The label is either a legacy `Performance` value or a family-specific
+        mode such as Z-Image's `Turbo` / Krea 2's `Raw`. `performance_mode` is
+        the source of truth for steps; `performance_selection` stays the legacy
+        enum the SDXL-only logic (performance LoRAs, Lightning/Hyper-SD/LCM
+        defaults) switches on, and is `Performance.SPEED` -- which carries no
+        LoRA and no restrictions -- for a family-specific label.
+
+        Raises:
+            ValueError: `performance_label` is neither a mode of the family
+                nor a legacy `Performance` value.
+        """
+        from modules.flags import Performance
+
+        capabilities = modules.model_family.get_capabilities(
+            modules.model_family_detection.get_family(self.base_model_name))
+        self.performance_mode = modules.model_family.resolve_performance_mode(performance_label, capabilities)
+        self.performance_label = self.performance_mode.label
+        self.performance_selection = (
+            Performance(performance_label) if performance_label in Performance.values() else Performance.SPEED)
+        self.steps = self.performance_mode.steps
+        self.original_steps = self.steps
+
     def __init__(self, args):
-        from modules.flags import Performance, MetadataScheme, ip_list, disabled
+        from modules.flags import MetadataScheme, ip_list, disabled
         from modules.util import get_enabled_loras
         from modules.config import default_max_lora_number
         import args_manager
@@ -54,9 +80,7 @@ class AsyncTask:
         self.negative_prompt = args.pop()
         self.style_selections = args.pop()
 
-        self.performance_selection = Performance(args.pop())
-        self.steps = self.performance_selection.steps()
-        self.original_steps = self.steps
+        performance_label = args.pop()
 
         self.aspect_ratios_selection = args.pop()
         self.image_number = args.pop()
@@ -66,6 +90,7 @@ class AsyncTask:
         self.sharpness = args.pop()
         self.cfg_scale = args.pop()
         self.base_model_name = args.pop()
+        self._apply_performance_mode(performance_label)
         self.refiner_model_name = args.pop()
         self.refiner_switch = args.pop()
         self.loras = get_enabled_loras([(bool(args.pop()), str(args.pop()), float(args.pop())) for _ in
@@ -253,7 +278,7 @@ def _build_session_state(task: AsyncTask) -> dict:
         'scheduler': task.scheduler_name,
         'steps': task.original_steps,
         'cfg_scale': task.cfg_scale,
-        'performance': task.performance_selection.value,
+        'performance': task.performance_label,
         'image_number': task.image_number,
         'sharpness': task.sharpness,
         'seed': task.seed,
@@ -561,7 +586,7 @@ def worker():
                  ('Fooocus V2 Expansion', 'prompt_expansion', task['expansion']),
                  ('Styles', 'styles',
                   str(task['styles'] if not use_expansion else [fooocus_expansion] + task['styles'])),
-                 ('Performance', 'performance', async_task.performance_selection.value),
+                 ('Performance', 'performance', async_task.performance_label),
                  ('Steps', 'steps', async_task.steps),
                  ('Resolution', 'resolution', str((width, height))),
                  ('Guidance Scale', 'guidance_scale', async_task.cfg_scale),
@@ -619,7 +644,8 @@ def worker():
 
     def apply_control_nets(async_task, height, ip_adapter_face_path, ip_adapter_path, width, current_progress,
                           controlnet_canny_path=None):
-        for task in async_task.cn_tasks[flags.cn_canny]:
+        canny_supported = _controlnet_type_supported(async_task.base_model_name, 'canny')
+        for task in async_task.cn_tasks[flags.cn_canny] if canny_supported else ():
             cn_img, cn_stop, cn_weight = task
             cn_img = resize_image(HWC3(cn_img), width=width, height=height)
 
@@ -1124,7 +1150,7 @@ def worker():
                 async_task.current_tab == 'ip' and async_task.mixing_image_prompt_and_vary_upscale)) \
                 and async_task.uov_method != flags.disabled.casefold() and async_task.uov_input_image is not None:
             async_task.uov_input_image, skip_prompt_processing, async_task.steps = prepare_upscale(
-                async_task, goals, async_task.uov_input_image, async_task.uov_method, async_task.performance_selection,
+                async_task, goals, async_task.uov_input_image, async_task.uov_method, async_task.performance_mode,
                 async_task.steps, 1, skip_prompt_processing=skip_prompt_processing)
         if (async_task.current_tab == 'inpaint' or (
                 async_task.current_tab == 'ip' and async_task.mixing_image_prompt_and_inpaint)) \
@@ -1202,7 +1228,11 @@ def worker():
                 async_task.mixing_image_prompt_and_inpaint:
             goals.append('cn')
             progressbar(async_task, 1, 'Downloading control models ...')
-            if len(async_task.cn_tasks[flags.cn_canny]) > 0:
+            # Gated like CPDS below: a family whose controlnet_types omit
+            # 'canny' (e.g. Krea 2) must not download an SDXL ControlNet it
+            # will never apply.
+            if len(async_task.cn_tasks[flags.cn_canny]) > 0 and _controlnet_type_supported(
+                    async_task.base_model_name, 'canny'):
                 family = _controlnet_family(async_task.base_model_name)
                 if family == modules.model_family.ModelFamily.Z_IMAGE:
                     controlnet_canny_path = modules.config.downloading_controlnet_zimage_canny()
@@ -1229,7 +1259,7 @@ def worker():
             async_task.enhance_input_image = HWC3(async_task.enhance_input_image)
         return base_model_additional_loras, clip_vision_path, controlnet_canny_path, controlnet_cpds_path, inpaint_head_model_path, inpaint_image, inpaint_mask, ip_adapter_face_path, ip_adapter_path, ip_negative_path, skip_prompt_processing, use_synthetic_refiner
 
-    def prepare_upscale(async_task, goals, uov_input_image, uov_method, performance, steps, current_progress,
+    def prepare_upscale(async_task, goals, uov_input_image, uov_method, performance_mode, steps, current_progress,
                         advance_progress=False, skip_prompt_processing=False):
         uov_input_image = HWC3(uov_input_image)
         if 'vary' in uov_method:
@@ -1240,7 +1270,7 @@ def worker():
                 skip_prompt_processing = True
                 steps = 0
             else:
-                steps = performance.steps_uov()
+                steps = performance_mode.steps_uov
 
             if advance_progress:
                 current_progress += 1
@@ -1338,7 +1368,7 @@ def worker():
         current_progress = int(base_progress + (100 - preparation_steps) / float(all_steps) * (done_steps_upscaling + done_steps_inpainting))
         goals_enhance = []
         img, skip_prompt_processing, steps = prepare_upscale(
-            async_task, goals_enhance, img, async_task.enhance_uov_method, async_task.performance_selection,
+            async_task, goals_enhance, img, async_task.enhance_uov_method, async_task.performance_mode,
             enhance_steps, current_progress)
         steps, _, _, _ = apply_overrides(async_task, steps, height, width)
         exception_result = ''
@@ -1535,12 +1565,12 @@ def worker():
         all_steps = steps * async_task.image_number
 
         if async_task.enhance_checkbox and async_task.enhance_uov_method != flags.disabled.casefold():
-            enhance_upscale_steps = async_task.performance_selection.steps()
+            enhance_upscale_steps = async_task.performance_mode.steps
             if 'upscale' in async_task.enhance_uov_method:
                 if 'fast' in async_task.enhance_uov_method:
                     enhance_upscale_steps = 0
                 else:
-                    enhance_upscale_steps = async_task.performance_selection.steps_uov()
+                    enhance_upscale_steps = async_task.performance_mode.steps_uov
             enhance_upscale_steps, _, _, _ = apply_overrides(async_task, enhance_upscale_steps, height, width)
             enhance_upscale_steps_total = async_task.image_number * enhance_upscale_steps
             all_steps += enhance_upscale_steps_total

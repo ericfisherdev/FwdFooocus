@@ -96,6 +96,20 @@ def _build_companions(
 
 # The callables delegate late-bound through `modules.config` (lambdas) so they
 # resolve the config helpers at call time, as the pipeline's direct calls do.
+# Krea 2's Raw and Turbo variants are separate model families (see
+# modules.model_family) that load the same text encoder and VAE, so both
+# families share one entry.
+_KREA2_COMPANIONS = _build_companions(
+    text_encoder_file=modules.config.KREA2_TEXT_ENCODER_FILENAME,
+    text_encoder_url=modules.config.KREA2_TEXT_ENCODER_URL,
+    text_encoder_path=lambda: modules.config.krea2_text_encoder_path(),
+    download_text_encoder=lambda: modules.config.downloading_krea2_text_encoder(),
+    vae_file=modules.config.QWEN_IMAGE_VAE_FILENAME,
+    vae_url=modules.config.QWEN_IMAGE_VAE_URL,
+    vae_path=lambda: modules.config.qwen_image_vae_path(),
+    download_vae=lambda: modules.config.downloading_qwen_image_vae(),
+)
+
 COMPANIONS: dict[ModelFamily, FamilyCompanions] = {
     ModelFamily.Z_IMAGE: _build_companions(
         text_encoder_file=modules.config.Z_IMAGE_TEXT_ENCODER_FILENAME,
@@ -107,16 +121,8 @@ COMPANIONS: dict[ModelFamily, FamilyCompanions] = {
         vae_path=lambda: modules.config.z_image_vae_path(),
         download_vae=lambda: modules.config.downloading_z_image_vae(),
     ),
-    ModelFamily.KREA2: _build_companions(
-        text_encoder_file=modules.config.KREA2_TEXT_ENCODER_FILENAME,
-        text_encoder_url=modules.config.KREA2_TEXT_ENCODER_URL,
-        text_encoder_path=lambda: modules.config.krea2_text_encoder_path(),
-        download_text_encoder=lambda: modules.config.downloading_krea2_text_encoder(),
-        vae_file=modules.config.QWEN_IMAGE_VAE_FILENAME,
-        vae_url=modules.config.QWEN_IMAGE_VAE_URL,
-        vae_path=lambda: modules.config.qwen_image_vae_path(),
-        download_vae=lambda: modules.config.downloading_qwen_image_vae(),
-    ),
+    ModelFamily.KREA2_RAW: _KREA2_COMPANIONS,
+    ModelFamily.KREA2_TURBO: _KREA2_COMPANIONS,
 }
 
 

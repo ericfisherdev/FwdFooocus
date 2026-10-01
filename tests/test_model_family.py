@@ -18,7 +18,14 @@ _original_argv = sys.argv
 sys.argv = [sys.argv[0]]
 try:
     from modules import model_family  # noqa: E402
-    from modules.flags import Performance, guidance_scale_range, sampler_list, scheduler_list, sdxl_aspect_ratios  # noqa: E402
+    from modules.flags import (  # noqa: E402
+        Performance,
+        guidance_scale_range,
+        krea2_aspect_ratios,
+        sampler_list,
+        scheduler_list,
+        sdxl_aspect_ratios,
+    )
 finally:
     sys.argv = _original_argv
 
@@ -177,6 +184,177 @@ class TestZImageEntry(unittest.TestCase):
         self.assertNotIn('align_your_steps', self.z_image.scheduler_names)
 
 
+class _Krea2EntryContract:
+    """What Krea 2's Raw and Turbo registry entries share (FWDF-152).
+
+    Not collected itself (no `Test` prefix, no TestCase base): the concrete
+    subclasses below bind `family` and add the values that differ.
+    """
+
+    family: model_family.ModelFamily
+
+    def setUp(self):
+        self.caps = model_family.get_capabilities(self.family)
+
+    def test_distinct_from_sdxl_and_z_image(self):
+        self.assertIsNot(self.caps, model_family.get_capabilities(model_family.ModelFamily.SDXL))
+        self.assertIsNot(self.caps, model_family.get_capabilities(model_family.ModelFamily.Z_IMAGE))
+
+    def test_sdxl_only_features_are_off(self):
+        for flag in ('supports_refiner', 'supports_adm_guidance', 'supports_freeu', 'supports_clip_skip',
+                     'supports_adaptive_cfg', 'supports_sharpness', 'supports_ip_adapter',
+                     'supports_inpaint_engine', 'supports_vae_override'):
+            with self.subTest(flag=flag):
+                self.assertFalse(getattr(self.caps, flag))
+
+    def test_controlnet_unsupported_because_hooks_are_unet_block_patches(self):
+        self.assertFalse(self.caps.supports_controlnet)
+        self.assertEqual(self.caps.controlnet_types, ())
+
+    def test_sixteen_channel_latent_matching_the_model_config(self):
+        from ldm_patched.modules import supported_models
+        self.assertEqual(self.caps.latent_channels, 16)
+        self.assertEqual(self.caps.latent_channels, supported_models.Krea2.latent_format.latent_channels)
+
+    def test_exactly_one_performance_mode_and_default_steps_follow_it(self):
+        self.assertEqual(len(self.caps.performance_modes), 1)
+        self.assertEqual(self.caps.default_steps, self.caps.performance_modes[0].steps)
+
+    def test_performance_mode_is_unrestricted_and_loraless(self):
+        mode = self.caps.performance_modes[0]
+        self.assertFalse(mode.restricted)
+        self.assertIsNone(mode.lora_filename)
+        self.assertEqual(mode.steps_uov, mode.steps)
+
+    def test_samplers_and_schedulers_start_with_the_effective_defaults(self):
+        # The UIs fall back to the first entry when the configured SDXL
+        # default is not valid for the family.
+        self.assertEqual(self.caps.sampler_names, ('euler', 'euler_ancestral'))
+        self.assertEqual(self.caps.scheduler_names, ('simple', 'normal'))
+
+    def test_scheduler_names_exclude_hardcoded_architecture_specific_ones(self):
+        self.assertNotIn('turbo', self.caps.scheduler_names)
+        self.assertNotIn('align_your_steps', self.caps.scheduler_names)
+
+    def test_samplers_and_schedulers_are_known_to_flags(self):
+        self.assertTrue(set(self.caps.sampler_names) <= set(sampler_list))
+        self.assertTrue(set(self.caps.scheduler_names) <= set(scheduler_list))
+
+    def test_aspect_ratios_reach_2048_and_are_patch_aligned(self):
+        self.assertEqual(self.caps.aspect_ratios, tuple(krea2_aspect_ratios))
+        self.assertIn('2048*2048', self.caps.aspect_ratios)
+        for entry in self.caps.aspect_ratios:
+            width, height = (int(side) for side in entry.split('*'))
+            with self.subTest(entry=entry):
+                # DiT patch size 2 x VAE downscale 8.
+                self.assertEqual(width % 16, 0)
+                self.assertEqual(height % 16, 0)
+
+    def test_native_resolution_range_is_derived_from_the_aspect_ratios(self):
+        self.assertEqual(self.caps.native_resolution_range,
+                         model_family._native_resolution_range(self.caps.aspect_ratios))
+        self.assertEqual(self.caps.native_resolution_range, (1024.0, 2048.0))
+
+    def test_default_cfg_lies_inside_the_cfg_range(self):
+        low, high = self.caps.cfg_range
+        self.assertGreaterEqual(self.caps.default_cfg, low)
+        self.assertLessEqual(self.caps.default_cfg, high)
+
+    def test_resolves_its_own_mode_label(self):
+        label = self.caps.performance_modes[0].label
+        self.assertIs(model_family.resolve_performance_mode(label, self.caps), self.caps.performance_modes[0])
+
+
+class TestKrea2RawEntry(_Krea2EntryContract, unittest.TestCase):
+    family = model_family.ModelFamily.KREA2_RAW
+
+    def test_single_52_step_raw_mode(self):
+        mode = self.caps.performance_modes[0]
+        self.assertEqual(mode.label, 'Raw')
+        self.assertEqual(mode.steps, 52)
+        self.assertEqual(self.caps.default_steps, 52)
+
+    def test_negative_prompt_works_with_ordinary_cfg(self):
+        self.assertTrue(self.caps.supports_negative_prompt)
+        self.assertEqual(self.caps.default_cfg, 3.5)
+        # The unconditional pass is only skipped at exactly 1.0, so Raw must
+        # allow values above it.
+        self.assertGreater(self.caps.cfg_range[1], 1.0)
+
+
+class TestKrea2TurboEntry(_Krea2EntryContract, unittest.TestCase):
+    family = model_family.ModelFamily.KREA2_TURBO
+
+    def test_single_8_step_turbo_mode(self):
+        mode = self.caps.performance_modes[0]
+        self.assertEqual(mode.label, 'Turbo')
+        self.assertEqual(mode.steps, 8)
+        self.assertEqual(self.caps.default_steps, 8)
+
+    def test_cfg_is_pinned_at_exactly_one(self):
+        # samplers.py / patch.py skip the unconditional pass only when
+        # math.isclose(cond_scale, 1.0); below 1 would interpolate toward the
+        # negative prompt instead of being CFG-free.
+        self.assertEqual(self.caps.default_cfg, 1.0)
+        self.assertEqual(self.caps.cfg_range, (1.0, 1.0))
+
+    def test_negative_prompt_hidden(self):
+        self.assertFalse(self.caps.supports_negative_prompt)
+
+
+class TestKrea2VariantsDiffer(unittest.TestCase):
+    def test_variants_are_separate_registry_entries(self):
+        raw = model_family.get_capabilities(model_family.ModelFamily.KREA2_RAW)
+        turbo = model_family.get_capabilities(model_family.ModelFamily.KREA2_TURBO)
+        self.assertIsNot(raw, turbo)
+        self.assertNotEqual(model_family.ModelFamily.KREA2_RAW.value, model_family.ModelFamily.KREA2_TURBO.value)
+
+    def test_variants_agree_on_everything_but_the_variant_values(self):
+        raw = model_family.get_capabilities(model_family.ModelFamily.KREA2_RAW)
+        turbo = model_family.get_capabilities(model_family.ModelFamily.KREA2_TURBO)
+        variant_fields = {'supports_negative_prompt', 'performance_modes', 'default_cfg', 'cfg_range', 'default_steps'}
+        for field in dataclasses.fields(raw):
+            if field.name in variant_fields:
+                continue
+            with self.subTest(field=field.name):
+                self.assertEqual(getattr(raw, field.name), getattr(turbo, field.name))
+
+
+class TestResolvePerformanceMode(unittest.TestCase):
+    def setUp(self):
+        self.z_image = model_family.get_capabilities(model_family.ModelFamily.Z_IMAGE)
+        self.sdxl = model_family.get_capabilities(model_family.ModelFamily.SDXL)
+
+    def test_family_label_resolves_to_the_family_mode(self):
+        mode = model_family.resolve_performance_mode('Turbo', self.z_image)
+        self.assertIs(mode, self.z_image.performance_modes[0])
+
+    def test_every_sdxl_label_resolves_to_its_own_mode(self):
+        for expected in self.sdxl.performance_modes:
+            with self.subTest(label=expected.label):
+                self.assertIs(model_family.resolve_performance_mode(expected.label, self.sdxl), expected)
+
+    def test_legacy_label_resolves_for_a_family_that_does_not_declare_it(self):
+        # The Gradio radio can still carry a legacy label when a non-SDXL
+        # checkpoint is selected; tasks have always accepted those.
+        mode = model_family.resolve_performance_mode('Speed', self.z_image)
+        self.assertEqual(mode.steps, Performance.SPEED.steps())
+
+    def test_family_label_wins_over_a_same_named_legacy_label(self):
+        synthetic = _make_blank_capabilities(performance_modes=(
+            model_family.PerformanceMode(label='Speed', steps=7, steps_uov=7, cfg=None,
+                                         lora_filename=None, restricted=False),))
+        self.assertEqual(model_family.resolve_performance_mode('Speed', synthetic).steps, 7)
+
+    def test_unknown_label_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            model_family.resolve_performance_mode('Warp', self.z_image)
+
+    def test_a_family_label_is_not_valid_for_another_family(self):
+        with self.assertRaises(ValueError):
+            model_family.resolve_performance_mode('Raw', self.z_image)
+
+
 class TestUnknownFallback(unittest.TestCase):
     def test_unknown_is_identical_to_sdxl(self):
         sdxl = model_family.FAMILY_CAPABILITIES[model_family.ModelFamily.SDXL]
@@ -184,21 +362,26 @@ class TestUnknownFallback(unittest.TestCase):
         self.assertIs(unknown, sdxl)
 
     def test_get_capabilities_falls_back_to_unknown_for_unpopulated_family(self):
-        # KREA2 is a Krea 2 backlog placeholder with no registry entry yet.
-        # Z_IMAGE has a real entry as of FWDF-127 (see TestZImageEntry).
+        # A family that was never registered, as a local Enum so the test
+        # does not depend on which real families happen to be registered.
+        class UnregisteredFamily(Enum):
+            WIDGET = 'widget'
+
         sdxl = model_family.get_capabilities(model_family.ModelFamily.SDXL)
-        self.assertIs(model_family.get_capabilities(model_family.ModelFamily.KREA2), sdxl)
+        self.assertIs(model_family.get_capabilities(UnregisteredFamily.WIDGET), sdxl)
 
     def test_fallback_routes_through_the_unknown_entry_not_a_hardcoded_default(self):
         # Swap in a distinct UNKNOWN descriptor: unregistered families must
         # resolve to it, proving get_capabilities() reads the UNKNOWN entry
-        # rather than defaulting to SDXL directly. KREA2 stands in for an
-        # unregistered family (Z_IMAGE has a real entry as of FWDF-127).
+        # rather than defaulting to SDXL directly.
+        class UnregisteredFamily(Enum):
+            WIDGET = 'widget'
+
         original = model_family.FAMILY_CAPABILITIES[model_family.ModelFamily.UNKNOWN]
         distinct = dataclasses.replace(original, supports_freeu=not original.supports_freeu)
         model_family.FAMILY_CAPABILITIES[model_family.ModelFamily.UNKNOWN] = distinct
         try:
-            self.assertIs(model_family.get_capabilities(model_family.ModelFamily.KREA2), distinct)
+            self.assertIs(model_family.get_capabilities(UnregisteredFamily.WIDGET), distinct)
         finally:
             model_family.FAMILY_CAPABILITIES[model_family.ModelFamily.UNKNOWN] = original
 

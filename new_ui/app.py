@@ -302,23 +302,16 @@ def _build_generate_args(body: dict) -> list:
     performance_selection = _resolve_performance_selection(
         body.get("performance_selection", body.get("performance")), caps, config.default_performance
     )
-    # AsyncTask does Performance(performance_selection) with the legacy enum
-    # (modules/flags.py); a family-specific mode label outside that enum
-    # (e.g. Z-Image's 'Turbo') would raise ValueError at task creation. Map
-    # such labels to the legacy 'Speed' member and carry the mode's step
-    # count via overwrite_step (unless the caller set one explicitly).
     overwrite_step = int(body.get("overwrite_step", -1))
-    if performance_selection not in flags.Performance.values():
-        selected_mode = next(
-            (mode for mode in caps.performance_modes if mode.label == performance_selection), None)
-        if selected_mode is not None and overwrite_step < 0:
-            overwrite_step = selected_mode.steps
-        performance_selection = flags.Performance.SPEED.value
     aspect_ratios_selection = _validated_or_default(
         body.get("aspect_ratios_selection"), caps.aspect_ratios, config.default_aspect_ratio
     )
     sharpness = float(body.get("sharpness", config.default_sample_sharpness)) if caps.supports_sharpness else 0.0
-    cfg_scale = float(body.get("cfg_scale", caps.default_cfg))
+    # Clamped to the family's range so a family that pins CFG (Krea 2 Turbo,
+    # exactly 1.0 so the sampler skips the unconditional pass) cannot be
+    # given a value the Gradio slider would also refuse.
+    cfg_minimum, cfg_maximum = caps.cfg_range
+    cfg_scale = min(max(float(body.get("cfg_scale", caps.default_cfg)), cfg_minimum), cfg_maximum)
     # Path-injection boundary (same as base_model_name): the refiner name
     # used downstream is selected FROM the trusted checkpoint list.
     requested_refiner = (
@@ -406,6 +399,8 @@ def _build_generate_args(body: dict) -> list:
         None,  # inpaint_input_image (dict with image+mask)
         "",    # inpaint_additional_prompt
         None,  # inpaint_mask_image_upload
+        "",    # inpaint_eraser_data (AsyncTask pops it since FWDF-189)
+        "",    # inpaint_mask_eraser_data
         # Developer/debug settings
         body.get("disable_preview", False),
         body.get("disable_intermediate_results", False),
