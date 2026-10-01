@@ -50,6 +50,18 @@ class TestDequantizeComfyScaledFp8(unittest.TestCase):
         out = dequantize_comfy_scaled_fp8(state_dict)
         self.assertEqual(set(out.keys()), keys_before)
 
+    def test_all_fp8_dict_without_markers_is_returned_unchanged(self):
+        # Lustify-style flat Krea 2 checkpoint: every tensor is plain float8_e4m3fn
+        # and there is no weight_scale / comfy_quant, so nothing may be rescaled.
+        state_dict = {
+            "blocks.0.attn.wq.weight": torch.randn(4, 4).to(torch.float8_e4m3fn),
+            "blocks.0.attn.qknorm.qnorm.scale": torch.randn(4).to(torch.float8_e4m3fn),
+        }
+        dtypes_before = {k: v.dtype for k, v in state_dict.items()}
+        out = dequantize_comfy_scaled_fp8(state_dict)
+        self.assertIs(out, state_dict)
+        self.assertEqual({k: v.dtype for k, v in out.items()}, dtypes_before)
+
     def test_scale_without_marker_is_accepted_for_fp8_weight(self):
         # Older scaled-fp8 files carry only weight_scale, no comfy_quant marker.
         base = torch.randn(4, 4)

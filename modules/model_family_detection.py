@@ -20,8 +20,10 @@ stay in sync by construction rather than by convention:
     ADM/conditioning signal `detect_unet_config` reads at load time
     (`ldm_patched/modules/model_detection.py`).
   - anything else -> `UNKNOWN`.
-`{prefix}` is `model.diffusion_model.`, matching the `unet_key_prefix`
-`ldm_patched.modules.sd` uses when loading a checkpoint's state dict.
+`{prefix}` is `model.diffusion_model.` for all-in-one checkpoints and empty
+for flat single-file checkpoints (the published Krea 2 files), chosen by
+`ldm_patched.modules.diffusion_model_prefix` -- the same helper
+`ldm_patched.modules.sd` uses when loading, so detection and loading agree.
 """
 
 import logging
@@ -32,16 +34,18 @@ from safetensors import SafetensorError, safe_open
 
 import modules.config
 from modules.fast_checkpoint import resolve_checkpoint_path
+from ldm_patched.modules.diffusion_model_prefix import diffusion_model_prefix
 from modules.model_family import ModelFamily
 
 logger = logging.getLogger(__name__)
 
-_KEY_PREFIX = 'model.diffusion_model.'
-_UNET_KEY = f'{_KEY_PREFIX}input_blocks.0.0.weight'
-_SDXL_ADM_KEY = f'{_KEY_PREFIX}label_emb.0.0.weight'
-_Z_IMAGE_X_EMBEDDER_KEY = f'{_KEY_PREFIX}x_embedder.weight'
-_Z_IMAGE_CAP_EMBEDDER_PREFIX = f'{_KEY_PREFIX}cap_embedder.'
-_KREA2_PROJECTOR_KEY = f'{_KEY_PREFIX}txtfusion.projector.weight'
+# Discriminant key suffixes; `_detect_family_from_keys` prepends the checkpoint's
+# diffusion-model prefix (`model.diffusion_model.` or empty for flat files).
+_UNET_KEY_SUFFIX = 'input_blocks.0.0.weight'
+_SDXL_ADM_KEY_SUFFIX = 'label_emb.0.0.weight'
+_Z_IMAGE_X_EMBEDDER_KEY_SUFFIX = 'x_embedder.weight'
+_Z_IMAGE_CAP_EMBEDDER_KEY_SUFFIX = 'cap_embedder.'
+_KREA2_PROJECTOR_KEY_SUFFIX = 'txtfusion.projector.weight'
 
 _KREA2_FAMILIES = frozenset({ModelFamily.KREA2_RAW, ModelFamily.KREA2_TURBO})
 # One family per value in `modules.config.KREA2_VARIANTS`, the values the
@@ -85,13 +89,20 @@ def _read_state_dict_keys(path: str) -> frozenset[str]:
 
 
 def _detect_family_from_keys(keys: frozenset[str]) -> ModelFamily:
-    """Pure discriminant logic over a checkpoint's tensor name set."""
-    if _Z_IMAGE_X_EMBEDDER_KEY in keys and any(k.startswith(_Z_IMAGE_CAP_EMBEDDER_PREFIX) for k in keys):
+    """Pure discriminant logic over a checkpoint's tensor name set.
+
+    The discriminant keys are looked up under the checkpoint's own
+    diffusion-model prefix, so prefixed and flat layouts both resolve.
+    """
+    prefix = diffusion_model_prefix(keys)
+    if f'{prefix}{_Z_IMAGE_X_EMBEDDER_KEY_SUFFIX}' in keys and any(
+        k.startswith(f'{prefix}{_Z_IMAGE_CAP_EMBEDDER_KEY_SUFFIX}') for k in keys
+    ):
         return ModelFamily.Z_IMAGE
-    if _KREA2_PROJECTOR_KEY in keys:
+    if f'{prefix}{_KREA2_PROJECTOR_KEY_SUFFIX}' in keys:
         return ModelFamily.KREA2_RAW
-    if _UNET_KEY in keys:
-        return ModelFamily.SDXL if _SDXL_ADM_KEY in keys else ModelFamily.SD15
+    if f'{prefix}{_UNET_KEY_SUFFIX}' in keys:
+        return ModelFamily.SDXL if f'{prefix}{_SDXL_ADM_KEY_SUFFIX}' in keys else ModelFamily.SD15
     return ModelFamily.UNKNOWN
 
 
@@ -161,7 +172,12 @@ def get_family(checkpoint_filename: str) -> ModelFamily:
 
     try:
         keys = _read_state_dict_keys(resolved_path)
-        family = _resolve_krea2_variant(checkpoint_filename, _detect_family_from_keys(keys))
+        detected_family = _detect_family_from_keys(keys)
+        if detected_family is ModelFamily.UNKNOWN:
+            # Debug only, and static text: distinguishes "keys matched no
+            # architecture" from the CorruptCheckpointError warning below.
+            logger.debug("Checkpoint '%s' matched no known model family by its tensor names", checkpoint_filename)
+        family = _resolve_krea2_variant(checkpoint_filename, detected_family)
     except CorruptCheckpointError as e:
         logger.warning(f"Could not detect model family for '{checkpoint_filename}': {e}")
         family = ModelFamily.UNKNOWN

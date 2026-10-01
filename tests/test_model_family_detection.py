@@ -1,5 +1,6 @@
 """Unit tests for checkpoint model family detection."""
 
+import json
 import os
 import shutil
 import struct
@@ -43,9 +44,21 @@ _Z_IMAGE_KEYS = [
 _KREA2_KEYS = [
     'model.diffusion_model.txtfusion.projector.weight',
 ]
+_UNPREFIXED_Z_IMAGE_KEYS = ['x_embedder.weight', 'cap_embedder.mlp.weight']
+_KREA2_HEADER_FIXTURES = {
+    'bf16': Path(__file__).parent / 'fixtures' / 'krea2_turbo_bf16_header.json',
+    'lustify fp8': Path(__file__).parent / 'fixtures' / 'krea2_lustify_fp8_header.json',
+}
+_PREFIX = 'model.diffusion_model.'
 _UNRELATED_KEYS = [
     'some.unrelated.tensor.weight',
 ]
+
+
+def _published_krea2_keys(fixture_path):
+    """Tensor names of a published (flat, unprefixed) Krea 2 checkpoint header."""
+    with open(fixture_path) as f:
+        return [name for name in json.load(f) if name != '__metadata__']
 
 
 def _write_checkpoint(path, tensor_names, tensor_shape=(2, 2)):
@@ -113,6 +126,63 @@ class TestFamilyDetection(_CheckpointTestCase):
         with open(garbage_path, 'wb') as f:
             f.write(b'not a safetensors file' * 10)
         self.assertIs(model_family_detection.get_family('garbage.safetensors'), ModelFamily.UNKNOWN)
+
+
+class TestFlatCheckpointDetection(_CheckpointTestCase):
+    """Published single-file Krea 2 / Z-Image checkpoints store their keys flat
+    (no `model.diffusion_model.` prefix); FWDF-205 regression coverage using the
+    real header key names rather than prefixed synthetic keys."""
+
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.object(model_family_detection.modules.config, 'krea2_variant_overrides', {})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_get_family_detects_flat_published_krea2_headers(self):
+        for label, fixture in _KREA2_HEADER_FIXTURES.items():
+            with self.subTest(header=label):
+                keys = _published_krea2_keys(fixture)
+                self.assertFalse(any(k.startswith(_PREFIX) for k in keys))
+                _write_checkpoint(self._checkpoint_path('krea2_raw.safetensors'), keys)
+                model_family_detection._family_cache.clear()
+                self.assertIs(model_family_detection.get_family('krea2_raw.safetensors'), ModelFamily.KREA2_RAW)
+
+    def test_flat_krea2_header_resolves_variant_from_file_name(self):
+        keys = _published_krea2_keys(_KREA2_HEADER_FIXTURES['lustify fp8'])
+        _write_checkpoint(self._checkpoint_path('lustify_turbo.safetensors'), keys)
+        self.assertIs(model_family_detection.get_family('lustify_turbo.safetensors'), ModelFamily.KREA2_TURBO)
+
+    def test_detects_flat_z_image(self):
+        _write_checkpoint(self._checkpoint_path('z_image_flat.safetensors'), _UNPREFIXED_Z_IMAGE_KEYS)
+        self.assertIs(model_family_detection.get_family('z_image_flat.safetensors'), ModelFamily.Z_IMAGE)
+
+    def test_flat_z_image_still_requires_both_discriminant_keys(self):
+        _write_checkpoint(self._checkpoint_path('partial_flat.safetensors'), ['x_embedder.weight'])
+        self.assertIs(model_family_detection.get_family('partial_flat.safetensors'), ModelFamily.UNKNOWN)
+
+    def test_detect_family_from_keys_agrees_with_and_without_prefix(self):
+        flat_keys = _published_krea2_keys(_KREA2_HEADER_FIXTURES['bf16'])
+        prefixed_keys = [_PREFIX + k for k in flat_keys]
+        for label, keys in (('flat', flat_keys), ('prefixed', prefixed_keys)):
+            with self.subTest(layout=label):
+                self.assertIs(
+                    model_family_detection._detect_family_from_keys(frozenset(keys)), ModelFamily.KREA2_RAW
+                )
+
+    def test_flat_keys_that_are_not_a_diffusion_model_stay_unknown(self):
+        self.assertIs(
+            model_family_detection._detect_family_from_keys(frozenset(_UNRELATED_KEYS)), ModelFamily.UNKNOWN
+        )
+
+    def test_flat_unet_only_keys_follow_the_same_prefix_rule(self):
+        # A UNet-only file is a flat diffusion model too, so it resolves the
+        # same way sd.load_checkpoint_guess_config will load it (SD15 here, as
+        # no label_emb key marks it SDXL); it needs an external VAE to load.
+        self.assertIs(
+            model_family_detection._detect_family_from_keys(frozenset({'input_blocks.0.0.weight'})),
+            ModelFamily.SD15,
+        )
 
 
 class TestKrea2VariantResolution(_CheckpointTestCase):

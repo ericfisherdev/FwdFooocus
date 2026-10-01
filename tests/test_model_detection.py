@@ -9,7 +9,9 @@ a KeyError. All state dicts are synthetic (torch tensors of the minimal shapes
 detection reads) -- no real model files are used.
 """
 
+import json
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -19,6 +21,7 @@ from ldm_patched.modules import model_detection
 from ldm_patched.modules import sd as sd_module
 from ldm_patched.modules import supported_models
 from ldm_patched.modules import supported_models_base
+from tests.test_krea2_single_stream_dit import PUBLISHED_PARAMETER_COUNT
 
 
 class _Unmatchable:
@@ -228,6 +231,77 @@ class TestLoadCheckpointGuessConfigOrderingFix(unittest.TestCase):
                 output_clip=False,
                 output_model=False,
             )
+
+
+_FIXTURES = Path(__file__).parent / "fixtures"
+_DIFFUSION_PREFIX = "model.diffusion_model."
+
+
+def _meta_state_dict_from_header(fixture_name, key_prefix=""):
+    """Empty meta tensors with the shapes of a committed checkpoint header: names
+    and shapes only, so a 12.8B-parameter model costs no memory."""
+    with open(_FIXTURES / fixture_name) as f:
+        header = json.load(f)
+    return {
+        key_prefix + name: torch.empty(info["shape"], device="meta")
+        for name, info in header.items()
+        if name != "__metadata__"
+    }
+
+
+class TestLoadCheckpointGuessConfigKrea2Layouts(unittest.TestCase):
+    """FWDF-205: published Krea 2 checkpoints store their keys flat, and
+    load_checkpoint_guess_config used to look for `model.diffusion_model.` only.
+    model_config_from_unet is deliberately NOT mocked -- the earlier header test
+    called it with "" directly and so never exercised the loader's own prefix."""
+
+    FIXTURES = ("krea2_turbo_bf16_header.json", "krea2_lustify_fp8_header.json")
+
+    def _load_headers_only(self, state_dict):
+        detected_configs = []
+        real_detect = model_detection.model_config_from_unet
+
+        def recording_detect(*args, **kwargs):
+            detected_configs.append(real_detect(*args, **kwargs))
+            return detected_configs[-1]
+
+        with patch("ldm_patched.modules.utils.load_torch_file", return_value=state_dict), \
+                patch.object(
+                    sd_module.model_detection, "model_config_from_unet", side_effect=recording_detect,
+                ) as detect_spy, \
+                patch.object(
+                    sd_module.model_management, "unet_dtype",
+                    wraps=sd_module.model_management.unet_dtype,
+                ) as dtype_spy:
+            sd_module.load_checkpoint_guess_config(
+                "krea2.safetensors", output_vae=False, output_clip=False, output_model=False
+            )
+        return detect_spy, dtype_spy, detected_configs
+
+    def _assert_krea2_detected_under(self, fixture, key_prefix):
+        detect_spy, dtype_spy, detected_configs = self._load_headers_only(_meta_state_dict_from_header(fixture, key_prefix))
+
+        detect_spy.assert_called_once()
+        self.assertEqual(detect_spy.call_args.args[1], key_prefix)
+        self.assertIsInstance(detected_configs[0], supported_models.Krea2)
+        self.assertEqual(dtype_spy.call_args.kwargs["model_params"], PUBLISHED_PARAMETER_COUNT)
+
+    def test_flat_keys_load_and_count_every_parameter(self):
+        for fixture in self.FIXTURES:
+            with self.subTest(fixture=fixture):
+                self._assert_krea2_detected_under(fixture, key_prefix="")
+
+    def test_prefixed_keys_still_load_under_the_prefix(self):
+        for fixture in self.FIXTURES:
+            with self.subTest(fixture=fixture):
+                self._assert_krea2_detected_under(fixture, key_prefix=_DIFFUSION_PREFIX)
+
+    def test_flat_file_that_is_not_a_diffusion_model_still_fails_detection(self):
+        with patch("ldm_patched.modules.utils.load_torch_file", return_value={"some.unrelated.weight": torch.zeros(2)}):
+            with pytest.raises(RuntimeError, match="Could not detect model type"):
+                sd_module.load_checkpoint_guess_config(
+                    "mystery.safetensors", output_vae=False, output_clip=False, output_model=False
+                )
 
 
 class TestLoadControlnetGuard(unittest.TestCase):
