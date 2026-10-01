@@ -1,4 +1,5 @@
 import torch
+import json
 import math
 import struct
 import ldm_patched.modules.checkpoint_pickle
@@ -265,6 +266,44 @@ def convert_sd_to(state_dict, dtype):
         state_dict[k] = state_dict[k].to(dtype)
     return state_dict
 
+_COMFY_SCALED_FP8_FORMATS = ("float8_e4m3fn", "float8_e5m2")
+_COMFY_SCALE_SUFFIX = ".weight_scale"
+_COMFY_MARKER_SUFFIX = ".comfy_quant"
+
+
+def _read_comfy_quant_format(marker_key, marker):
+    """Return the `format` named by a `<layer>.comfy_quant` marker, or None when
+    the marker carries no format. The marker is a uint8 tensor of JSON bytes.
+
+    Raises ValueError when the bytes are not a JSON object.
+    """
+    try:
+        metadata = json.loads(marker.numpy().tobytes())
+    except ValueError as e:
+        raise ValueError(f"Unreadable ComfyUI quantization marker '{marker_key}': {e}") from e
+    if not isinstance(metadata, dict):
+        raise ValueError(f"Unreadable ComfyUI quantization marker '{marker_key}': expected a JSON object")
+    return metadata.get("format")
+
+
+def _validate_comfy_scaled_fp8_layer(state_dict, layer, fp8_dtypes):
+    """Raise ValueError unless `layer` is a per-tensor scaled-fp8 layer: marker
+    format absent or float8, an fp8 sibling weight, and a scalar weight_scale."""
+    marker = state_dict.get(layer + _COMFY_MARKER_SUFFIX)
+    scale = state_dict.get(layer + _COMFY_SCALE_SUFFIX)
+    weight = state_dict.get(layer + ".weight")
+    quant_format = None if marker is None else _read_comfy_quant_format(layer + _COMFY_MARKER_SUFFIX, marker)
+    is_supported = ((quant_format is None or quant_format in _COMFY_SCALED_FP8_FORMATS)
+                    and scale is not None and scale.numel() == 1
+                    and weight is not None and weight.dtype in fp8_dtypes)
+    if not is_supported:
+        raise ValueError(
+            f"Unsupported ComfyUI quantized layer '{layer}' (format={quant_format}, "
+            f"weight dtype={getattr(weight, 'dtype', None)}, "
+            f"scale shape={None if scale is None else tuple(scale.shape)}); "
+            "only per-tensor scaled float8 checkpoints can be loaded")
+
+
 def dequantize_comfy_scaled_fp8(state_dict):
     """Fold ComfyUI per-tensor scaled-fp8 weights back into ordinary weights.
 
@@ -275,38 +314,50 @@ def dequantize_comfy_scaled_fp8(state_dict):
     `weight_scale` parameter, so without this step the fp8 weights would load
     un-scaled (garbage) and the scale/marker keys report as unexpected.
 
-    For every `<name>.weight_scale`, multiply the sibling fp8 `<name>.weight`
-    by the scale (cast to the checkpoint's own non-quantized compute dtype) and
-    drop the scale plus the `<name>.comfy_quant` marker. Any remaining fp8
-    tensors carried no scale (stored as plain fp8, e.g. the cap/x pad-token
-    embeddings) and are cast to the compute dtype too, so the returned dict is
-    uniformly loadable -- an fp8 tensor cannot be copied into an unquantized
-    model's bf16/fp16 weight. Non-fp8 weights (a mixed-precision checkpoint
-    keeps most layers in bf16/fp16) are left untouched. A no-op for checkpoints
-    carrying no such markers, so it is safe to run on every checkpoint. Mutates
-    and returns `state_dict`.
+    ComfyUI reuses the `weight_scale` key for other quantization formats
+    (mxfp8 block scales, int8, nvfp4) and tells them apart by the `format` in
+    the marker. Every layer carrying a scale or a marker is therefore validated
+    before anything is modified: the marker format must be absent or
+    float8_e4m3fn/float8_e5m2, the sibling weight must be fp8 and the scale a
+    single value. Anything else raises ValueError naming the layer, rather than
+    loading raw quantized values or failing later with a broadcast error.
+
+    For each valid layer, multiply the fp8 `<name>.weight` by the scale (cast to
+    the checkpoint's own non-quantized compute dtype) and drop the scale plus
+    the `<name>.comfy_quant` marker. Any remaining fp8 tensors carried no scale
+    (stored as plain fp8, e.g. the cap/x pad-token embeddings) and are cast to
+    the compute dtype too, so the returned dict is uniformly loadable -- an fp8
+    tensor cannot be copied into an unquantized model's bf16/fp16 weight.
+    Non-fp8 weights (a mixed-precision checkpoint keeps most layers in
+    bf16/fp16) are left untouched. A no-op for checkpoints carrying no such
+    markers, so it is safe to run on every checkpoint. Mutates and returns
+    `state_dict`.
+
+    Raises:
+        ValueError: a layer is quantized in a format other than per-tensor
+            scaled float8, or its marker cannot be decoded.
     """
-    scale_suffix = ".weight_scale"
-    marker_suffix = ".comfy_quant"
-    scale_keys = list(filter(lambda k: k.endswith(scale_suffix), state_dict.keys()))
-    marker_keys = list(filter(lambda k: k.endswith(marker_suffix), state_dict.keys()))
-    if len(scale_keys) == 0 and len(marker_keys) == 0:
+    quantized_layers = sorted({
+        key[:-len(suffix)]
+        for key in state_dict
+        for suffix in (_COMFY_SCALE_SUFFIX, _COMFY_MARKER_SUFFIX)
+        if key.endswith(suffix)
+    })
+    if len(quantized_layers) == 0:
         return state_dict
 
     fp8_dtypes = (torch.float8_e4m3fn, torch.float8_e5m2)
     compute_dtype = next((v.dtype for v in state_dict.values()
                           if v.dtype in (torch.bfloat16, torch.float16)), torch.float32)
 
-    for scale_key in scale_keys:
-        weight_key = scale_key[:-len(scale_suffix)] + ".weight"
-        scale = state_dict.pop(scale_key)
-        weight = state_dict.get(weight_key)
-        if weight is None or weight.dtype not in fp8_dtypes:
-            continue
-        state_dict[weight_key] = weight.to(compute_dtype) * scale.to(compute_dtype)
+    for layer in quantized_layers:
+        _validate_comfy_scaled_fp8_layer(state_dict, layer, fp8_dtypes)
 
-    for marker_key in marker_keys:
-        state_dict.pop(marker_key, None)
+    for layer in quantized_layers:
+        weight_key = layer + ".weight"
+        scale = state_dict.pop(layer + _COMFY_SCALE_SUFFIX)
+        state_dict.pop(layer + _COMFY_MARKER_SUFFIX, None)
+        state_dict[weight_key] = state_dict[weight_key].to(compute_dtype) * scale.to(compute_dtype)
 
     for k in list(state_dict.keys()):
         if state_dict[k].dtype in fp8_dtypes:

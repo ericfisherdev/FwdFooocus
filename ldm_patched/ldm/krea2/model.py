@@ -12,10 +12,12 @@ Comfy-Org/Krea-2 `diffusion_models/krea2_turbo_bf16.safetensors` (430 tensors,
 
 Only the plain text-to-image forward path is implemented. The reference's
 editing-only paths (`ref_latents`, `timestep_zero_index`, 5-D temporal input,
-`attn1_patch` hooks) are deliberately not ported. Only the `*_bf16` checkpoints
-carry the plain key set this module loads; the `*_fp8_scaled`, `*_int8_convrot`,
-`*_mxfp8` and `*_nvfp4` variants add `weight_scale` tensors plus quantization
-metadata that `ldm_patched` has no loader for, so they are unsupported here.
+`attn1_patch` hooks) are deliberately not ported. The `*_bf16` checkpoints
+carry the plain key set this module loads, and `*_fp8_scaled` checkpoints are
+folded back into plain weights at load (`dequantize_comfy_scaled_fp8`). The
+`*_int8_convrot`, `*_mxfp8` and `*_nvfp4` variants add `weight_scale` tensors
+plus quantization metadata in formats `ldm_patched` has no loader for, so they
+are rejected at load with a ValueError naming the layer.
 
 Wiring into `supported_models`/`model_base` (FWDF-132), the text encoder
 (FWDF-133) and the pipeline (FWDF-152) build on this module.

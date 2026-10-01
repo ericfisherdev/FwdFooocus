@@ -61,16 +61,13 @@ class _CheckpointTestCase(unittest.TestCase):
         self.checkpoint_dir = tempfile.mkdtemp()
         self._original_paths_checkpoints = model_family_detection.modules.config.paths_checkpoints
         self._original_path_fast_checkpoints = model_family_detection.modules.config.path_fast_checkpoints
-        self._original_default_base_model = model_family_detection.modules.config.default_base_model
         model_family_detection.modules.config.paths_checkpoints = [self.checkpoint_dir]
         model_family_detection.modules.config.path_fast_checkpoints = None
-        model_family_detection.modules.config.default_base_model = None
         model_family_detection._family_cache.clear()
 
     def tearDown(self):
         model_family_detection.modules.config.paths_checkpoints = self._original_paths_checkpoints
         model_family_detection.modules.config.path_fast_checkpoints = self._original_path_fast_checkpoints
-        model_family_detection.modules.config.default_base_model = self._original_default_base_model
         model_family_detection._family_cache.clear()
         shutil.rmtree(self.checkpoint_dir, ignore_errors=True)
 
