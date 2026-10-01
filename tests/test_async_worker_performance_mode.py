@@ -193,20 +193,3 @@ class TestTaskConstructionFromGenerateArgs:
 
         assert task.performance_selection is flags.Performance.QUALITY
         assert task.steps == flags.Performance.QUALITY.steps()
-
-
-class TestDownstreamUsesTheResolvedMode:
-    def test_session_snapshot_records_the_family_label(self, family_of_requested_checkpoint):
-        family_of_requested_checkpoint['family'] = ModelFamily.KREA2_TURBO
-        task = _task_for()
-        task._apply_performance_mode('Turbo')
-        for name in ('prompt', 'negative_prompt', 'style_selections', 'refiner_model_name', 'vae_name',
-                     'sampler_name', 'scheduler_name', 'cfg_scale', 'image_number', 'sharpness',
-                     'seed', 'aspect_ratios_selection'):
-            setattr(task, name, None)
-        task.loras = []
-
-        snapshot = async_worker._build_session_state(task)
-
-        assert snapshot['performance'] == 'Turbo'
-        assert snapshot['steps'] == 8

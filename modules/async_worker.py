@@ -8,7 +8,6 @@ from PIL import Image
 from extras.inpaint_mask import generate_mask_from_image, SAMOptions, ADetailerOptions
 from modules.heartbeat import is_browser_connected
 from modules.patch import PatchSettings, patch_settings, patch_all
-from modules.session_state import save_state as save_session_state
 import modules.config
 import modules.model_family
 import modules.model_family_detection
@@ -259,32 +258,6 @@ def apply_eraser_mask(mask, eraser_mask):
 
 async_tasks = []
 current_task = None
-
-
-def _build_session_state(task: AsyncTask) -> dict:
-    """Extract UI state from a completed task for session persistence."""
-    state = {
-        'prompt': task.prompt,
-        'negative_prompt': task.negative_prompt,
-        'style_selections': task.style_selections,
-        'base_model_name': task.base_model_name,
-        'refiner_model_name': task.refiner_model_name,
-        'vae_name': task.vae_name,
-        'loras': [
-            {'filename': filename, 'weight': weight}
-            for filename, weight in task.loras
-        ],
-        'sampler': task.sampler_name,
-        'scheduler': task.scheduler_name,
-        'steps': task.original_steps,
-        'cfg_scale': task.cfg_scale,
-        'performance': task.performance_label,
-        'image_number': task.image_number,
-        'sharpness': task.sharpness,
-        'seed': task.seed,
-        'aspect_ratios_selection': task.aspect_ratios_selection,
-    }
-    return state
 
 
 def _inpaint_family_lacks_engine_head(base_model_name: str) -> bool:
@@ -1834,17 +1807,6 @@ def worker():
                 if task.generate_image_grid:
                     build_image_wall(task)
                 task.yields.append(['finish', task.results])
-                # Save session state for resume-on-close, keyed on the
-                # detected model family of the checkpoint this task used
-                # (falls back to modules.config.default_base_model for
-                # checkpoints whose family cannot be detected).
-                try:
-                    save_session_state(
-                        modules.model_family_detection.session_state_id(task.base_model_name),
-                        _build_session_state(task)
-                    )
-                except Exception as e:
-                    print(f'[Session] Failed to save state: {type(e).__name__}: {e}')
                 pipeline.prepare_text_encoder(async_call=True)
             except:
                 traceback.print_exc()
