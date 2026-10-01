@@ -1,8 +1,10 @@
 """Model family capability registry.
 
 This module is the central Open/Closed extension point for architecture
-support: adding a new model family (e.g. a future Krea 2 backlog entry)
-means adding one `ModelFamily` member and one `FAMILY_CAPABILITIES` entry.
+support: adding a new model family means adding one `ModelFamily` member and
+one `FAMILY_CAPABILITIES` entry. A model whose variants differ in family-level
+values (Krea 2's Raw vs Turbo differ in steps, CFG and negative-prompt
+support) registers one `ModelFamily` member per variant.
 Consumers (pipeline, Gradio UI, new-UI API) look up capabilities through
 `get_capabilities()` instead of hardcoding SDXL assumptions.
 
@@ -25,7 +27,15 @@ from dataclasses import dataclass
 from enum import Enum
 
 import modules.config
-from modules.flags import Performance, Steps, guidance_scale_range, sampler_list, scheduler_list, sdxl_aspect_ratios
+from modules.flags import (
+    Performance,
+    Steps,
+    guidance_scale_range,
+    krea2_aspect_ratios,
+    sampler_list,
+    scheduler_list,
+    sdxl_aspect_ratios,
+)
 
 
 class ModelFamily(Enum):
@@ -34,7 +44,8 @@ class ModelFamily(Enum):
     SDXL = 'sdxl'
     SD15 = 'sd15'
     Z_IMAGE = 'z_image'
-    KREA2 = 'krea2'
+    KREA2_RAW = 'krea2_raw'
+    KREA2_TURBO = 'krea2_turbo'
     UNKNOWN = 'unknown'
 
 
@@ -294,10 +305,117 @@ def _build_z_image_capabilities() -> FamilyCapabilities:
 
 _Z_IMAGE_CAPABILITIES = _build_z_image_capabilities()
 
+
+def _build_krea2_capabilities(
+        *,
+        performance_mode: PerformanceMode,
+        default_cfg: float,
+        cfg_range: tuple[float, float],
+        supports_negative_prompt: bool,
+) -> FamilyCapabilities:
+    """The values Krea 2's Raw and Turbo variants share (FWDF-152); the
+    arguments are exactly the values that differ between them.
+
+    Krea 2 is a flow-matching SingleStreamDiT with a Qwen3-VL-4B text encoder
+    and the 16-channel Qwen Image VAE. Like Z-Image it has no refiner, ADM
+    guidance, FreeU or CLIP-skip, and adaptive_cfg / sharpness are SDXL
+    eps-space heuristics. Unlike Z-Image it has no guidance distillation, so
+    two-pass CFG applies and the negative prompt is meaningful wherever CFG
+    is above 1.
+
+    ControlNet, IP-Adapter and the inpaint engine are all declared
+    unsupported: each is wired in through UNet block-indexed patch hooks (the
+    SDXL ControlNet/InpaintHead/IP-Adapter patches) that have no equivalent in
+    this DiT. Masked inpainting itself still works through the sampler-level
+    mask in modules/patch.py.
+
+    Sampler/scheduler order matters: the UIs fall back to the first entry
+    when the configured SDXL default (dpmpp_2m_sde_gpu / karras) is not valid
+    for the family, so `euler` and `simple` are the effective defaults. As for
+    Z-Image, 'turbo' and 'align_your_steps' schedulers are architecture-
+    specific (see this module's docstring) and excluded.
+    """
+    return FamilyCapabilities(
+        supports_refiner=False,
+        supports_adm_guidance=False,
+        supports_freeu=False,
+        supports_clip_skip=False,
+        supports_adaptive_cfg=False,
+        supports_sharpness=False,
+        supports_negative_prompt=supports_negative_prompt,
+        supports_controlnet=False,
+        controlnet_types=(),
+        supports_ip_adapter=False,
+        supports_inpaint_engine=False,
+        supports_vae_override=False,
+        vae_names=None,
+        performance_modes=(performance_mode,),
+        sampler_names=('euler', 'euler_ancestral'),
+        scheduler_names=('simple', 'normal'),
+        aspect_ratios=tuple(krea2_aspect_ratios),
+        native_resolution_range=_native_resolution_range(tuple(krea2_aspect_ratios)),
+        default_cfg=default_cfg,
+        cfg_range=cfg_range,
+        default_steps=performance_mode.steps,
+        latent_channels=16,
+    )
+
+
+def _build_krea2_raw_capabilities() -> FamilyCapabilities:
+    """Krea 2 Raw: the undistilled 52-step model, run with ordinary two-pass
+    CFG, so the negative prompt works. `cfg_range` is a UI bound, not a
+    model-documented limit."""
+    raw = PerformanceMode(
+        label='Raw',
+        steps=52,
+        steps_uov=52,
+        cfg=None,
+        lora_filename=None,
+        restricted=False,
+    )
+    return _build_krea2_capabilities(
+        performance_mode=raw,
+        default_cfg=3.5,
+        cfg_range=(1.0, 10.0),
+        supports_negative_prompt=True,
+    )
+
+
+def _build_krea2_turbo_capabilities() -> FamilyCapabilities:
+    """Krea 2 Turbo: the 8-step distilled variant, effectively CFG-free.
+
+    CFG is pinned to exactly 1.0 rather than a "0.0-1.0" range because
+    `ldm_patched/modules/samplers.py` and `modules/patch.py` only skip the
+    unconditional pass when `math.isclose(cond_scale, 1.0)`; any value below 1
+    interpolates toward the negative-prompt prediction, which is neither
+    CFG-free nor cheaper. With the pass skipped the negative prompt has no
+    effect, so the control is hidden.
+    """
+    turbo = PerformanceMode(
+        label='Turbo',
+        steps=8,
+        steps_uov=8,
+        cfg=None,
+        lora_filename=None,
+        restricted=False,
+    )
+    return _build_krea2_capabilities(
+        performance_mode=turbo,
+        default_cfg=1.0,
+        cfg_range=(1.0, 1.0),
+        supports_negative_prompt=False,
+    )
+
+
+_KREA2_RAW_CAPABILITIES = _build_krea2_raw_capabilities()
+_KREA2_TURBO_CAPABILITIES = _build_krea2_turbo_capabilities()
+
 FAMILY_CAPABILITIES: dict[ModelFamily, FamilyCapabilities] = {
     ModelFamily.SDXL: _SDXL_CAPABILITIES,
     ModelFamily.SD15: _SD15_CAPABILITIES,
     ModelFamily.Z_IMAGE: _Z_IMAGE_CAPABILITIES,
+    ModelFamily.KREA2_RAW: _KREA2_RAW_CAPABILITIES,
+    ModelFamily.KREA2_TURBO: _KREA2_TURBO_CAPABILITIES,
     # UNKNOWN must resolve to the exact same object as SDXL (identity, not
     # a duplicate literal) so unrecognized checkpoints keep today's
     # behavior and the two stay in lockstep by construction.
@@ -314,3 +432,24 @@ def get_capabilities(family: ModelFamily) -> FamilyCapabilities:
     lookups -- consumers should not index `FAMILY_CAPABILITIES` directly.
     """
     return FAMILY_CAPABILITIES.get(family, FAMILY_CAPABILITIES[ModelFamily.UNKNOWN])
+
+
+def resolve_performance_mode(label: str, caps: FamilyCapabilities) -> PerformanceMode:
+    """Resolve a UI performance label to its `PerformanceMode`.
+
+    A label the family declares wins. Otherwise a legacy `Performance` label
+    (Quality, Speed, ...) resolves to its SDXL-built mode, because the Gradio
+    radio can still carry one while a non-SDXL family's checkpoint is being
+    selected and every task has always accepted those.
+
+    Raises:
+        ValueError: `label` is neither one of `caps.performance_modes` nor a
+            legacy `Performance` label.
+    """
+    for mode in (*caps.performance_modes, *_SDXL_CAPABILITIES.performance_modes):
+        if mode.label == label:
+            return mode
+    raise ValueError(
+        f"{label!r} is not a performance mode for this model family "
+        f"(valid: {[mode.label for mode in caps.performance_modes]}) nor a legacy Performance label"
+    )

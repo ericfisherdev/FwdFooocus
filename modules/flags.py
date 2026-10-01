@@ -120,6 +120,15 @@ sdxl_aspect_ratios = [
     '1664*576', '1728*576'
 ]
 
+# Krea 2 (FWDF-152): every side is a multiple of 16 (DiT patch size 2 x VAE
+# downscale 8). The first block is the ~1-megapixel set, the second the 2K set
+# that gives the family its 2048-capable resolutions.
+krea2_aspect_ratios = [
+    '1024*1024', '1152*864', '1216*832', '1344*768', '1536*640',
+    '896*1120', '832*1248', '768*1344',
+    '1536*1536', '2048*1536', '1536*2048', '2048*1152', '1152*2048', '2048*2048'
+]
+
 
 class MetadataScheme(Enum):
     FOOOCUS = 'fooocus'

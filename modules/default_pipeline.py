@@ -2,12 +2,16 @@ import modules.core as core
 import gc
 import os
 import threading
+from dataclasses import dataclass
+from typing import Callable
+
 import torch
 import modules.patch
 import modules.config
 import modules.flags
 import modules.model_family
 import modules.model_family_detection
+import modules.krea2_text_encoder
 import modules.qwen3_text_encoder
 import ldm_patched.modules.model_management
 import ldm_patched.modules.latent_formats
@@ -15,7 +19,13 @@ import modules.inpaint_worker
 from extras import vae_interpose
 from extras.expansion import FooocusExpansion
 
-from ldm_patched.modules.model_base import SDXL, SDXLRefiner, ZImage as ZImageDiffusionModel
+from ldm_patched.modules.model_base import (
+    Krea2 as Krea2DiffusionModel,
+    SDXL,
+    SDXLRefiner,
+    ZImage as ZImageDiffusionModel,
+)
+from modules.companion_files import COMPANIONS, FamilyCompanions
 from modules.model_family import ModelFamily
 from modules.sample_hijack import clip_separate
 from modules.util import get_file_from_folder_list, get_enabled_loras
@@ -36,6 +46,70 @@ loaded_ControlNets = {}
 
 _pipeline_init_lock = threading.Lock()
 _pipeline_initialized = False
+
+
+@dataclass(frozen=True, slots=True)
+class FamilyAssembly:
+    """How `refresh_base_model()` assembles a multi-file family: a DiT-only
+    checkpoint whose text encoder and VAE are separate companion files.
+
+    `companions` locates and acquires those files; the other fields are what
+    only the pipeline knows -- which diffusion class the checkpoint must load
+    as, how to build the text encoder (a callable that resolves the loader at
+    call time, so the encoder module stays patchable), and the names error
+    messages use. Families absent from `_FAMILY_ASSEMBLY` (SDXL, SD15, UNKNOWN)
+    use the checkpoint's own text encoder and the SDXL path.
+    """
+
+    companions: FamilyCompanions
+    diffusion_model_type: type
+    display_name: str
+    text_encoder_name: str
+    load_text_encoder: Callable[[], object]
+
+
+_Z_IMAGE_ASSEMBLY = FamilyAssembly(
+    companions=COMPANIONS[ModelFamily.Z_IMAGE],
+    diffusion_model_type=ZImageDiffusionModel,
+    display_name='Z-Image',
+    text_encoder_name='Qwen3-4B',
+    load_text_encoder=lambda: modules.qwen3_text_encoder.load_qwen3_text_encoder(),
+)
+
+# Raw and Turbo are separate families only for their capability values; they
+# load the same diffusion class, text encoder and VAE.
+_KREA2_ASSEMBLY = FamilyAssembly(
+    companions=COMPANIONS[ModelFamily.KREA2_RAW],
+    diffusion_model_type=Krea2DiffusionModel,
+    display_name='Krea 2',
+    text_encoder_name='Qwen3-VL-4B',
+    load_text_encoder=lambda: modules.krea2_text_encoder.load_krea2_text_encoder(),
+)
+
+_FAMILY_ASSEMBLY: dict[ModelFamily, FamilyAssembly] = {
+    ModelFamily.Z_IMAGE: _Z_IMAGE_ASSEMBLY,
+    ModelFamily.KREA2_RAW: _KREA2_ASSEMBLY,
+    ModelFamily.KREA2_TURBO: _KREA2_ASSEMBLY,
+}
+
+
+def _integrity_error(model, assembly: FamilyAssembly | None) -> str | None:
+    """The reason `model` (a StableDiffusionModel) is not a usable base model
+    for the family described by `assembly` (None meaning the SDXL path), or
+    None when it is usable."""
+    if assembly is None:
+        if not isinstance(model.unet_with_lora.model, SDXL):
+            return 'You have selected base model other than SDXL. This is not supported yet.'
+        return None
+    if not isinstance(model.unet_with_lora.model, assembly.diffusion_model_type):
+        return f'{assembly.display_name} base model did not load the expected DiT architecture.'
+    if model.clip_with_lora is None:
+        return (f'{assembly.display_name} requires the {assembly.text_encoder_name} text encoder '
+                f'to be loaded; none was assembled.')
+    if model.vae is None:
+        return f'{assembly.display_name} requires a standalone VAE to be loaded; none was assembled.'
+    return None
+
 
 
 @torch.no_grad()
@@ -73,19 +147,8 @@ def refresh_controlnets(model_paths, family):
 @torch.no_grad()
 @torch.inference_mode()
 def assert_model_integrity():
-    error_message = None
-
     family = getattr(model_base, 'family', ModelFamily.UNKNOWN)
-
-    if family == ModelFamily.Z_IMAGE:
-        if not isinstance(model_base.unet_with_lora.model, ZImageDiffusionModel):
-            error_message = 'Z-Image base model did not load the expected DiT architecture.'
-        elif model_base.clip_with_lora is None:
-            error_message = 'Z-Image requires the Qwen3-4B text encoder to be loaded; none was assembled.'
-        elif model_base.vae is None:
-            error_message = 'Z-Image requires a standalone VAE to be loaded; none was assembled.'
-    elif not isinstance(model_base.unet_with_lora.model, SDXL):
-        error_message = 'You have selected base model other than SDXL. This is not supported yet.'
+    error_message = _integrity_error(model_base, _FAMILY_ASSEMBLY.get(family))
 
     if error_message is not None:
         raise NotImplementedError(error_message)
@@ -140,13 +203,15 @@ def refresh_base_model(name, vae_name=None):
     )
     family = modules.model_family_detection.get_family(name)
 
-    if family == ModelFamily.Z_IMAGE:
-        # Z-Image ships as a DiT-only checkpoint: the standalone VAE is a
-        # companion download, not a user-selectable dropdown entry (see
-        # modules.model_family's Z-Image capability entry, supports_vae_override=False).
-        # Only the expected path is computed here (cheap) so the no-op reload
+    assembly = _FAMILY_ASSEMBLY.get(family)
+
+    if assembly is not None:
+        # DiT-only checkpoints ship without a VAE: the standalone VAE is a
+        # companion download, not a user-selectable dropdown entry (the
+        # family's capability entry has supports_vae_override=False). Only
+        # the expected path is computed here (cheap) so the no-op reload
         # short-circuit below stays fast; the verifying download runs after it.
-        vae_filename = modules.config.z_image_vae_path()
+        vae_filename = assembly.companions.vae_path()
     elif vae_name is not None and vae_name != modules.flags.default_vae:
         vae_filename = get_file_from_folder_list(vae_name, modules.config.path_vae)
     else:
@@ -155,8 +220,8 @@ def refresh_base_model(name, vae_name=None):
     if model_base.filename == filename and model_base.vae_filename == vae_filename:
         return
 
-    if family == ModelFamily.Z_IMAGE:
-        modules.config.downloading_z_image_vae()
+    if assembly is not None:
+        assembly.companions.ensure_vae()
 
     _release_model(model_base)
     model_base = core.StableDiffusionModel()
@@ -166,13 +231,14 @@ def refresh_base_model(name, vae_name=None):
     model_base = core.load_model(filename, vae_filename)
     model_base.family = family
 
-    if family == ModelFamily.Z_IMAGE:
-        # The checkpoint's clip_target() is None (ZImage's diffusion weights
-        # carry no text encoder), so core.load_model() leaves model_base.clip
-        # unset; wire the standalone Qwen3-4B encoder (FWDF-122/125) in its
-        # place instead of the (absent) checkpoint CLIP.
-        modules.config.downloading_z_image_text_encoder()
-        model_base.clip = modules.qwen3_text_encoder.load_qwen3_text_encoder()
+    if assembly is not None and model_base.clip is None:
+        # The checkpoint's clip_target() is None (these DiT checkpoints carry
+        # no text encoder), so core.load_model() leaves model_base.clip unset;
+        # wire the family's standalone encoder in its place. The `is None`
+        # guard keeps this correct if a family later wires its encoder
+        # through supported_models.clip_target() instead.
+        assembly.companions.ensure_text_encoder()
+        model_base.clip = assembly.load_text_encoder()
 
     print(f'Base model loaded: {model_base.filename}')
     print(f'VAE loaded: {model_base.vae_filename}')

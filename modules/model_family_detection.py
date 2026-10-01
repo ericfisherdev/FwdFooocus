@@ -9,8 +9,12 @@ Discriminant keys mirror the architecture detection registry added in
 FWDF-116 (`ldm_patched/modules/model_detection.py`) so the two detectors
 stay in sync by construction rather than by convention:
   - `{prefix}x_embedder.weight` + `{prefix}cap_embedder.*` -> `Z_IMAGE`.
-  - `{prefix}txtfusion.projector.weight` -> `KREA2` (backlog family; this
-    detector is inert until Krea 2 lands but costs nothing to include now).
+  - `{prefix}txtfusion.projector.weight` -> a Krea 2 checkpoint. Raw and
+    Turbo share one state-dict layout (distillation does not rename or
+    reshape tensors), so the header cannot tell them apart: the header check
+    yields `KREA2_RAW` as the architecture default and `get_family()` then
+    resolves the variant from the `krea2_variant_overrides` config entry or
+    the checkpoint file name (see `_resolve_krea2_variant`).
   - `{prefix}input_blocks.0.0.weight` -> a UNet checkpoint, disambiguated
     into `SDXL` vs `SD15` via `{prefix}label_emb.0.0.weight`, the same
     ADM/conditioning signal `detect_unet_config` reads at load time
@@ -37,6 +41,11 @@ _SDXL_ADM_KEY = f'{_KEY_PREFIX}label_emb.0.0.weight'
 _Z_IMAGE_X_EMBEDDER_KEY = f'{_KEY_PREFIX}x_embedder.weight'
 _Z_IMAGE_CAP_EMBEDDER_PREFIX = f'{_KEY_PREFIX}cap_embedder.'
 _KREA2_PROJECTOR_KEY = f'{_KEY_PREFIX}txtfusion.projector.weight'
+
+_KREA2_FAMILIES = frozenset({ModelFamily.KREA2_RAW, ModelFamily.KREA2_TURBO})
+# One family per value in `modules.config.KREA2_VARIANTS`, the values the
+# `krea2_variant_overrides` config item may map a checkpoint to.
+_KREA2_VARIANT_FAMILIES = {'raw': ModelFamily.KREA2_RAW, 'turbo': ModelFamily.KREA2_TURBO}
 
 
 class CorruptCheckpointError(Exception):
@@ -74,10 +83,41 @@ def _detect_family_from_keys(keys: frozenset[str]) -> ModelFamily:
     if _Z_IMAGE_X_EMBEDDER_KEY in keys and any(k.startswith(_Z_IMAGE_CAP_EMBEDDER_PREFIX) for k in keys):
         return ModelFamily.Z_IMAGE
     if _KREA2_PROJECTOR_KEY in keys:
-        return ModelFamily.KREA2
+        return ModelFamily.KREA2_RAW
     if _UNET_KEY in keys:
         return ModelFamily.SDXL if _SDXL_ADM_KEY in keys else ModelFamily.SD15
     return ModelFamily.UNKNOWN
+
+
+def _resolve_krea2_variant(checkpoint_filename: str, family: ModelFamily) -> ModelFamily:
+    """Pick Krea 2's Raw or Turbo family for a checkpoint the header check
+    classified as Krea 2. Any other family is returned unchanged.
+
+    Precedence: a `modules.config.krea2_variant_overrides` entry (looked up by
+    the filename exactly as given, then by its basename), else the
+    case-insensitive substrings `turbo` / `raw` in the basename. A name that
+    contains both or neither is ambiguous: it resolves to `KREA2_RAW` and
+    logs a warning naming the file and the config key that fixes it.
+    """
+    if family not in _KREA2_FAMILIES:
+        return family
+
+    basename = os.path.basename(checkpoint_filename)
+    overrides = modules.config.krea2_variant_overrides
+    override = overrides.get(checkpoint_filename, overrides.get(basename))
+    if override is not None:
+        return _KREA2_VARIANT_FAMILIES[override]
+
+    lowered = basename.lower()
+    named_variants = [variant for variant in _KREA2_VARIANT_FAMILIES if variant in lowered]
+    if len(named_variants) == 1:
+        return _KREA2_VARIANT_FAMILIES[named_variants[0]]
+
+    logger.warning(
+        f"Cannot tell whether Krea 2 checkpoint '{checkpoint_filename}' is Raw or Turbo from its file name; "
+        f"assuming Raw. Add \"{basename}\": \"turbo\" (or \"raw\") to 'krea2_variant_overrides' in config.txt."
+    )
+    return ModelFamily.KREA2_RAW
 
 
 def get_family(checkpoint_filename: str) -> ModelFamily:
@@ -111,7 +151,7 @@ def get_family(checkpoint_filename: str) -> ModelFamily:
 
     try:
         keys = _read_state_dict_keys(resolved_path)
-        family = _detect_family_from_keys(keys)
+        family = _resolve_krea2_variant(checkpoint_filename, _detect_family_from_keys(keys))
     except CorruptCheckpointError as e:
         logger.warning(f"Could not detect model family for '{checkpoint_filename}': {e}")
         family = ModelFamily.UNKNOWN

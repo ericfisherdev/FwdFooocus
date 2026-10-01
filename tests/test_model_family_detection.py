@@ -93,10 +93,6 @@ class TestFamilyDetection(_CheckpointTestCase):
         _write_checkpoint(self._checkpoint_path('z_image.safetensors'), _Z_IMAGE_KEYS)
         self.assertIs(model_family_detection.get_family('z_image.safetensors'), ModelFamily.Z_IMAGE)
 
-    def test_detects_krea2(self):
-        _write_checkpoint(self._checkpoint_path('krea2.safetensors'), _KREA2_KEYS)
-        self.assertIs(model_family_detection.get_family('krea2.safetensors'), ModelFamily.KREA2)
-
     def test_unknown_for_unrecognized_keys(self):
         _write_checkpoint(self._checkpoint_path('mystery.safetensors'), _UNRELATED_KEYS)
         self.assertIs(model_family_detection.get_family('mystery.safetensors'), ModelFamily.UNKNOWN)
@@ -120,6 +116,110 @@ class TestFamilyDetection(_CheckpointTestCase):
         with open(garbage_path, 'wb') as f:
             f.write(b'not a safetensors file' * 10)
         self.assertIs(model_family_detection.get_family('garbage.safetensors'), ModelFamily.UNKNOWN)
+
+
+class TestKrea2VariantResolution(_CheckpointTestCase):
+    """Raw and Turbo share one state-dict layout, so the header only proves
+    "Krea 2"; the variant comes from the config override or the file name."""
+
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.object(model_family_detection.modules.config, 'krea2_variant_overrides', {})
+        self.overrides = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _family_of(self, filename):
+        _write_checkpoint(self._checkpoint_path(filename), _KREA2_KEYS)
+        return model_family_detection.get_family(filename)
+
+    def test_header_alone_defaults_to_raw(self):
+        self.assertIs(model_family_detection._detect_family_from_keys(frozenset(_KREA2_KEYS)), ModelFamily.KREA2_RAW)
+
+    def test_turbo_filename_resolves_to_turbo(self):
+        self.assertIs(self._family_of('krea2_turbo_bf16.safetensors'), ModelFamily.KREA2_TURBO)
+
+    def test_raw_filename_resolves_to_raw(self):
+        self.assertIs(self._family_of('krea2_raw_bf16.safetensors'), ModelFamily.KREA2_RAW)
+
+    def test_filename_match_is_case_insensitive(self):
+        self.assertIs(self._family_of('Krea2-TURBO.safetensors'), ModelFamily.KREA2_TURBO)
+
+    def test_only_the_basename_is_searched(self):
+        # A directory called "turbo" must not decide the variant of a file
+        # whose own name says raw.
+        os.makedirs(self._checkpoint_path('turbo'))
+        self.assertIs(self._family_of(os.path.join('turbo', 'krea2_raw.safetensors')), ModelFamily.KREA2_RAW)
+
+    def test_ambiguous_filename_falls_back_to_raw_with_a_warning(self):
+        with self.assertLogs(model_family_detection.logger, level='WARNING') as logs:
+            family = self._family_of('krea2.safetensors')
+        self.assertIs(family, ModelFamily.KREA2_RAW)
+        self.assertIn('krea2.safetensors', logs.output[0])
+        self.assertIn('krea2_variant_overrides', logs.output[0])
+
+    def test_filename_naming_both_variants_is_ambiguous(self):
+        with self.assertLogs(model_family_detection.logger, level='WARNING'):
+            family = self._family_of('krea2_raw_to_turbo_merge.safetensors')
+        self.assertIs(family, ModelFamily.KREA2_RAW)
+
+    def test_a_clear_filename_does_not_warn(self):
+        with self.assertNoLogs(model_family_detection.logger, level='WARNING'):
+            self._family_of('krea2_turbo.safetensors')
+
+    def test_override_beats_the_filename(self):
+        self.overrides['krea2_raw_bf16.safetensors'] = 'turbo'
+        self.assertIs(self._family_of('krea2_raw_bf16.safetensors'), ModelFamily.KREA2_TURBO)
+
+    def test_override_resolves_an_otherwise_ambiguous_filename_without_warning(self):
+        self.overrides['krea2.safetensors'] = 'turbo'
+        with self.assertNoLogs(model_family_detection.logger, level='WARNING'):
+            family = self._family_of('krea2.safetensors')
+        self.assertIs(family, ModelFamily.KREA2_TURBO)
+
+    def test_override_may_be_keyed_by_basename_for_a_subfolder_checkpoint(self):
+        self.overrides['krea2_final.safetensors'] = 'turbo'
+        os.makedirs(self._checkpoint_path('krea'))
+        self.assertIs(self._family_of(os.path.join('krea', 'krea2_final.safetensors')), ModelFamily.KREA2_TURBO)
+
+    def test_override_for_another_file_does_not_apply(self):
+        self.overrides['other.safetensors'] = 'turbo'
+        with self.assertLogs(model_family_detection.logger, level='WARNING'):
+            family = self._family_of('krea2.safetensors')
+        self.assertIs(family, ModelFamily.KREA2_RAW)
+
+    def test_filename_heuristic_never_reclassifies_other_families(self):
+        _write_checkpoint(self._checkpoint_path('turbo_xl.safetensors'), _SDXL_KEYS)
+        self.assertIs(model_family_detection.get_family('turbo_xl.safetensors'), ModelFamily.SDXL)
+        _write_checkpoint(self._checkpoint_path('z_image_turbo.safetensors'), _Z_IMAGE_KEYS)
+        self.assertIs(model_family_detection.get_family('z_image_turbo.safetensors'), ModelFamily.Z_IMAGE)
+
+    def test_session_state_id_is_keyed_per_variant(self):
+        _write_checkpoint(self._checkpoint_path('krea2_turbo.safetensors'), _KREA2_KEYS)
+        _write_checkpoint(self._checkpoint_path('krea2_raw.safetensors'), _KREA2_KEYS)
+        self.assertEqual(model_family_detection.session_state_id('krea2_turbo.safetensors'), 'krea2_turbo')
+        self.assertEqual(model_family_detection.session_state_id('krea2_raw.safetensors'), 'krea2_raw')
+
+
+class TestKrea2VariantOverridesConfig(unittest.TestCase):
+    """The `krea2_variant_overrides` config item and its validator."""
+
+    def test_defaults_to_an_empty_mapping(self):
+        self.assertEqual(model_family_detection.modules.config.krea2_variant_overrides, {})
+
+    def test_every_config_variant_has_a_family(self):
+        self.assertEqual(set(model_family_detection.modules.config.KREA2_VARIANTS),
+                         set(model_family_detection._KREA2_VARIANT_FAMILIES))
+
+    def test_validator_accepts_filename_to_variant_mappings(self):
+        is_valid = model_family_detection.modules.config.is_valid_krea2_variant_overrides
+        self.assertTrue(is_valid({}))
+        self.assertTrue(is_valid({'a.safetensors': 'raw', 'b.safetensors': 'turbo'}))
+
+    def test_validator_rejects_malformed_values(self):
+        is_valid = model_family_detection.modules.config.is_valid_krea2_variant_overrides
+        for value in ({'a.safetensors': 'fast'}, {'a.safetensors': None}, {1: 'raw'}, ['a.safetensors'], 'turbo', None):
+            with self.subTest(value=value):
+                self.assertFalse(is_valid(value))
 
 
 class _SpyOpen:

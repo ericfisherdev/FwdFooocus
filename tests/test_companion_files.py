@@ -44,14 +44,20 @@ class TestGetCompanions:
             modules.config.path_text_encoders, 'qwen_3_4b.safetensors')
 
     def test_krea2_entry_points_at_krea2_files(self):
-        companions = companion_files.get_companions(ModelFamily.KREA2)
+        companions = companion_files.get_companions(ModelFamily.KREA2_RAW)
 
         assert companions is not None
         assert companions.text_encoder_path() == modules.config.krea2_text_encoder_path()
         assert companions.vae_path() == modules.config.qwen_image_vae_path()
 
 
-@pytest.mark.parametrize('family', [ModelFamily.Z_IMAGE, ModelFamily.KREA2])
+def test_krea2_variants_share_one_companion_entry():
+    # Raw and Turbo are separate families but load the same encoder and VAE.
+    assert companion_files.get_companions(ModelFamily.KREA2_RAW) is companion_files.get_companions(
+        ModelFamily.KREA2_TURBO)
+
+
+@pytest.mark.parametrize('family', [ModelFamily.Z_IMAGE, ModelFamily.KREA2_RAW])
 class TestEnsureSuccess:
     def test_ensure_text_encoder_returns_path_after_verified_download(self, family):
         companions = companion_files.get_companions(family)
@@ -81,7 +87,7 @@ _DOWNLOAD_FAILURES = [
 @pytest.mark.parametrize('failure', _DOWNLOAD_FAILURES, ids=lambda f: type(f).__name__)
 class TestEnsureFailure:
     def test_krea2_text_encoder_failure_is_actionable(self, failure):
-        companions = companion_files.get_companions(ModelFamily.KREA2)
+        companions = companion_files.get_companions(ModelFamily.KREA2_RAW)
         with patch('modules.config.load_file_from_url', side_effect=failure):
             with pytest.raises(companion_files.MissingCompanionFileError) as excinfo:
                 companions.ensure_text_encoder()
@@ -95,7 +101,7 @@ class TestEnsureFailure:
         assert error.__cause__ is failure
 
     def test_krea2_vae_failure_is_actionable(self, failure):
-        companions = companion_files.get_companions(ModelFamily.KREA2)
+        companions = companion_files.get_companions(ModelFamily.KREA2_RAW)
         with patch('modules.config.load_file_from_url', side_effect=failure):
             with pytest.raises(companion_files.MissingCompanionFileError) as excinfo:
                 companions.ensure_vae()
@@ -119,7 +125,7 @@ class TestEnsureFailure:
 
 def test_error_names_the_mirror_url_actually_requested(monkeypatch):
     monkeypatch.setenv('HF_MIRROR', 'https://hf-mirror.example/')
-    companions = companion_files.get_companions(ModelFamily.KREA2)
+    companions = companion_files.get_companions(ModelFamily.KREA2_RAW)
     with patch('modules.config.load_file_from_url', side_effect=OSError('unreachable')):
         with pytest.raises(companion_files.MissingCompanionFileError) as excinfo:
             companions.ensure_vae()
@@ -132,7 +138,7 @@ def test_error_names_the_mirror_url_actually_requested(monkeypatch):
 
 def test_error_names_canonical_url_when_no_mirror_is_set(monkeypatch):
     monkeypatch.delenv('HF_MIRROR', raising=False)
-    companions = companion_files.get_companions(ModelFamily.KREA2)
+    companions = companion_files.get_companions(ModelFamily.KREA2_RAW)
     with patch('modules.config.load_file_from_url', side_effect=OSError('unreachable')):
         with pytest.raises(companion_files.MissingCompanionFileError) as excinfo:
             companions.ensure_text_encoder()
@@ -141,7 +147,7 @@ def test_error_names_canonical_url_when_no_mirror_is_set(monkeypatch):
 
 
 def test_unrelated_exceptions_are_not_swallowed():
-    companions = companion_files.get_companions(ModelFamily.KREA2)
+    companions = companion_files.get_companions(ModelFamily.KREA2_RAW)
     with patch('modules.config.load_file_from_url', side_effect=KeyboardInterrupt):
         with pytest.raises(KeyboardInterrupt):
             companions.ensure_vae()

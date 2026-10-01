@@ -278,19 +278,19 @@ class TestBuildGenerateArgsFamilyAware:
     IDX_CFG_SCALE = 11
     IDX_REFINER_MODEL_NAME = 13
     IDX_REFINER_SWITCH = 14
-    IDX_ADM_SCALER_POSITIVE = 27
-    IDX_ADM_SCALER_NEGATIVE = 28
-    IDX_ADM_SCALER_END = 29
-    IDX_ADAPTIVE_CFG = 30
-    IDX_CLIP_SKIP = 31
-    IDX_SAMPLER_NAME = 32
-    IDX_SCHEDULER_NAME = 33
-    IDX_VAE_NAME = 34
-    IDX_OVERWRITE_STEP = 35
-    IDX_FREEU_ENABLED = 49
+    IDX_ADM_SCALER_POSITIVE = 29
+    IDX_ADM_SCALER_NEGATIVE = 30
+    IDX_ADM_SCALER_END = 31
+    IDX_ADAPTIVE_CFG = 32
+    IDX_CLIP_SKIP = 33
+    IDX_SAMPLER_NAME = 34
+    IDX_SCHEDULER_NAME = 35
+    IDX_VAE_NAME = 36
+    IDX_OVERWRITE_STEP = 37
+    IDX_FREEU_ENABLED = 51
     IDX_OUTPUT_FORMAT = 7
-    IDX_SAVE_METADATA_TO_IMAGES = 63
-    IDX_METADATA_SCHEME = 64
+    IDX_SAVE_METADATA_TO_IMAGES = 65
+    IDX_METADATA_SCHEME = 66
 
     def _zero_length_padding_patches(self) -> list:
         return [
@@ -413,11 +413,11 @@ class TestBuildGenerateArgsFamilyAware:
 
         assert args[self.IDX_SAMPLER_NAME] == "euler"
         assert args[self.IDX_SCHEDULER_NAME] == "simple"
-        # 'Fast' is not a legacy flags.Performance member: AsyncTask would
-        # raise ValueError on it, so the builder maps it to 'Speed' and
-        # carries the mode's step count via overwrite_step.
-        assert args[self.IDX_PERFORMANCE_SELECTION] == "Speed"
-        assert args[self.IDX_OVERWRITE_STEP] == 20
+        # 'Fast' is not a legacy flags.Performance member; the builder passes
+        # the family's own label through untouched (AsyncTask resolves it
+        # against the family's performance modes) and sets no step override.
+        assert args[self.IDX_PERFORMANCE_SELECTION] == "Fast"
+        assert args[self.IDX_OVERWRITE_STEP] == -1
         assert args[self.IDX_ASPECT_RATIOS_SELECTION] == "512*512"
 
     def test_omitted_metadata_fields_fall_back_to_config_defaults(self):
@@ -454,13 +454,42 @@ class TestBuildGenerateArgsFamilyAware:
         for label in ("Lightning", "Extreme Speed", "Hyper-SD"):
             args = self._build({"performance_selection": label}, family=ModelFamily.Z_IMAGE)
             resolved = args[self.IDX_PERFORMANCE_SELECTION]
-            # Z-Image's only mode is 'Turbo', which the legacy-enum mapping
-            # resolves to 'Speed' (a non-restricted Performance) — assert the
-            # exact successful fallback, not merely the absence of an accel label.
-            assert resolved == flags.Performance.SPEED.value, (
-                f"{label!r} should resolve to the Z-Image fallback 'Speed', got {resolved!r}"
+            # Z-Image's only mode is 'Turbo': the request resolves to it, and
+            # that label is outside the legacy Performance enum, so none of
+            # the accel-LoRA setup branches can run.
+            assert resolved == "Turbo", (
+                f"{label!r} should resolve to the Z-Image mode 'Turbo', got {resolved!r}"
             )
-            assert not flags.Performance.has_restricted_features(resolved)
+            assert resolved not in flags.Performance.values()
+
+    def test_family_mode_label_is_passed_through_without_a_step_override(self):
+        for family, label in ((ModelFamily.Z_IMAGE, "Turbo"),
+                              (ModelFamily.KREA2_RAW, "Raw"),
+                              (ModelFamily.KREA2_TURBO, "Turbo")):
+            args = self._build({"performance_selection": label}, family=family)
+            assert args[self.IDX_PERFORMANCE_SELECTION] == label
+            assert args[self.IDX_OVERWRITE_STEP] == -1
+
+    def test_krea2_defaults_come_from_the_registry(self):
+        raw = self._build({}, family=ModelFamily.KREA2_RAW)
+        assert raw[self.IDX_PERFORMANCE_SELECTION] == "Raw"
+        assert raw[self.IDX_CFG_SCALE] == 3.5
+        assert raw[self.IDX_SAMPLER_NAME] == "euler"
+        assert raw[self.IDX_SCHEDULER_NAME] == "simple"
+        turbo = self._build({}, family=ModelFamily.KREA2_TURBO)
+        assert turbo[self.IDX_PERFORMANCE_SELECTION] == "Turbo"
+        assert turbo[self.IDX_CFG_SCALE] == 1.0
+
+    def test_cfg_scale_is_clamped_to_the_family_range(self):
+        assert self._build({"cfg_scale": 7.0}, family=ModelFamily.KREA2_TURBO)[self.IDX_CFG_SCALE] == 1.0
+        assert self._build({"cfg_scale": 30.0}, family=ModelFamily.KREA2_RAW)[self.IDX_CFG_SCALE] == 10.0
+        assert self._build({"cfg_scale": 0.0}, family=ModelFamily.KREA2_RAW)[self.IDX_CFG_SCALE] == 1.0
+        assert self._build({"cfg_scale": 5.0}, family=ModelFamily.KREA2_RAW)[self.IDX_CFG_SCALE] == 5.0
+
+    def test_krea2_turbo_drops_the_negative_prompt(self):
+        body = {"negative_prompt": "blurry"}
+        assert self._build(body, family=ModelFamily.KREA2_TURBO)[self.IDX_NEGATIVE_PROMPT] == ""
+        assert self._build(body, family=ModelFamily.KREA2_RAW)[self.IDX_NEGATIVE_PROMPT] == "blurry"
 
 
 class TestCheckpointNameBoundary:
