@@ -553,6 +553,7 @@ class ImageModeWanVAE(WanVAE):
 WAN21_VAE_DETECTION_KEY = "decoder.middle.0.residual.0.gamma"
 WAN22_VAE_LAYOUT_KEY = "decoder.upsamples.0.upsamples.0.residual.2.weight"
 WAN21_LATENT_CHANNELS = 16
+RGB_CHANNELS = 3
 
 
 def is_wan21_vae_state_dict(sd):
@@ -567,9 +568,20 @@ def is_wan21_vae_state_dict(sd):
 def wan21_vae_config(sd):
     """`ImageModeWanVAE` kwargs derived from a Wan 2.1 VAE state dict.
 
-    Shape-derived so RGB and RGBA variants both load: `dim` from the decoder
-    head norm gamma, input/output channels from `encoder.conv1` / `decoder.head.2`.
+    `dim` is derived from the decoder head norm gamma. Only RGB checkpoints are
+    supported: `sd.VAE` encodes/decodes 3-channel images, so a variant with
+    another channel count (e.g. RGBA) is rejected here instead of failing on
+    first use.
+
+    Raises:
+        ValueError: if the checkpoint's input or output channel count is not 3.
     """
+    image_channels = sd["encoder.conv1.weight"].shape[1]
+    conv_out_channels = sd["decoder.head.2.weight"].shape[0]
+    if image_channels != RGB_CHANNELS or conv_out_channels != RGB_CHANNELS:
+        raise ValueError(
+            f"Unsupported Wan 2.1 VAE: {image_channels} input / {conv_out_channels} output "
+            f"channels; only the RGB ({RGB_CHANNELS}-channel) variant is supported.")
     return {
         "dim": sd["decoder.head.0.gamma"].shape[0],
         "z_dim": WAN21_LATENT_CHANNELS,
@@ -577,7 +589,7 @@ def wan21_vae_config(sd):
         "num_res_blocks": 2,
         "attn_scales": [],
         "temperal_downsample": [False, True, True],
-        "image_channels": sd["encoder.conv1.weight"].shape[1],
-        "conv_out_channels": sd["decoder.head.2.weight"].shape[0],
+        "image_channels": image_channels,
+        "conv_out_channels": conv_out_channels,
         "dropout": 0.0,
     }
