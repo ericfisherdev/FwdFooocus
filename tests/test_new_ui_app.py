@@ -206,6 +206,27 @@ class TestCapabilitiesAPI:
         assert data["supports_adm_guidance"] is False
         assert data["sampler_names"] == ["euler"]
 
+    @pytest.mark.parametrize("family, label, steps, supports_negative_prompt, cfg_range", [
+        (ModelFamily.KREA2_RAW, "Raw", 52, True, [1.0, 10.0]),
+        (ModelFamily.KREA2_TURBO, "Turbo", 8, False, [1.0, 1.0]),
+    ])
+    def test_returns_the_registry_descriptor_for_krea2(self, family, label, steps, supports_negative_prompt,
+                                                       cfg_range):
+        # `get_capabilities` is deliberately unpatched: the endpoint must serve
+        # the real registry entry, so a Krea 2 entry that drifts shows up here.
+        with patch("modules.model_family_detection.get_family", return_value=family), \
+                patch.object(config, "model_filenames", ["krea2.safetensors"]):
+            r = client.get("/api/capabilities", params={"checkpoint": "krea2.safetensors"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["family"] == family.value
+        assert data["supports_refiner"] is False
+        assert data["supports_negative_prompt"] is supports_negative_prompt
+        assert data["cfg_range"] == cfg_range
+        assert data["latent_channels"] == 16
+        assert [(mode["label"], mode["steps"]) for mode in data["performance_modes"]] == [(label, steps)]
+        assert "2048*2048" in data["aspect_ratios"]
+
     def test_family_is_a_plain_string_not_an_enum_repr(self):
         with patch("modules.model_family_detection.get_family", return_value=ModelFamily.UNKNOWN), \
              patch.object(config, "model_filenames", ["unknown.safetensors"]):

@@ -21,6 +21,20 @@ class UnsupportedArchitectureError(Exception):
         super().__init__(f"no supported_models entry registered for detected architecture '{architecture_name}'")
 
 
+class MalformedArchitectureError(ValueError):
+    """Raised by an ArchitectureDetector's `detect_config` when a checkpoint
+    carries the keys that identify an architecture but its tensor shapes cannot
+    belong to that architecture (a truncated or corrupt file). Distinct from
+    UnsupportedArchitectureError, which means a well-formed architecture the
+    fork has no supported_models entry for.
+    """
+
+    def __init__(self, architecture_name, reason):
+        self.architecture_name = architecture_name
+        self.reason = reason
+        super().__init__("malformed '{}' checkpoint: {}".format(architecture_name, reason))
+
+
 class ArchitectureDetector(NamedTuple):
     """One entry in the pluggable architecture detection table used by
     model_config_from_unet(). `matches` inspects the checkpoint's state dict keys and
@@ -313,9 +327,58 @@ def matches_krea2(state_dict_keys, key_prefix):
     return all(key in state_dict_keys for key in required)
 
 
+def _require_krea2_shape(state_dict, key, description, valid):
+    """Returns `state_dict[key].shape` when `valid(shape)` holds.
+
+    Raises:
+        MalformedArchitectureError: the tensor's shape violates `description`.
+    """
+    shape = tuple(state_dict[key].shape)
+    if not valid(shape):
+        raise MalformedArchitectureError(
+            "krea2", "'{}' has shape {}; expected {}".format(key, shape, description))
+    return shape
+
+
+def _validate_krea2_shapes(state_dict, key_prefix):
+    """Rejects a checkpoint that carries Krea 2's discriminant keys but whose
+    tensors cannot be a Krea 2 backbone, before `detect_krea2_config` divides
+    by them (a truncated head count would otherwise build a wrong model).
+
+    Raises:
+        MalformedArchitectureError: a detection tensor has an impossible shape.
+    """
+    def is_matrix(shape):
+        return len(shape) == 2 and all(dim > 0 for dim in shape)
+
+    def is_whole_heads(shape):
+        return is_matrix(shape) and shape[0] % KREA2_HEAD_DIM == 0
+
+    _require_krea2_shape(state_dict, '{}first.weight'.format(key_prefix),
+                         "a (features, patch*patch*channels) matrix", is_matrix)
+    _require_krea2_shape(state_dict, '{}txtfusion.projector.weight'.format(key_prefix),
+                         "(1, text layers)", lambda shape: is_matrix(shape) and shape[0] == 1)
+    _require_krea2_shape(state_dict, '{}txtfusion.layerwise_blocks.0.prenorm.scale'.format(key_prefix),
+                         "a non-empty vector", lambda shape: len(shape) == 1 and shape[0] > 0)
+    heads_rows = _require_krea2_shape(
+        state_dict, '{}blocks.0.attn.wq.weight'.format(key_prefix),
+        "a matrix whose row count is a multiple of {}".format(KREA2_HEAD_DIM), is_whole_heads)[0]
+    kvheads_rows = _require_krea2_shape(
+        state_dict, '{}blocks.0.attn.wk.weight'.format(key_prefix),
+        "a matrix whose row count is a multiple of {}".format(KREA2_HEAD_DIM), is_whole_heads)[0]
+    if (heads_rows // KREA2_HEAD_DIM) % (kvheads_rows // KREA2_HEAD_DIM) != 0:
+        raise MalformedArchitectureError(
+            "krea2", "query heads ({}) are not a multiple of key/value heads ({})".format(
+                heads_rows // KREA2_HEAD_DIM, kvheads_rows // KREA2_HEAD_DIM))
+
+
 def detect_krea2_config(state_dict, key_prefix, dtype):
     """Read SingleStreamDiT's (FWDF-131) constructor config off tensor shapes,
     mirroring ComfyUI's comfy/model_detection.py Krea 2 branch.
+
+    Raises:
+        MalformedArchitectureError: the discriminant keys are present but a
+            tensor's shape cannot belong to a Krea 2 backbone.
 
     Known limitations:
       - txtheads / txtkvheads are deliberately not emitted: the text adapter's
@@ -326,6 +389,7 @@ def detect_krea2_config(state_dict, key_prefix, dtype):
         bf16 / fp8 / int8 repackages but wrong for 4-bit packed weights (the
         packed dimension is halved). ComfyUI carries the same caveat.
     """
+    _validate_krea2_shapes(state_dict, key_prefix)
     state_dict_keys = list(state_dict.keys())
 
     features, patchified_channels = state_dict['{}first.weight'.format(key_prefix)].shape
