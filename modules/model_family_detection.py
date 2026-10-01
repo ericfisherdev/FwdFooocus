@@ -158,7 +158,8 @@ def get_family(checkpoint_filename: str) -> ModelFamily:
 
     Never raises: a checkpoint that cannot be found or whose header cannot
     be parsed resolves to `ModelFamily.UNKNOWN`, so this can be called
-    unconditionally from a UI change handler.
+    unconditionally from a UI change handler. An unreadable header is not
+    cached, so the next call re-reads the file.
     """
     resolved_path = resolve_checkpoint_path(
         checkpoint_filename, modules.config.paths_checkpoints, modules.config.path_fast_checkpoints
@@ -186,7 +187,11 @@ def get_family(checkpoint_filename: str) -> ModelFamily:
         family = _resolve_krea2_variant(checkpoint_filename, detected_family)
     except CorruptCheckpointError as e:
         logger.warning(f"Could not detect model family for '{checkpoint_filename}': {e}")
-        family = ModelFamily.UNKNOWN
+        # Not cached: an unreadable header is a transient condition (partial
+        # download, file replaced mid-read) and caching UNKNOWN under the
+        # file's fingerprint would keep it misdetected even once the file is
+        # repaired in place with the same size and mtime.
+        return ModelFamily.UNKNOWN
 
     _family_cache[resolved_path] = (fingerprint, family)
     return family
