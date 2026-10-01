@@ -90,14 +90,14 @@ class TestWan21VAELoading(unittest.TestCase):
         vae, _ = _build_vae(sd)
         self.assertEqual(set(vae.get_sd().keys()), set(sd.keys()))
 
-    def test_rgba_variant_shapes_are_derived_from_the_state_dict(self):
-        sd = _wan_state_dict(image_channels=4, conv_out_channels=4)
-        vae, output = _build_vae(sd)
-
-        self.assertNotIn("Missing VAE keys", output)
-        self.assertNotIn("Leftover VAE keys", output)
-        self.assertEqual(vae.first_stage_model.encoder.conv1.weight.shape[1], 4)
-        self.assertEqual(vae.first_stage_model.decoder.head[2].weight.shape[0], 4)
+    def test_non_rgb_variant_is_rejected_at_load(self):
+        """sd.VAE encodes/decodes 3-channel images, so an RGBA checkpoint must
+        fail loudly at construction rather than mid-pipeline."""
+        for overrides in ({'image_channels': 4}, {'conv_out_channels': 4}):
+            with self.subTest(overrides=overrides):
+                with self.assertRaises(ValueError) as ctx:
+                    VAE(sd=_wan_state_dict(**overrides), device=torch.device('cpu'), dtype=torch.float32)
+                self.assertIn("RGB", str(ctx.exception))
 
     def test_memory_estimators_match_the_comfyui_single_frame_constants(self):
         vae, _ = _build_vae(_wan_state_dict())
