@@ -11,6 +11,7 @@ from . import gligen
 from . import diffusers_convert
 from . import model_base
 from . import model_detection
+from .diffusion_model_prefix import diffusion_model_prefix
 
 from . import sd1_clip
 from . import sd2_clip
@@ -463,6 +464,7 @@ def require_embedded_vae_state_dict(vae_sd, ckpt_path):
 def load_checkpoint_guess_config(ckpt_path, output_vae=True, output_clip=True, output_clipvision=False, embedding_directory=None, output_model=True, vae_filename_param=None):
     sd = ldm_patched.modules.utils.load_torch_file(ckpt_path)
     sd_keys = sd.keys()
+    unet_prefix = diffusion_model_prefix(sd_keys)
     clip = None
     clipvision = None
     vae = None
@@ -471,7 +473,7 @@ def load_checkpoint_guess_config(ckpt_path, output_vae=True, output_clip=True, o
     model_patcher = None
     clip_target = None
 
-    parameters = ldm_patched.modules.utils.calculate_parameters(sd, "model.diffusion_model.")
+    parameters = ldm_patched.modules.utils.calculate_parameters(sd, unet_prefix)
     unet_dtype = model_management.unet_dtype(model_params=parameters)
     load_device = model_management.get_torch_device()
     manual_cast_dtype = model_management.unet_manual_cast(unet_dtype, load_device)
@@ -480,7 +482,7 @@ def load_checkpoint_guess_config(ckpt_path, output_vae=True, output_clip=True, o
         pass
 
     try:
-        model_config = model_detection.model_config_from_unet(sd, "model.diffusion_model.", unet_dtype)
+        model_config = model_detection.model_config_from_unet(sd, unet_prefix, unet_dtype)
     except model_detection.UnsupportedArchitectureError as e:
         raise RuntimeError(f"ERROR: Detected architecture '{e.architecture_name}' for {ckpt_path} but no model config is registered for it yet.") from e
     except model_detection.MalformedArchitectureError as e:
@@ -498,8 +500,8 @@ def load_checkpoint_guess_config(ckpt_path, output_vae=True, output_clip=True, o
     if output_model:
         inital_load_device = model_management.unet_inital_load_device(parameters, unet_dtype)
         offload_device = model_management.unet_offload_device()
-        model = model_config.get_model(sd, "model.diffusion_model.", device=inital_load_device)
-        model.load_model_weights(sd, "model.diffusion_model.")
+        model = model_config.get_model(sd, unet_prefix, device=inital_load_device)
+        model.load_model_weights(sd, unet_prefix)
 
     if output_vae:
         if vae_filename_param is None:

@@ -32,6 +32,7 @@ finally:
     sys.argv = _original_argv
 
 import ldm_patched.ldm.krea2.model  # noqa: E402
+from tests.test_krea2_single_stream_dit import fp8_storage_supported  # noqa: E402
 from ldm_patched.modules import conds  # noqa: E402
 from ldm_patched.modules import latent_formats  # noqa: E402
 from ldm_patched.modules import model_base  # noqa: E402
@@ -306,6 +307,9 @@ class _Krea2ModelTestCase(unittest.TestCase):
             self.manual_cast_dtype = None
             self.sampling_settings = {"shift": math.exp(1.15), "multiplier": 1.0}
 
+        def process_unet_state_dict(self, state_dict):
+            return state_dict
+
     @staticmethod
     def tiny_unet_config():
         return dict(
@@ -338,6 +342,36 @@ class TestKrea2ModelBaseWiring(_Krea2ModelTestCase):
 
     def test_does_not_override_apply_model(self):
         self.assertIs(model_base.Krea2.apply_model, model_base.BaseModel.apply_model)
+
+
+@unittest.skipUnless(fp8_storage_supported(), "torch build lacks float8_e4m3fn CPU casts")
+class TestKrea2LoadFlatFp8Weights(_Krea2ModelTestCase):
+    """The Lustify checkpoint stores every tensor (norm scales, biases, modulation
+    included) as float8_e4m3fn under flat keys; loading must restore them into the
+    model's own dtype with nothing missing or unexpected."""
+
+    def test_flat_all_fp8_state_dict_loads_into_model_dtype(self):
+        model = self.tiny_model()
+        dtypes_before = {name: p.dtype for name, p in model.diffusion_model.named_parameters()}
+        flat_fp8 = {
+            name: tensor.detach().to(torch.float8_e4m3fn)
+            for name, tensor in model.diffusion_model.state_dict().items()
+        }
+
+        load_results = []
+        real_load = model.diffusion_model.load_state_dict
+
+        def recording_load(*args, **kwargs):
+            load_results.append(real_load(*args, **kwargs))
+            return load_results[-1]
+
+        with mock.patch.object(model.diffusion_model, "load_state_dict", side_effect=recording_load):
+            model.load_model_weights(flat_fp8, "")
+
+        (missing, unexpected), = load_results
+        self.assertEqual((missing, unexpected), ([], []))
+        self.assertEqual(flat_fp8, {})
+        self.assertEqual({name: p.dtype for name, p in model.diffusion_model.named_parameters()}, dtypes_before)
 
 
 class TestKrea2ExtraConds(_Krea2ModelTestCase):
@@ -434,7 +468,12 @@ def _read_safetensors_header(path):
 
 
 _REAL_CHECKPOINT = _find_real_krea2_checkpoint()
-_HEADER_FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "krea2_turbo_bf16_header.json")
+# The published bf16 header and the Lustify Krea 2 fp8 header (all F8_E4M3):
+# identical key set, so the second pins that the dtype is irrelevant to detection.
+_HEADER_FIXTURES = {
+    name: os.path.join(os.path.dirname(__file__), "fixtures", name)
+    for name in ("krea2_turbo_bf16_header.json", "krea2_lustify_fp8_header.json")
+}
 
 
 class _HeaderDetectionAssertions:
@@ -457,8 +496,14 @@ class TestKrea2HeaderFixture(_HeaderDetectionAssertions, unittest.TestCase):
     """CI-safe: the committed tensor-name/shape header of the published bf16 checkpoint."""
 
     def test_fixture_header_detects_published_dims(self):
-        with open(_HEADER_FIXTURE) as f:
-            self.assert_header_detects_published_dims(json.load(f))
+        for name, path in _HEADER_FIXTURES.items():
+            with self.subTest(fixture=name), open(path) as f:
+                self.assert_header_detects_published_dims(json.load(f))
+
+    def test_fp8_fixture_is_entirely_float8_e4m3(self):
+        with open(_HEADER_FIXTURES["krea2_lustify_fp8_header.json"]) as f:
+            header = json.load(f)
+        self.assertEqual({info["dtype"] for info in header.values()}, {"F8_E4M3"})
 
 
 @unittest.skipIf(_REAL_CHECKPOINT is None, "no local krea2_*_bf16.safetensors checkpoint")
