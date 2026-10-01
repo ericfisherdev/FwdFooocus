@@ -174,9 +174,10 @@ def get_family(checkpoint_filename: str) -> ModelFamily:
         keys = _read_state_dict_keys(resolved_path)
         detected_family = _detect_family_from_keys(keys)
         if detected_family is ModelFamily.UNKNOWN:
-            # Debug only, and static text: distinguishes "keys matched no
-            # architecture" from the CorruptCheckpointError warning below.
-            logger.debug("Checkpoint '%s' matched no known model family by its tensor names", checkpoint_filename)
+            # Debug only, and deliberately static for the same CodeQL reason as
+            # the Krea 2 variant warning: distinguishes "tensor names matched no
+            # architecture" from the CorruptCheckpointError warning.
+            logger.debug("Checkpoint tensor names matched no known model family")
         family = _resolve_krea2_variant(checkpoint_filename, detected_family)
     except CorruptCheckpointError as e:
         logger.warning(f"Could not detect model family for '{checkpoint_filename}': {e}")
