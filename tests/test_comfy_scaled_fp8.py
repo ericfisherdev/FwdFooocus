@@ -4,11 +4,17 @@ ComfyUI per-tensor scaled-fp8 weights (float8_e4m3fn `.weight` + scalar
 time, so such checkpoints load into this fork's unquantized models correctly.
 """
 
+import json
 import unittest
 
 import torch
 
 from ldm_patched.modules.utils import dequantize_comfy_scaled_fp8
+
+
+def _marker(**metadata):
+    """Build a `.comfy_quant` marker the way ComfyUI stores it: JSON bytes in a uint8 tensor."""
+    return torch.tensor(list(json.dumps(metadata).encode()), dtype=torch.uint8)
 
 
 class TestDequantizeComfyScaledFp8(unittest.TestCase):
@@ -19,7 +25,7 @@ class TestDequantizeComfyScaledFp8(unittest.TestCase):
         state_dict = {
             "layers.1.attn.weight": fp8_weight,
             "layers.1.attn.weight_scale": scale,
-            "layers.1.attn.comfy_quant": torch.zeros(4, dtype=torch.uint8),
+            "layers.1.attn.comfy_quant": _marker(format="float8_e4m3fn"),
             # a genuine bf16 layer fixes the target compute dtype
             "layers.0.attn.weight": base.to(torch.bfloat16),
         }
@@ -44,14 +50,80 @@ class TestDequantizeComfyScaledFp8(unittest.TestCase):
         out = dequantize_comfy_scaled_fp8(state_dict)
         self.assertEqual(set(out.keys()), keys_before)
 
-    def test_orphan_scale_on_non_fp8_weight_is_dropped_but_weight_untouched(self):
-        # Defensive: a weight_scale whose sibling weight is (unexpectedly) not
-        # fp8 must NOT be applied, but the stray scale is still cleaned up.
-        weight = torch.ones(4, 4, dtype=torch.bfloat16)
-        state_dict = {"x.weight": weight.clone(), "x.weight_scale": torch.tensor(3.0)}
+    def test_scale_without_marker_is_accepted_for_fp8_weight(self):
+        # Older scaled-fp8 files carry only weight_scale, no comfy_quant marker.
+        base = torch.randn(4, 4)
+        state_dict = {
+            "x.weight": base.to(torch.float8_e4m3fn),
+            "x.weight_scale": torch.tensor(2.0),
+            "ref.weight": base.to(torch.bfloat16),
+        }
         out = dequantize_comfy_scaled_fp8(state_dict)
         self.assertNotIn("x.weight_scale", out)
-        torch.testing.assert_close(out["x.weight"], weight)
+        self.assertEqual(out["x.weight"].dtype, torch.bfloat16)
+
+    def test_int8_marker_with_scalar_scale_is_rejected(self):
+        state_dict = {
+            "x.weight": torch.ones(4, 4, dtype=torch.int8),
+            "x.weight_scale": torch.tensor(3.0),
+            "x.comfy_quant": _marker(format="int8_tensorwise"),
+        }
+        with self.assertRaisesRegex(ValueError, r"'x'.*int8_tensorwise.*torch\.int8"):
+            dequantize_comfy_scaled_fp8(state_dict)
+        self.assertIn("x.weight_scale", state_dict)
+        self.assertIn("x.comfy_quant", state_dict)
+
+    def test_mxfp8_block_scale_is_rejected(self):
+        state_dict = {
+            "x.weight": torch.randn(4, 64).to(torch.float8_e4m3fn),
+            "x.weight_scale": torch.ones(4, 2),
+            "x.comfy_quant": _marker(format="mxfp8"),
+        }
+        with self.assertRaisesRegex(ValueError, r"'x'.*mxfp8.*scale shape=\(4, 2\)"):
+            dequantize_comfy_scaled_fp8(state_dict)
+
+    def test_non_scalar_scale_is_rejected_even_without_marker(self):
+        state_dict = {
+            "x.weight": torch.randn(4, 4).to(torch.float8_e4m3fn),
+            "x.weight_scale": torch.ones(4, 1),
+        }
+        with self.assertRaisesRegex(ValueError, "scale shape=\\(4, 1\\)"):
+            dequantize_comfy_scaled_fp8(state_dict)
+
+    def test_scale_on_non_fp8_weight_without_marker_is_rejected(self):
+        state_dict = {"x.weight": torch.ones(4, 4, dtype=torch.bfloat16),
+                      "x.weight_scale": torch.tensor(3.0)}
+        with self.assertRaisesRegex(ValueError, "'x'"):
+            dequantize_comfy_scaled_fp8(state_dict)
+
+    def test_marker_without_scale_is_rejected(self):
+        state_dict = {
+            "x.weight": torch.randn(4, 4).to(torch.float8_e4m3fn),
+            "x.comfy_quant": _marker(format="nvfp4"),
+        }
+        with self.assertRaisesRegex(ValueError, "'x'.*nvfp4"):
+            dequantize_comfy_scaled_fp8(state_dict)
+
+    def test_unreadable_marker_is_rejected(self):
+        state_dict = {
+            "x.weight": torch.randn(4, 4).to(torch.float8_e4m3fn),
+            "x.weight_scale": torch.tensor(1.0),
+            "x.comfy_quant": torch.zeros(4, dtype=torch.uint8),
+        }
+        with self.assertRaisesRegex(ValueError, "Unreadable ComfyUI quantization marker 'x.comfy_quant'"):
+            dequantize_comfy_scaled_fp8(state_dict)
+
+    def test_one_unsupported_layer_leaves_valid_layers_unmodified(self):
+        good = torch.randn(4, 4).to(torch.float8_e4m3fn)
+        state_dict = {
+            "a.weight": good, "a.weight_scale": torch.tensor(2.0),
+            "b.weight": torch.ones(4, 4, dtype=torch.int8), "b.weight_scale": torch.tensor(1.0),
+            "b.comfy_quant": _marker(format="int8_tensorwise"),
+        }
+        with self.assertRaises(ValueError):
+            dequantize_comfy_scaled_fp8(state_dict)
+        self.assertEqual(state_dict["a.weight"].dtype, torch.float8_e4m3fn)
+        self.assertIn("a.weight_scale", state_dict)
 
     def test_plain_fp8_without_scale_is_cast_when_a_scaled_tensor_is_present(self):
         # A scaled tensor triggers the path; an unscaled plain-fp8 tensor (e.g.

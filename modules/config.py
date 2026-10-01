@@ -288,15 +288,6 @@ default_base_model_name = default_model = get_config_item_or_set_default(
     validator=lambda x: isinstance(x, str),
     expected_type=str
 )
-# Model family key for session state (e.g. "pony", "sdxl") -- distinct from
-# default_base_model_name which is the specific checkpoint filename.
-default_base_model = get_config_item_or_set_default(
-    key='default_base_model',
-    default_value=None,
-    validator=lambda x: x is None or isinstance(x, str),
-    disable_empty_as_none=True,
-    expected_type=str
-)
 previous_default_models = get_config_item_or_set_default(
     key='previous_default_models',
     default_value=[],
