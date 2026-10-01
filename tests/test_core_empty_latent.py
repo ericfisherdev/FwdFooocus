@@ -94,6 +94,26 @@ class TestPreviewerGuard(unittest.TestCase):
         self.assertTrue((preview >= 0).all())
         self.assertTrue((preview <= 255).all())
 
+    def test_krea2_latent_format_gets_a_working_rgb_factors_previewer(self):
+        """The format Krea 2 actually registers (FWDF-160): previews must work
+        for Raw and Turbo without any VAEApprox checkpoint."""
+        from ldm_patched.modules import supported_models
+
+        class FakeInner:
+            # BASE.__init__ instantiates the class; the rgb factors are instance attributes.
+            latent_format = supported_models.Krea2.latent_format()
+
+        class FakeModel:
+            model = FakeInner()
+
+        previewer = core.get_previewer(FakeModel())
+        self.assertIsNotNone(previewer)
+
+        preview = previewer(torch.randn(1, 16, 8, 6), 1, 8)
+
+        self.assertEqual(preview.shape, (8, 6, 3))
+        self.assertEqual(preview.dtype.name, 'uint8')
+
     def test_returns_none_for_16_channel_format_with_no_rgb_factors(self):
         class FakeLatentFormat:
             latent_channels = 16

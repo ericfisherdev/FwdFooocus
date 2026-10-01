@@ -446,3 +446,30 @@ def test_real_checkpoint_strict_loads_and_yields_30720_wide_conditioning():
 
     assert cond.shape[0] == 1
     assert cond.shape[2] == len(KREA2_TAP_LAYERS) * QWEN3_VL_4B_TEXT_CONFIG["hidden_size"] == 30720
+
+
+@pytest.mark.requires_models
+def test_real_tokenizer_prefix_strip_matches_an_independent_token_count():
+    """The count `krea2_conditioning_start_index` drops, with the REAL Qwen
+    tokenizer, equals the token count of the template text before the user
+    prompt, tokenized on its own (FWDF-160). Unlike the fake-tokenizer tests
+    this also pins the special-token ids the stripping logic keys on."""
+    if not os.path.isfile(_REAL_TOKENIZER):
+        pytest.skip("tokenizer assets not found at {}".format(_REAL_TOKENIZER))
+    from transformers import AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(modules.config.path_text_encoders)
+
+    def ids(text):
+        return list(tokenizer(text, add_special_tokens=False)["input_ids"])
+
+    user_opener = "<|im_start|>user\n"
+    prefix_text, _, _ = KREA2_CHAT_TEMPLATE.partition(user_opener)
+    prefix_ids = ids(prefix_text + user_opener)
+    full_ids = ids(Krea2PromptTemplate().apply("a photo of a cat"))
+
+    assert full_ids[:len(prefix_ids)] == prefix_ids
+    assert krea2_conditioning_start_index(full_ids) == len(prefix_ids)
+    assert full_ids[0] == IM_START_TOKEN_ID
+    assert full_ids[len(prefix_ids) - 3:len(prefix_ids)] == [IM_START_TOKEN_ID, USER_ROLE_TOKEN_ID, NEWLINE_TOKEN_ID]
+    assert full_ids[-len(ids(KREA2_TEMPLATE_SUFFIX)):] == ids(KREA2_TEMPLATE_SUFFIX)

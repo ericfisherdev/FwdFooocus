@@ -140,6 +140,59 @@ class TestDetectKrea2Config(unittest.TestCase):
         self.assertEqual(len(model.blocks), 3)
 
 
+class TestMalformedKrea2Checkpoints(unittest.TestCase):
+    """A checkpoint with Krea 2's discriminant keys but impossible shapes must
+    fail with the documented domain error, not a truncated head count, a
+    KeyError, or an IndexError from the config builder (FWDF-160)."""
+
+    def _route_with(self, key, shape):
+        sd = _tiny_krea2_state_dict()
+        sd[PREFIX + key] = torch.zeros(*shape)
+        return model_detection.model_config_from_unet(sd, PREFIX, torch.float32)
+
+    def test_impossible_shapes_raise_malformed_architecture_error(self):
+        malformed = {
+            "projector with more than one output row": ("txtfusion.projector.weight", (3, 7)),
+            "projector that is a vector": ("txtfusion.projector.weight", (0,)),
+            "query projection not a whole number of heads": ("blocks.0.attn.wq.weight", (500, 256)),
+            "query projection with no rows": ("blocks.0.attn.wq.weight", (0, 256)),
+            "key projection not a whole number of heads": ("blocks.0.attn.wk.weight", (200, 256)),
+            "query heads not a multiple of kv heads": ("blocks.0.attn.wk.weight", (3 * 128, 256)),
+            "patchify projection that is a vector": ("first.weight", (256,)),
+            "text norm scale that is a matrix": ("txtfusion.layerwise_blocks.0.prenorm.scale", (4, 10)),
+        }
+        for description, (key, shape) in malformed.items():
+            with self.subTest(description):
+                with self.assertRaises(model_detection.MalformedArchitectureError) as raised:
+                    self._route_with(key, shape)
+                self.assertEqual(raised.exception.architecture_name, "krea2")
+
+    def test_malformed_error_is_a_value_error_and_distinct_from_unsupported(self):
+        self.assertTrue(issubclass(model_detection.MalformedArchitectureError, ValueError))
+        self.assertFalse(issubclass(model_detection.MalformedArchitectureError,
+                                    model_detection.UnsupportedArchitectureError))
+
+    def test_valid_published_and_tiny_shapes_are_not_rejected(self):
+        for sd in (_real_krea2_state_dict(), _tiny_krea2_state_dict()):
+            self.assertIsInstance(model_detection.model_config_from_unet(sd, PREFIX, torch.float32),
+                                  supported_models.Krea2)
+
+
+class TestKrea2DetectorTableOrdering(unittest.TestCase):
+    """Krea 2 registers ahead of the terminal UNet fallback (FWDF-160)."""
+
+    def test_krea2_is_tried_before_the_unet_fallback(self):
+        names = [detector.name for detector in model_detection._DETECTOR_TABLE]
+        self.assertEqual(names[-1], "unet")
+        self.assertIn("krea2", names[:-1])
+
+    def test_krea2_checkpoint_that_also_carries_unet_keys_still_routes_to_krea2(self):
+        sd = _tiny_krea2_state_dict()
+        sd[PREFIX + "input_blocks.0.0.weight"] = torch.zeros(320, 4, 3, 3)
+        self.assertIsInstance(model_detection.model_config_from_unet(sd, PREFIX, torch.float32),
+                              supported_models.Krea2)
+
+
 class TestKrea2Routing(unittest.TestCase):
     def test_full_size_dict_routes_to_krea2_config(self):
         model_config = model_detection.model_config_from_unet(_real_krea2_state_dict(), PREFIX, torch.bfloat16)
