@@ -111,7 +111,6 @@ def _integrity_error(model, assembly: FamilyAssembly | None) -> str | None:
     return None
 
 
-
 @torch.no_grad()
 @torch.inference_mode()
 def refresh_controlnets(model_paths, family):

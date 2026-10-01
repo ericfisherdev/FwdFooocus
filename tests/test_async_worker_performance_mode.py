@@ -126,6 +126,13 @@ class TestApplyPerformanceMode:
         with pytest.raises(ValueError):
             _task_for()._apply_performance_mode('Raw')
 
+    @pytest.mark.parametrize('label', ['Extreme Speed', 'Lightning', 'Hyper-SD'])
+    def test_sdxl_accelerator_lora_labels_are_rejected_for_krea2(self, family_of_requested_checkpoint, label):
+        family_of_requested_checkpoint['family'] = ModelFamily.KREA2_RAW
+
+        with pytest.raises(ValueError):
+            _task_for()._apply_performance_mode(label)
+
     def test_unknown_label_raises_value_error(self, family_of_requested_checkpoint):
         with pytest.raises(ValueError):
             _task_for()._apply_performance_mode('Warp Speed')
