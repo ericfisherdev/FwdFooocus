@@ -304,6 +304,40 @@ class TestLoadCheckpointGuessConfigKrea2Layouts(unittest.TestCase):
                 )
 
 
+class _TextEncoderBearingConfig:
+    """Stand-in for an SD1.x/SDXL model config: its checkpoints embed a text encoder."""
+
+    clip_vision_prefix = None
+
+    def clip_target(self):
+        return object()
+
+    def set_manual_cast(self, dtype):
+        pass
+
+
+class TestFlatUnetOnlyCheckpointIsRejected(unittest.TestCase):
+    """A flat file that detects as a config with a text encoder (a UNet-only
+    SD1.x/SDXL file) must fail loudly, not load an uninitialized CLIP."""
+
+    STATE_DICT_KEYS = ("input_blocks.0.0.weight", "label_emb.0.0.weight")
+
+    def _load(self, key_prefix):
+        state_dict = {key_prefix + name: torch.zeros(2, 2) for name in self.STATE_DICT_KEYS}
+        with patch("ldm_patched.modules.utils.load_torch_file", return_value=state_dict), \
+                patch.object(sd_module.model_detection, "model_config_from_unet", return_value=_TextEncoderBearingConfig()):
+            sd_module.load_checkpoint_guess_config(
+                "unet-only.safetensors", output_vae=False, output_clip=False, output_model=False
+            )
+
+    def test_flat_keys_raise_naming_the_file(self):
+        with pytest.raises(RuntimeError, match=r"unet-only\.safetensors.*no embedded text encoder"):
+            self._load(key_prefix="")
+
+    def test_prefixed_keys_with_a_text_encoder_still_load(self):
+        self._load(key_prefix=_DIFFUSION_PREFIX)
+
+
 class TestLoadControlnetGuard(unittest.TestCase):
     """Regression test for ldm_patched.modules.controlnet.load_controlnet(): a
     controlnet state dict whose architecture resolves to no model config must raise a

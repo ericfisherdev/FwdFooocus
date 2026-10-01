@@ -15,8 +15,10 @@ stay in sync by construction rather than by convention:
     yields `KREA2_RAW` as the architecture default and `get_family()` then
     resolves the variant from the `krea2_variant_overrides` config entry or
     the checkpoint file name (see `_resolve_krea2_variant`).
-  - `{prefix}input_blocks.0.0.weight` -> a UNet checkpoint, disambiguated
-    into `SDXL` vs `SD15` via `{prefix}label_emb.0.0.weight`, the same
+  - `model.diffusion_model.input_blocks.0.0.weight` -> a UNet checkpoint
+    (prefixed layout only: a flat UNet-only file has no text encoder or VAE
+    and is `UNKNOWN`), disambiguated into `SDXL` vs `SD15` via
+    `model.diffusion_model.label_emb.0.0.weight`, the same
     ADM/conditioning signal `detect_unet_config` reads at load time
     (`ldm_patched/modules/model_detection.py`).
   - anything else -> `UNKNOWN`.
@@ -34,7 +36,7 @@ from safetensors import SafetensorError, safe_open
 
 import modules.config
 from modules.fast_checkpoint import resolve_checkpoint_path
-from ldm_patched.modules.diffusion_model_prefix import diffusion_model_prefix
+from ldm_patched.modules.diffusion_model_prefix import DIFFUSION_MODEL_PREFIX, diffusion_model_prefix
 from modules.model_family import ModelFamily
 
 logger = logging.getLogger(__name__)
@@ -101,8 +103,11 @@ def _detect_family_from_keys(keys: frozenset[str]) -> ModelFamily:
         return ModelFamily.Z_IMAGE
     if f'{prefix}{_KREA2_PROJECTOR_KEY_SUFFIX}' in keys:
         return ModelFamily.KREA2_RAW
-    if f'{prefix}{_UNET_KEY_SUFFIX}' in keys:
-        return ModelFamily.SDXL if f'{prefix}{_SDXL_ADM_KEY_SUFFIX}' in keys else ModelFamily.SD15
+    # SD1.x/SDXL are all-in-one checkpoints (UNet + text encoders + VAE): only
+    # the prefixed layout is a complete one. A flat UNet-only file stays UNKNOWN
+    # (sd.load_checkpoint_guess_config rejects it for the same reason).
+    if f'{DIFFUSION_MODEL_PREFIX}{_UNET_KEY_SUFFIX}' in keys:
+        return ModelFamily.SDXL if f'{DIFFUSION_MODEL_PREFIX}{_SDXL_ADM_KEY_SUFFIX}' in keys else ModelFamily.SD15
     return ModelFamily.UNKNOWN
 
 

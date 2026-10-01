@@ -461,6 +461,21 @@ def require_embedded_vae_state_dict(vae_sd, ckpt_path):
             "VAE file, or select one via the VAE dropdown.".format(ckpt_path)
         )
 
+def reject_flat_checkpoint_with_embedded_text_encoder(model_config, unet_prefix, ckpt_path):
+    """A flat file (empty `unet_prefix`) is the diffusion model alone, which is a
+    complete checkpoint only for DiT-only families whose config has no
+    `clip_target()`. For SD1.x/SDXL it is a UNet-only file: loading it would
+    build the text encoder from uninitialized memory and generate garbage, so
+    fail loudly, as `require_embedded_vae_state_dict` does for the VAE.
+
+    Raises RuntimeError naming the file when that is the case.
+    """
+    if unet_prefix == "" and model_config.clip_target() is not None:
+        raise RuntimeError(
+            f"ERROR: {ckpt_path} is a UNet-only {type(model_config).__name__} file with no embedded "
+            "text encoder (its keys are not under 'model.diffusion_model.'); use a full checkpoint instead."
+        )
+
 def load_checkpoint_guess_config(ckpt_path, output_vae=True, output_clip=True, output_clipvision=False, embedding_directory=None, output_model=True, vae_filename_param=None):
     sd = ldm_patched.modules.utils.load_torch_file(ckpt_path)
     sd_keys = sd.keys()
@@ -491,6 +506,7 @@ def load_checkpoint_guess_config(ckpt_path, output_vae=True, output_clip=True, o
     if model_config is None:
         raise RuntimeError(f"ERROR: Could not detect model type of: {ckpt_path}")
 
+    reject_flat_checkpoint_with_embedded_text_encoder(model_config, unet_prefix, ckpt_path)
     model_config.set_manual_cast(manual_cast_dtype)
 
     if model_config.clip_vision_prefix is not None:
