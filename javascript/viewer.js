@@ -67,17 +67,33 @@ function on_style_selection_blur() {
 
 // Gradio 3.41.2's Radio renders every choice label as an escaped text node, so the
 // grey "W:H" suffix in an aspect ratio label shows up as literal <span> markup. The
-// label string is also the radio's value, so the markup to render is always
-// input.value (a server-generated string from modules.config.add_ratio). The write is
-// idempotent (skipped when already equal), which keeps the MutationObserver below from
+// label string is also the radio's value (modules.config.add_ratio builds it as
+// '<W>x<H> <span style="color: grey;"> | <ratio></span>'), so the visible label is
+// always derived from input.value. It is rebuilt from DOM nodes and text content
+// rather than innerHTML, so the value can never inject markup. The rebuild is skipped
+// when the label already shows this value, which keeps the MutationObserver below from
 // re-triggering itself, and it re-runs after every gr.update(choices=...) swap, where
 // Gradio recreates or retargets the label text nodes.
+const ASPECT_RATIO_LABEL_PATTERN = /^(.*?)<span style="color: grey;">(.*)<\/span>$/s;
+
+function aspectRatioLabelNodes(value) {
+    const match = ASPECT_RATIO_LABEL_PATTERN.exec(value);
+    if (!match) {
+        return [document.createTextNode(value)];
+    }
+    const suffix = document.createElement('span');
+    suffix.style.color = 'grey';
+    suffix.textContent = match[2];
+    return [document.createTextNode(match[1]), suffix];
+}
+
 function renderAspectRatioLabels() {
     document.querySelectorAll('.aspect_ratios label').forEach(function (label) {
         const input = label.querySelector('input[type=radio]');
         const span = label.querySelector(':scope > span');
-        if (input && span && span.innerHTML !== input.value) {
-            span.innerHTML = input.value;
+        if (input && span && span.dataset.renderedValue !== input.value) {
+            span.replaceChildren(...aspectRatioLabelNodes(input.value));
+            span.dataset.renderedValue = input.value;
         }
     });
 }
