@@ -42,7 +42,8 @@ KSAMPLER = {
     "ddpm": "",
     "lcm": "LCM",
     "tcd": "TCD",
-    "restart": "Restart"
+    "restart": "Restart",
+    "res_multistep": "RES Multistep"
 }
 
 SAMPLER_EXTRA = {

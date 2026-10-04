@@ -229,7 +229,7 @@ class _Krea2EntryContract:
     def test_samplers_and_schedulers_start_with_the_effective_defaults(self):
         # The UIs fall back to the first entry when the configured SDXL
         # default is not valid for the family.
-        self.assertEqual(self.caps.sampler_names, ('euler', 'euler_ancestral'))
+        self.assertEqual(self.caps.sampler_names, ('euler', 'euler_ancestral', 'res_multistep'))
         self.assertEqual(self.caps.scheduler_names, ('simple', 'normal'))
 
     def test_scheduler_names_exclude_hardcoded_architecture_specific_ones(self):
