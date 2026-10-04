@@ -72,6 +72,17 @@ def build_position_ids(cap_len, h_tokens, w_tokens, batch_size, device):
     return cap_pos_ids, img_pos_ids
 
 
+def pad_tokens_to_multiple(feats, pad_token, multiple):
+    """Right-pad (B, L, dim) `feats` along the sequence axis with the learned
+    `pad_token` (1, dim) until L is a multiple of `multiple`. Returns
+    (padded_feats, pad_count). The pad token lives on the root module, which
+    low-VRAM loading does not move, so it is cast to `feats` explicitly.
+    """
+    pad_count = (-feats.shape[1]) % multiple
+    pad = pad_token.to(device=feats.device, dtype=feats.dtype).unsqueeze(0).repeat(feats.shape[0], pad_count, 1)
+    return torch.cat((feats, pad), dim=1), pad_count
+
+
 class TimestepEmbedder(nn.Module):
     def __init__(self, hidden_size, frequency_embedding_size=256, output_size=None, max_period=10000,
                  dtype=None, device=None, operations=ops):
@@ -245,6 +256,7 @@ class NextDiT(nn.Module):
         rope_theta=256.0,
         z_image_modulation=True,
         time_scale=1000.0,
+        pad_tokens_multiple=None,
         image_model=None,
         device=None,
         dtype=None,
@@ -262,6 +274,7 @@ class NextDiT(nn.Module):
         self.time_scale = time_scale
         self.dim = dim
         self.n_heads = n_heads
+        self.pad_tokens_multiple = pad_tokens_multiple
 
         mod_dim = min(dim, 256) if z_image_modulation else min(dim, 1024)
         t_hidden_size = min(dim, 1024)
@@ -308,6 +321,10 @@ class NextDiT(nn.Module):
             dtype=dtype, device=device, operations=operations,
         )
 
+        if pad_tokens_multiple is not None:
+            self.x_pad_token = nn.Parameter(torch.empty((1, dim), device=device, dtype=dtype))
+            self.cap_pad_token = nn.Parameter(torch.empty((1, dim), device=device, dtype=dtype))
+
         self.axes_dims = list(axes_dims)
         self.axes_lens = list(axes_lens)
         self.rope_embedder = EmbedND(dim // n_heads, theta=rope_theta, axes_dim=list(axes_dims))
@@ -350,10 +367,19 @@ class NextDiT(nn.Module):
         adaln_input = self.t_embedder(t * self.time_scale, dtype=x.dtype)
 
         cap_feats = self.cap_embedder(context)
-        bsz, cap_len, _ = cap_feats.shape
 
         img_tokens, h_tokens, w_tokens = patchify(x, self.patch_size)
         img = self.x_embedder(img_tokens)
+        bsz, n_img, _ = img.shape
+
+        # Checkpoints with learned pad tokens (Z-Image) round both token runs up
+        # to a multiple; the pads attend like any other token and are dropped
+        # again before unpatchify. Their RoPE position ids are all zero.
+        x_pad_count = 0
+        if self.pad_tokens_multiple is not None:
+            cap_feats, _ = pad_tokens_to_multiple(cap_feats, self.cap_pad_token, self.pad_tokens_multiple)
+            img, x_pad_count = pad_tokens_to_multiple(img, self.x_pad_token, self.pad_tokens_multiple)
+        cap_len = cap_feats.shape[1]
 
         # The RoPE tables are deterministic given (cap_len, grid, batch,
         # device) but cost a float64 CPU einsum per call; a sampling loop
@@ -364,9 +390,12 @@ class NextDiT(nn.Module):
             cap_freqs_cis, img_freqs_cis = self._freqs_cache[1]
         else:
             cap_pos_ids, img_pos_ids = build_position_ids(cap_len, h_tokens, w_tokens, bsz, x.device)
+            img_pos_ids = F.pad(img_pos_ids, (0, 0, 0, x_pad_count))
             cap_freqs_cis = self.rope_embedder(cap_pos_ids).movedim(1, 2).to(img.device)
             img_freqs_cis = self.rope_embedder(img_pos_ids).movedim(1, 2).to(img.device)
             self._freqs_cache = (freqs_key, (cap_freqs_cis, img_freqs_cis))
+        # Patch hooks see only the real image tokens, never the pads.
+        real_img_freqs_cis = img_freqs_cis[:, :n_img]
 
         for layer in self.context_refiner:
             cap_feats = layer(cap_feats, cap_freqs_cis)
@@ -381,32 +410,33 @@ class NextDiT(nn.Module):
             img = layer(img, img_freqs_cis, adaln_input=adaln_input)
             for p in noise_refiner_patches:
                 out = p({
-                    "img": img, "img_input": img_input, "txt": cap_feats,
-                    "pe": img_freqs_cis, "vec": adaln_input, "x": x,
+                    "img": img[:, :n_img], "img_input": img_input[:, :n_img], "txt": cap_feats,
+                    "pe": real_img_freqs_cis, "vec": adaln_input, "x": x,
                     "block_index": i, "block_type": "noise_refiner",
                     "transformer_options": transformer_options,
                 })
                 if "img" in out:
-                    img = out["img"]
+                    img = torch.cat([out["img"], img[:, n_img:]], dim=1)
 
         combined = torch.cat([cap_feats, img], dim=1)
         combined_freqs_cis = torch.cat([cap_freqs_cis, img_freqs_cis], dim=1)
 
+        img_end = cap_len + n_img
         combined_input = combined
         for i, layer in enumerate(self.layers):
             combined = layer(combined, combined_freqs_cis, adaln_input=adaln_input)
             for p in double_block_patches:
                 out = p({
-                    "img": combined[:, cap_len:], "img_input": combined_input[:, cap_len:],
-                    "txt": combined[:, :cap_len], "pe": img_freqs_cis, "vec": adaln_input, "x": x,
+                    "img": combined[:, cap_len:img_end], "img_input": combined_input[:, cap_len:img_end],
+                    "txt": combined[:, :cap_len], "pe": real_img_freqs_cis, "vec": adaln_input, "x": x,
                     "block_index": i, "block_type": "double",
                     "transformer_options": transformer_options,
                 })
                 if "img" in out:
-                    combined[:, cap_len:] = out["img"]
+                    combined[:, cap_len:img_end] = out["img"]
                 if "txt" in out:
                     combined[:, :cap_len] = out["txt"]
 
-        img_out = self.final_layer(combined[:, cap_len:], adaln_input)
+        img_out = self.final_layer(combined[:, cap_len:img_end], adaln_input)
         img_out = unpatchify(img_out, h_tokens, w_tokens, self.patch_size, self.out_channels)
         return -img_out[:, :, :H, :W]
