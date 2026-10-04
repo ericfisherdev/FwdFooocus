@@ -541,21 +541,21 @@ class KSAMPLER(Sampler):
         else:
             model_k.noise = noise
 
-        if self.max_denoise(model_wrap, sigmas):
-            noise = noise * torch.sqrt(1.0 + sigmas[0] ** 2.0)
-        else:
-            noise = noise * sigmas[0]
+        # The noised start depends on the prediction type: eps/v models add
+        # scaled noise to the latent, flow (CONST) models interpolate between
+        # latent and noise. model_sampling owns that formula.
+        model_sampling = model_wrap.inner_model.model_sampling
+        if latent_image is None:
+            latent_image = torch.zeros_like(noise)
+        noise = model_sampling.noise_scaling(sigmas[0], noise, latent_image, self.max_denoise(model_wrap, sigmas))
 
         k_callback = None
         total_steps = len(sigmas) - 1
         if callback is not None:
             k_callback = lambda x: callback(x["i"], x["denoised"], x["x"], total_steps)
 
-        if latent_image is not None:
-            noise += latent_image
-
         samples = self.sampler_function(model_k, noise, sigmas, extra_args=extra_args, callback=k_callback, disable=disable_pbar, **self.extra_options)
-        return samples
+        return model_sampling.inverse_noise_scaling(sigmas[-1], samples)
 
 
 def ksampler(sampler_name, extra_options={}, inpaint_options={}):

@@ -451,3 +451,70 @@ class TestDenoiseStrengthSlicing(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestKSamplerNoiseScaling(unittest.TestCase):
+    """KSAMPLER.sample must build the starting sample and un-scale the result
+    through the model's own `noise_scaling` / `inverse_noise_scaling`, so flow
+    (CONST) models are not given the eps-model `sqrt(1 + sigma^2)` noise."""
+
+    def _run_sampler(self, model_sampling, sigmas, noise, latent_image):
+        import types
+
+        from ldm_patched.modules.samplers import KSAMPLER
+
+        seen = {}
+
+        def sampler_function(model, x, sigmas, extra_args=None, callback=None, disable=None):
+            seen["x"] = x.clone()
+            return x * 2.0
+
+        model_wrap = types.SimpleNamespace(inner_model=types.SimpleNamespace(model_sampling=model_sampling))
+        result = KSAMPLER(sampler_function).sample(
+            model_wrap, sigmas, {}, None, noise.clone(), latent_image=latent_image,
+        )
+        return seen["x"], result
+
+    def _flow(self):
+        from ldm_patched.modules.model_sampling import ModelSamplingDiscreteFlow
+        return ModelSamplingDiscreteFlow(FakeModelConfig({"shift": 3.0}))
+
+    def test_flow_full_denoise_starts_from_unscaled_noise(self):
+        noise = torch.randn(1, 4, 4, 4)
+        start, _ = self._run_sampler(self._flow(), torch.tensor([1.0, 0.5, 0.0]), noise, torch.zeros_like(noise))
+        self.assertTrue(torch.allclose(start, noise))
+
+    def test_flow_partial_denoise_interpolates_latent_and_noise(self):
+        noise = torch.randn(1, 4, 4, 4)
+        latent = torch.randn(1, 4, 4, 4)
+        start, _ = self._run_sampler(self._flow(), torch.tensor([0.6, 0.3, 0.0]), noise, latent)
+        self.assertTrue(torch.allclose(start, 0.6 * noise + 0.4 * latent))
+
+    def test_flow_result_goes_through_inverse_noise_scaling(self):
+        noise = torch.randn(1, 4, 4, 4)
+        start, result = self._run_sampler(
+            self._flow(), torch.tensor([1.0, 0.5]), noise, torch.zeros_like(noise),
+        )
+        self.assertTrue(torch.allclose(result, (start * 2.0) / (1.0 - 0.5)))
+
+    def test_missing_latent_image_is_treated_as_zeros(self):
+        noise = torch.randn(1, 4, 4, 4)
+        start, _ = self._run_sampler(self._flow(), torch.tensor([0.6, 0.0]), noise, None)
+        self.assertTrue(torch.allclose(start, 0.6 * noise))
+
+    def test_eps_full_denoise_keeps_sqrt_scaling(self):
+        import types
+
+        from ldm_patched.modules.model_sampling import EPS
+
+        eps_sampling = types.SimpleNamespace(
+            sigma_max=torch.tensor(14.6),
+            noise_scaling=lambda *args: EPS.noise_scaling(None, *args),
+            inverse_noise_scaling=lambda *args: EPS.inverse_noise_scaling(None, *args),
+        )
+        sigmas = torch.tensor([14.6, 1.0, 0.0])
+        noise = torch.randn(1, 4, 4, 4)
+        latent = torch.randn(1, 4, 4, 4)
+        start, result = self._run_sampler(eps_sampling, sigmas, noise, latent)
+        self.assertTrue(torch.allclose(start, noise * torch.sqrt(1.0 + sigmas[0] ** 2.0) + latent))
+        self.assertTrue(torch.allclose(result, start * 2.0))
