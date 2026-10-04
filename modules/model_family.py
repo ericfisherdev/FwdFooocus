@@ -306,8 +306,10 @@ def _build_z_image_capabilities() -> FamilyCapabilities:
         performance_modes=(turbo,),
         # Euler-family samplers are documented as best-behaved for this
         # Turbo model; SDXL's dpmpp_2m_sde_gpu/karras default is untested
-        # against the flow schedule and deliberately excluded.
-        sampler_names=('euler', 'euler_ancestral'),
+        # against the flow schedule and deliberately excluded. res_multistep is
+        # a deterministic exponential integrator ported from ComfyUI
+        # (ldm_patched/k_diffusion/sampling.py).
+        sampler_names=('euler', 'euler_ancestral', 'res_multistep'),
         # 'turbo' and 'align_your_steps' are excluded: both are hardcoded to
         # specific architectures in modules/sample_hijack.py (see this
         # module's docstring) and are not valid for Z-Image yet.
