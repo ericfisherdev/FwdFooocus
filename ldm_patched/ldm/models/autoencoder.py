@@ -150,6 +150,7 @@ class AutoencodingEngine(AbstractAutoencoder):
 class AutoencodingEngineLegacy(AutoencodingEngine):
     def __init__(self, embed_dim: int, **kwargs):
         self.max_batch_size = kwargs.pop("max_batch_size", None)
+        use_quant_conv = kwargs.pop("use_quant_conv", True)
         ddconfig = kwargs.pop("ddconfig")
         super().__init__(
             encoder_config={
@@ -162,12 +163,19 @@ class AutoencodingEngineLegacy(AutoencodingEngine):
             },
             **kwargs,
         )
-        self.quant_conv = ldm_patched.modules.ops.disable_weight_init.Conv2d(
-            (1 + ddconfig["double_z"]) * ddconfig["z_channels"],
-            (1 + ddconfig["double_z"]) * embed_dim,
-            1,
-        )
-        self.post_quant_conv = ldm_patched.modules.ops.disable_weight_init.Conv2d(embed_dim, ddconfig["z_channels"], 1)
+        if use_quant_conv:
+            self.quant_conv = ldm_patched.modules.ops.disable_weight_init.Conv2d(
+                (1 + ddconfig["double_z"]) * ddconfig["z_channels"],
+                (1 + ddconfig["double_z"]) * embed_dim,
+                1,
+            )
+            self.post_quant_conv = ldm_patched.modules.ops.disable_weight_init.Conv2d(embed_dim, ddconfig["z_channels"], 1)
+        else:
+            # Flux-style VAEs ship no quant convs. disable_weight_init leaves them
+            # uninitialised, and decode() would feed the latent through that
+            # garbage (a flat grey image), so skip them entirely.
+            self.quant_conv = torch.nn.Identity()
+            self.post_quant_conv = torch.nn.Identity()
         self.embed_dim = embed_dim
 
     def get_autoencoder_params(self) -> list:
