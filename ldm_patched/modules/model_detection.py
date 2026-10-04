@@ -235,6 +235,9 @@ def matches_z_image(state_dict_keys, key_prefix):
     return all(key in state_dict_keys for key in required)
 
 
+Z_IMAGE_PAD_TOKENS_MULTIPLE = 32
+
+
 def detect_z_image_config(state_dict, key_prefix, dtype):
     """Read NextDiT's (FWDF-123) constructor config off tensor shapes, mirroring
     ComfyUI's comfy/model_detection.py Z-Image branch. Values that are architectural
@@ -257,7 +260,7 @@ def detect_z_image_config(state_dict, key_prefix, dtype):
     n_layers = count_blocks(state_dict_keys, '{}layers.'.format(key_prefix) + '{}.')
     n_refiner_layers = count_blocks(state_dict_keys, '{}noise_refiner.'.format(key_prefix) + '{}.')
 
-    return {
+    config = {
         "dtype": dtype,
         "image_model": "z_image",
         "patch_size": patch_size,
@@ -278,6 +281,11 @@ def detect_z_image_config(state_dict, key_prefix, dtype):
         "z_image_modulation": True,
         "time_scale": 1000.0,
     }
+    # Learned pad tokens mean the checkpoint was trained with 32-token-multiple
+    # padding; ComfyUI keys the same behavior off the same tensor.
+    if '{}cap_pad_token'.format(key_prefix) in state_dict_keys:
+        config["pad_tokens_multiple"] = Z_IMAGE_PAD_TOKENS_MULTIPLE
+    return config
 
 
 def register_detector(name, matches, detect_config):

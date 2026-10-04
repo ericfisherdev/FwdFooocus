@@ -10,6 +10,7 @@ from ldm_patched.ldm.lumina.model import (
     NextDiT,
     apply_rope,
     build_position_ids,
+    pad_tokens_to_multiple,
     rope_freqs,
 )
 
@@ -164,6 +165,65 @@ class TestNextDiTForward(unittest.TestCase):
         bad_config["axes_dims"] = (8, 8, 8)  # sums to 24, not head_dim=32
         with self.assertRaises(AssertionError):
             NextDiT(**bad_config)
+
+
+class TestLearnedPadTokens(unittest.TestCase):
+    """Checkpoints with cap_pad_token/x_pad_token (Z-Image) pad the caption and
+    image token runs up to `pad_tokens_multiple` with those learned vectors."""
+
+    PAD_MULTIPLE = 4
+
+    def setUp(self):
+        torch.manual_seed(0)
+        self.config = make_tiny_config()
+        self.model = NextDiT(**self.config, pad_tokens_multiple=self.PAD_MULTIPLE)
+        init_small_weights(self.model)
+        self.model.eval()
+        # 8x8 latent, patch 2 -> 16 image tokens (already a multiple of 4) is
+        # useless here; 6x10 -> 3x5 = 15 tokens pads by 1. Caption of 5 pads by 3.
+        self.latent = torch.randn(1, self.config["in_channels"], 6, 10)
+        self.timesteps = torch.rand(1)
+        self.context = torch.randn(1, 5, self.config["cap_feat_dim"])
+
+    def test_pad_token_parameters_exist_only_when_configured(self):
+        self.assertEqual(self.model.state_dict()["cap_pad_token"].shape, (1, self.config["dim"]))
+        self.assertEqual(self.model.state_dict()["x_pad_token"].shape, (1, self.config["dim"]))
+        self.assertNotIn("cap_pad_token", NextDiT(**self.config).state_dict())
+
+    def test_forward_shape_with_unaligned_token_counts(self):
+        with torch.no_grad():
+            out = self.model(self.latent, self.timesteps, self.context)
+        self.assertEqual(out.shape, self.latent.shape)
+
+    def test_pad_tokens_influence_the_output(self):
+        with torch.no_grad():
+            before = self.model(self.latent, self.timesteps, self.context)
+            self.model.cap_pad_token.add_(1.0)
+            after_cap = self.model(self.latent, self.timesteps, self.context)
+            self.model.x_pad_token.add_(1.0)
+            after_x = self.model(self.latent, self.timesteps, self.context)
+        self.assertFalse(torch.allclose(before, after_cap))
+        self.assertFalse(torch.allclose(after_cap, after_x))
+
+    def test_patch_hooks_see_real_image_tokens_and_padded_caption(self):
+        seen = {}
+
+        def record(kwargs):
+            seen["img"] = kwargs["img"].shape[1]
+            seen["pe"] = kwargs["pe"].shape[1]
+            seen["txt"] = kwargs["txt"].shape[1]
+            return {}
+
+        options = {"patches": {"double_block": [record]}}
+        with torch.no_grad():
+            self.model(self.latent, self.timesteps, self.context, transformer_options=options)
+        self.assertEqual(seen, {"img": 15, "pe": 15, "txt": 8})
+
+    def test_pad_tokens_to_multiple_is_noop_when_already_aligned(self):
+        feats = torch.randn(2, 8, self.config["dim"])
+        padded, pad_count = pad_tokens_to_multiple(feats, torch.ones(1, self.config["dim"]), self.PAD_MULTIPLE)
+        self.assertEqual(pad_count, 0)
+        self.assertTrue(torch.equal(padded, feats))
 
 
 class TestRopeAxesMath(unittest.TestCase):

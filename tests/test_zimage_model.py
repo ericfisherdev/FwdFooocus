@@ -154,6 +154,27 @@ class TestDetectZImageConfig(unittest.TestCase):
         self.assertEqual(config["cap_feat_dim"], 2560)
 
 
+class TestPadTokenDetection(unittest.TestCase):
+    """cap_pad_token in the checkpoint switches on 32-token-multiple padding."""
+
+    prefix = "model.diffusion_model."
+
+    def _detect(self, with_pad_tokens):
+        state_dict = _z_image_state_dict(
+            self.prefix, dim=64, in_channels=8, n_layers=3, n_refiner_layers=2, n_heads=4, cap_feat_dim=40,
+        )
+        if with_pad_tokens:
+            state_dict[self.prefix + "cap_pad_token"] = torch.zeros(1, 64)
+            state_dict[self.prefix + "x_pad_token"] = torch.zeros(1, 64)
+        return model_detection.detect_z_image_config(state_dict, self.prefix, torch.float32)
+
+    def test_pad_tokens_enable_padding_multiple_of_32(self):
+        self.assertEqual(self._detect(with_pad_tokens=True)["pad_tokens_multiple"], 32)
+
+    def test_no_pad_tokens_leaves_padding_off(self):
+        self.assertNotIn("pad_tokens_multiple", self._detect(with_pad_tokens=False))
+
+
 class TestZImageRouting(unittest.TestCase):
     """model_config_from_unet() must route a Z-Image-shaped checkpoint to
     supported_models.ZImage with no KeyError, with SDXL/SD15 detection
