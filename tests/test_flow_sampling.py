@@ -449,8 +449,6 @@ class TestDenoiseStrengthSlicing(unittest.TestCase):
         self.assertEqual(starts, sorted(starts))
 
 
-if __name__ == '__main__':
-    unittest.main()
 
 
 class TestKSamplerNoiseScaling(unittest.TestCase):
@@ -518,3 +516,7 @@ class TestKSamplerNoiseScaling(unittest.TestCase):
         start, result = self._run_sampler(eps_sampling, sigmas, noise, latent)
         self.assertTrue(torch.allclose(start, noise * torch.sqrt(1.0 + sigmas[0] ** 2.0) + latent))
         self.assertTrue(torch.allclose(result, start * 2.0))
+
+
+if __name__ == '__main__':
+    unittest.main()
