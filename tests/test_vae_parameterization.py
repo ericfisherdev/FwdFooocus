@@ -154,12 +154,17 @@ class TestFluxStyleVAEWithoutQuantConvs(unittest.TestCase):
         self.assertIsInstance(vae.first_stage_model.post_quant_conv, torch.nn.Identity)
         self.assertIsInstance(vae.first_stage_model.quant_conv, torch.nn.Identity)
 
-    def test_decode_without_quant_convs_is_finite(self):
+    def test_decode_bypasses_post_quant_conv(self):
+        """With the decoder stubbed to identity, decode() returns its input
+        unchanged only when no post_quant_conv sits in front of it. Independent
+        of the (uninitialised) weights, so it is deterministic."""
         vae, _ = self._construct_vae(self._flux_style_state_dict())
+        model = vae.first_stage_model
+        model.decoder = torch.nn.Identity()
+        latent = torch.randn(1, 16, 8, 8)
 
-        pixels = vae.decode(torch.randn(1, 16, 8, 8))
-
-        self.assertTrue(torch.isfinite(pixels).all())
+        with torch.no_grad():
+            self.assertTrue(torch.equal(model.decode(latent), latent))
 
     def test_state_dict_with_quant_convs_keeps_them(self):
         vae, output = self._construct_vae(_build_autoencoder_state_dict(z_channels=16))
