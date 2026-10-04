@@ -219,6 +219,19 @@ class TestLearnedPadTokens(unittest.TestCase):
             self.model(self.latent, self.timesteps, self.context, transformer_options=options)
         self.assertEqual(seen, {"img": 15, "pe": 15, "txt": 8})
 
+    def test_hooks_returning_img_round_trip_through_padding(self):
+        def bump(kwargs):
+            return {"img": kwargs["img"] + 1.0}
+
+        with torch.no_grad():
+            baseline = self.model(self.latent, self.timesteps, self.context)
+            for hook_type in ("noise_refiner", "double_block"):
+                with self.subTest(hook_type=hook_type):
+                    options = {"patches": {hook_type: [bump]}}
+                    out = self.model(self.latent, self.timesteps, self.context, transformer_options=options)
+                    self.assertEqual(out.shape, self.latent.shape)
+                    self.assertFalse(torch.allclose(out, baseline))
+
     def test_pad_tokens_to_multiple_is_noop_when_already_aligned(self):
         feats = torch.randn(2, 8, self.config["dim"])
         padded, pad_count = pad_tokens_to_multiple(feats, torch.ones(1, self.config["dim"]), self.PAD_MULTIPLE)

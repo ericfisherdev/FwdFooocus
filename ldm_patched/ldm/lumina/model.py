@@ -374,7 +374,9 @@ class NextDiT(nn.Module):
 
         # Checkpoints with learned pad tokens (Z-Image) round both token runs up
         # to a multiple; the pads attend like any other token and are dropped
-        # again before unpatchify. Their RoPE position ids are all zero.
+        # again before unpatchify. Caption pads continue the sequential caption
+        # positions (and shift the image block's axis-0 position); image pads
+        # get all-zero RoPE position ids -- matching ComfyUI.
         x_pad_count = 0
         if self.pad_tokens_multiple is not None:
             cap_feats, _ = pad_tokens_to_multiple(cap_feats, self.cap_pad_token, self.pad_tokens_multiple)
