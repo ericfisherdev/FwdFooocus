@@ -131,6 +131,43 @@ class TestSixteenChannelEncodeDecodeMechanics(unittest.TestCase):
         self.assertEqual(reconstructed.shape, image.shape)
 
 
+class TestFluxStyleVAEWithoutQuantConvs(unittest.TestCase):
+    """Flux's ae.safetensors has no quant_conv/post_quant_conv. Building them anyway
+    leaves uninitialised layers in the decode path (NaN output, a flat grey image)."""
+
+    _QUANT_CONV_PREFIXES = ('quant_conv.', 'post_quant_conv.')
+
+    def _flux_style_state_dict(self):
+        sd = _build_autoencoder_state_dict(z_channels=16)
+        return {k: v for k, v in sd.items() if not k.startswith(self._QUANT_CONV_PREFIXES)}
+
+    def _construct_vae(self, sd):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            vae = VAE(sd=sd, device=torch.device('cpu'), dtype=torch.float32)
+        return vae, buf.getvalue()
+
+    def test_state_dict_without_quant_convs_loads_with_no_missing_keys(self):
+        vae, output = self._construct_vae(self._flux_style_state_dict())
+
+        self.assertNotIn("Missing VAE keys", output)
+        self.assertIsInstance(vae.first_stage_model.post_quant_conv, torch.nn.Identity)
+        self.assertIsInstance(vae.first_stage_model.quant_conv, torch.nn.Identity)
+
+    def test_decode_without_quant_convs_is_finite(self):
+        vae, _ = self._construct_vae(self._flux_style_state_dict())
+
+        pixels = vae.decode(torch.randn(1, 16, 8, 8))
+
+        self.assertTrue(torch.isfinite(pixels).all())
+
+    def test_state_dict_with_quant_convs_keeps_them(self):
+        vae, output = self._construct_vae(_build_autoencoder_state_dict(z_channels=16))
+
+        self.assertNotIn("Missing VAE keys", output)
+        self.assertNotIsInstance(vae.first_stage_model.post_quant_conv, torch.nn.Identity)
+
+
 class TestMissingVAEGuard(unittest.TestCase):
     """Covers the no-embedded-VAE clear-error path (FWDF-121 gap b)."""
 

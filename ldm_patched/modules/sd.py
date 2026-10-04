@@ -199,7 +199,10 @@ class VAE:
                     ddconfig['z_channels'] = sd['decoder.conv_in.weight'].shape[1]
 
                 self.latent_channels = ddconfig['z_channels']
-                self.first_stage_model = AutoencoderKL(ddconfig=ddconfig, embed_dim=ddconfig['z_channels'])
+                #Flux's ae.safetensors has no quant_conv/post_quant_conv; building them anyway
+                #would leave uninitialised layers in the decode path.
+                use_quant_conv = 'post_quant_conv.weight' in sd
+                self.first_stage_model = AutoencoderKL(ddconfig=ddconfig, embed_dim=ddconfig['z_channels'], use_quant_conv=use_quant_conv)
         else:
             self.first_stage_model = AutoencoderKL(**(config['params']))
         self.first_stage_model = self.first_stage_model.eval()
