@@ -92,6 +92,11 @@ def apply_arrays(text, index):
     for arr in arrays:
         text = text.replace(f'[[{arr}]]', chosen_words[i], 1)   
         i = i+1
-    
+
     return text
+
+
+def apply_arrays_to_lines(lines, index):
+    """Expand [[...]] arrays across every line of a prompt as one text, so all lines share one combination."""
+    return apply_arrays('\n'.join(lines), index).split('\n')
 

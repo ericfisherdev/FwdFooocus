@@ -394,7 +394,7 @@ def worker():
     import fooocus_version
 
     from extras.censor import default_censor
-    from modules.sdxl_styles import apply_style, get_random_style, fooocus_expansion, apply_arrays, random_style_name
+    from modules.sdxl_styles import apply_style, get_random_style, fooocus_expansion, apply_arrays_to_lines, random_style_name
     from modules.private_logger import log
     import modules.image_lists
     from extras.expansion import safe_str
@@ -941,7 +941,6 @@ def worker():
 
             task_rng = random.Random(task_seed)  # may bind to inpaint noise in the future
             task_prompt = apply_wildcards(prompt, task_rng, i, async_task.read_wildcards_in_order)
-            task_prompt = apply_arrays(task_prompt, i)
             task_negative_prompt = apply_wildcards(negative_prompt, task_rng, i, async_task.read_wildcards_in_order)
             task_extra_positive_prompts = [apply_wildcards(pmt, task_rng, i, async_task.read_wildcards_in_order) for pmt
                                            in
@@ -949,6 +948,10 @@ def worker():
             task_extra_negative_prompts = [apply_wildcards(pmt, task_rng, i, async_task.read_wildcards_in_order) for pmt
                                            in
                                            extra_negative_prompts]
+            task_prompt, *task_extra_positive_prompts = apply_arrays_to_lines(
+                [task_prompt, *task_extra_positive_prompts], i)
+            task_negative_prompt, *task_extra_negative_prompts = apply_arrays_to_lines(
+                [task_negative_prompt, *task_extra_negative_prompts], i)
 
             positive_basic_workloads = []
             negative_basic_workloads = []
